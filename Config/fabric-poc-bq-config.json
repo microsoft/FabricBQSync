@@ -1,0 +1,101 @@
+{
+	"project_id": "fabric-poc-416917",
+	"dataset": "DemoData",
+	"load_all_tables": true,
+	"autodetect": true,
+	"master_reset": false,
+	"metadata_lakehouse": "BQ_Metadata",
+	"target_lakehouse": "BQ_Replica",
+	
+	"tables": [
+	{
+		"table_name": "fact_sale_4y_full",
+		"enabled": "false"
+	},
+	{
+		"table_name": "fact_sale_1y_full_nopart",
+		"enabled": "false"
+	},
+	{
+		"load_priority": 100,
+		"table_name": "dimension_city",
+		"enabled": true,
+		"source_query": "",
+		"load_strategy": "WATERMARK",
+		"load_type": "OVERWRITE",
+		"interval": "AUTO",
+		"keys": [
+		{
+			"column": "CityKey"
+		}
+		],
+		"partitioned": {
+			"enabled" : false,
+			"type" : "",
+			"column": "",
+			"partition_grain": ""			
+		},
+		"watermark": {
+			"column": "CityKey"
+		},
+		"lakehouse_target": {
+			"lakehouse": "BQ_Replica",
+			"table_name": "dimCity"
+		}
+	},
+	{
+		"load_priority": 100,
+		"table_name": "dimension_employee",
+		"enabled": true,
+		"source_query": "",
+		"load_strategy": "WATERMARK",
+		"load_type": "MERGE",
+		"interval": "AUTO",
+		"keys": [
+		{
+			"column": "EmployeeKey"
+		}
+		],
+		"partitioned": {
+			"enabled": false,
+			"type" : "",
+			"column": "",
+			"partition_grain":""
+		},
+		"watermark": {
+			"column": "EmployeeKey"
+		},
+		"lakehouse_target": {
+			"lakehouse": "BQ_Replica",
+			"table_name": "dimEmployee"
+		}
+	},
+	{
+		"load_priority": 100,
+		"table_name": "fact_sale_4y_full",
+		"enabled": true,
+		"source_query": "",
+		"load_strategy": "PARTITION",
+		"load_type": "APPEND",
+		"interval": "AUTO",
+		"keys": [
+		{
+			"column": "SaleKey"
+		}
+		],
+		"partitioned": {
+			"enabled": true,
+			"type" : "TIME",
+			"column": "InvoiceDateKey",
+			"partition_grain":"DAY"			
+		},
+		"watermark": {
+			"column": ""
+		},
+		"lakehouse_target": {
+			"lakehouse": "BQ_Replica",
+			"table_name": "factSale4y"
+		}
+	}
+	]	
+}
