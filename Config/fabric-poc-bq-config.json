@@ -5,19 +5,24 @@
 	"autodetect": true,
 	"master_reset": false,
 	"metadata_lakehouse": "BQ_Metadata",
-	"target_lakehouse": "BQ_Replica",
+	"target_lakehouse": "BQ_Data",
+	"gcp_credential_path": "/builtin/config/fabric-poc-416917-efd8038af977.json",
+	
+	"async": {
+		"enabled": true,
+		"parallelism": 5,
+		"cell_timeout": 36000,
+		"notebook_timeout": 72000
+	},
+	
 	
 	"tables": [
 	{
-		"table_name": "fact_sale_4y_full",
-		"enabled": "false"
-	},
-	{
 		"table_name": "fact_sale_1y_full_nopart",
-		"enabled": "false"
+		"enabled" : false
 	},
 	{
-		"load_priority": 100,
+		"load_priority": 200,
 		"table_name": "dimension_city",
 		"enabled": true,
 		"source_query": "",
@@ -39,12 +44,12 @@
 			"column": "CityKey"
 		},
 		"lakehouse_target": {
-			"lakehouse": "BQ_Replica",
+			"lakehouse": "BQ_Data",
 			"table_name": "dimCity"
 		}
 	},
 	{
-		"load_priority": 100,
+		"load_priority": 150,
 		"table_name": "dimension_employee",
 		"enabled": true,
 		"source_query": "",
@@ -66,14 +71,14 @@
 			"column": "EmployeeKey"
 		},
 		"lakehouse_target": {
-			"lakehouse": "BQ_Replica",
+			"lakehouse": "BQ_Data",
 			"table_name": "dimEmployee"
 		}
 	},
 	{
 		"load_priority": 100,
 		"table_name": "fact_sale_4y_full",
-		"enabled": true,
+		"enabled": false,
 		"source_query": "",
 		"load_strategy": "PARTITION",
 		"load_type": "APPEND",
@@ -93,7 +98,7 @@
 			"column": ""
 		},
 		"lakehouse_target": {
-			"lakehouse": "BQ_Replica",
+			"lakehouse": "BQ_Data",
 			"table_name": "factSale4y"
 		}
 	}
