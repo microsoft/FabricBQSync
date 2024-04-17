@@ -1,6 +1,9 @@
 class SyncSetup(ConfigBase):
-    def __init__(self, config_path, gcp_credential):
-        super().__init__(config_path, gcp_credential)
+    def __init__(self, config_path):
+        if spark.catalog.tableExists("user_config_json"):
+            spark.catalog.dropTempView("user_config_json")
+
+        super().__init__(config_path)
 
     def get_fabric_lakehouse(self, nm):
         lakehouse = None
@@ -8,23 +11,25 @@ class SyncSetup(ConfigBase):
         try:
             lakehouse = mssparkutils.lakehouse.get(nm)
         except Exception:
-            print("Lakehouse not found")
+            print("Lakehouse not found: {0}".format(nm))
 
         return lakehouse
 
     def create_fabric_lakehouse(self, nm):
-        lakehouse = get_fabric_lakehouse(nm)
+        lakehouse = self.get_fabric_lakehouse(nm)
 
         if (lakehouse is None):
+            print("Creating Lakehouse {0}...".format(nm))
             mssparkutils.lakehouse.create(nm)
 
     def setup(self):
         self.create_fabric_lakehouse(self.UserConfig.MetadataLakehouse)
         self.create_fabric_lakehouse(self.UserConfig.TargetLakehouse)
+        spark.sql(f"USE {self.UserConfig.MetadataLakehouse}")
         self.create_all_tables()
 
     def drop_table(self, tbl):
-        sql = f"DROP TABLE IF EXISTS {tbl_nm}"
+        sql = f"DROP TABLE IF EXISTS {tbl}"
         spark.sql(sql)
 
     def get_tbl_name(self, tbl):
@@ -32,7 +37,7 @@ class SyncSetup(ConfigBase):
 
     def create_data_type_map_tbl(self):
         tbl_nm = self.get_tbl_name(SyncConstants.SQL_TBL_DATA_TYPE_MAP)
-        self.drop_table(tbl_name)
+        self.drop_table(tbl_nm)
 
         sql = f"""CREATE TABLE IF NOT EXISTS {tbl_nm} (data_type STRING, partition_type STRING, is_watermark STRING)"""
         spark.sql(sql)
@@ -42,7 +47,7 @@ class SyncSetup(ConfigBase):
 
     def create_sync_config_tbl(self):
         tbl_nm = self.get_tbl_name(SyncConstants.SQL_TBL_SYNC_CONFIG)
-        self.drop_table(tbl_name)
+        self.drop_table(tbl_nm)
 
         sql = f"""
         CREATE TABLE IF NOT EXISTS {tbl_nm}
@@ -75,10 +80,11 @@ class SyncSetup(ConfigBase):
     
     def create_sync_schedule_tbl(self):
         tbl_nm = self.get_tbl_name(SyncConstants.SQL_TBL_SYNC_SCHEDULE)
-        self.drop_table(tbl_name)
+        self.drop_table(tbl_nm)
 
         sql = f"""
         CREATE TABLE IF NOT EXISTS {tbl_nm} (
+            group_schedule_id STRING,
             schedule_id STRING,
             project_id STRING,
             dataset STRING,
@@ -87,23 +93,17 @@ class SyncSetup(ConfigBase):
             status STRING,
             started TIMESTAMP,
             completed TIMESTAMP,
-            src_row_count BIGINT,
-            dest_row_count BIGINT,
-            dest_inserted_row_count BIGINT,
-            dest_updated_row_count BIGINT,
-            delta_version BIGINT,
-            spark_application_id STRING,
+            completed_activities INT,
+            failed_activities INT,
             max_watermark STRING,
-            summary_load STRING,
             priority INTEGER
         )
-        PARTITIONED BY (priority)
         """
         spark.sql(sql)
-    
-    def create_sync_schedule_partition_tbl(self):
-        tbl_nm = self.get_tbl_name(SyncConstants.SQL_TBL_SYNC_SCHEDULE_PARTITION)
-        self.drop_table(tbl_name)
+
+    def create_sync_schedule_telemetry_tbl(self):
+        tbl_nm = self.get_tbl_name(SyncConstants.SQL_TBL_SYNC_SCHEDULE_TELEMETRY)
+        self.drop_table(tbl_nm)
 
         sql = f"""
         CREATE TABLE IF NOT EXISTS {tbl_nm} (
@@ -112,11 +112,17 @@ class SyncSetup(ConfigBase):
             dataset STRING,
             table_name STRING,
             partition_id STRING,
-            bq_total_rows BIGINT,
-            bq_last_modified TIMESTAMP,
-            bq_storage_tier STRING,
+            status STRING,
             started TIMESTAMP,
-            completed TIMESTAMP
+            completed TIMESTAMP,
+            src_row_count BIGINT,
+            dest_row_count BIGINT,
+            inserted_row_count BIGINT,
+            updated_row_count BIGINT,
+            delta_version BIGINT,
+            spark_application_id STRING,
+            max_watermark STRING,
+            summary_load STRING
         )
         """
         spark.sql(sql)
@@ -125,4 +131,4 @@ class SyncSetup(ConfigBase):
         self.create_data_type_map_tbl()
         self.create_sync_config_tbl()
         self.create_sync_schedule_tbl()
-        self.create_sync_schedule_partition_tbl()
+        self.create_sync_schedule_telemetry_tbl()

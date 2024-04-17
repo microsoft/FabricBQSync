@@ -1,11 +1,12 @@
 class Scheduler(ConfigBase):
-    def __init__(self, config_path, gcp_credential):
-        super().__init__(config_path, gcp_credential)
+    def __init__(self, config_path):
+        super().__init__(config_path)
+        spark.sql(f"USE {self.UserConfig.MetadataLakehouse}")
 
     def run(self):
         sql = f"""
         WITH new_schedule AS ( 
-            SELECT CURRENT_TIMESTAMP() as scheduled
+            SELECT UUID() AS group_schedule_id, CURRENT_TIMESTAMP() as scheduled
         ),
         last_bq_tbl_updates AS (
             SELECT table_catalog, table_schema, table_name, max(last_modified_time) as last_bq_tbl_update
@@ -20,6 +21,7 @@ class Scheduler(ConfigBase):
         ),
         schedule AS (
             SELECT
+                n.group_schedule_id,
                 UUID() AS schedule_id,
                 c.project_id,
                 c.dataset,
@@ -29,16 +31,11 @@ class Scheduler(ConfigBase):
                      (b.last_bq_tbl_update >= l.last_load_update))
                     THEN 'SCHEDULED' ELSE 'SKIPPED' END as status,
                 NULL as started,
-                NULL as completed,
-                NULL as src_row_count,
-                NULL as dest_row_count,
-                NULL as dest_inserted_row_count,
-                NULL as dest_updated_row_count,
-                NULL as delta_version,
-                NULL as spark_application_id,
+                NULL as completed,   
+                NULL as completed_activities,
+                NULL as failed_activities,
                 NULL as max_watermark,
-                NULL as summary_load,
-                c.priority
+                c.priority                
             FROM {SyncConstants.SQL_TBL_SYNC_CONFIG} c 
             LEFT JOIN {SyncConstants.SQL_TBL_SYNC_SCHEDULE} s ON 
                 c.project_id= s.project_id AND

@@ -29,6 +29,7 @@ class SyncSchedule:
         self.LastScheduleLoadDate = row["last_schedule_dt"]
         self.Lakehouse = row["lakehouse"]
         self.DestinationTableName = row["lakehouse_table_name"]
+        self.PartitionId = row["partition_id"]
     
     @property
     def SummaryLoadType(self):

@@ -1,9 +1,9 @@
-from pyspark.sql.functions import *
-from delta.tables import *
-
 class ConfigMetadataLoader(ConfigBase):
-    def __init__(self, config_path, gcp_credential):
-        super().__init__(config_path, gcp_credential)
+    def __init__(self, config_path):
+        self.JSON_Config_Path = config_path
+        
+        super().__init__(config_path)
+        spark.sql(f"USE {self.UserConfig.MetadataLakehouse}")
     
     def create_autodetect_view(self):
         sql = """
@@ -156,11 +156,11 @@ class ConfigMetadataLoader(ConfigBase):
 
     def create_proxy_views(self):
         super().create_proxy_views()
-        self.create_autodetect_view()
 
-    def auto_detect_table_profiles(self):
-        self.create_proxy_views()
-        
+        if not spark.catalog.tableExists("bq_table_metadata_autodetect"):
+            self.create_autodetect_view()
+
+    def auto_detect_table_profiles(self):        
         sql = f"""
         WITH default_config AS (
             SELECT autodetect, target_lakehouse FROM user_config_json
@@ -189,8 +189,11 @@ class ConfigMetadataLoader(ConfigBase):
                         COALESCE(u.watermark_column, a.pk_col) <> '') THEN 'WATERMARK' 
                     WHEN (COALESCE(u.partition_enabled, a.is_partitioned) = TRUE) 
                         AND COALESCE(u.partition_column, a.partition_col, '') NOT IN 
-                            ('_PARTITIONTIME', '_PARTITIONDATE')
-                    THEN 'PARTITION' ELSE 'FULL' END AS load_strategy,
+                            ('_PARTITIONTIME', '_PARTITIONDATE') THEN 'PARTITION'
+                    WHEN (COALESCE(u.partition_enabled, a.is_partitioned) = TRUE) 
+                        AND COALESCE(u.partition_column, a.partition_col, '') IN 
+                            ('_PARTITIONTIME', '_PARTITIONDATE') THEN 'TIME_INGESTION'
+                    ELSE 'FULL' END AS load_strategy,
                 CASE WHEN (COALESCE(u.watermark_column, a.pk_col) IS NOT NULL AND
                         COALESCE(u.watermark_column, a.pk_col) <> '') THEN 'APPEND' ELSE
                     'OVERWRITE' END AS load_type,
@@ -234,5 +237,3 @@ class ConfigMetadataLoader(ConfigBase):
         WHEN NOT MATCHED THEN
             INSERT *
         """
-
-        spark.sql(sql)

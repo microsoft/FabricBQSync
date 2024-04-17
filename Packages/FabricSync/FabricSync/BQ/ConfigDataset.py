@@ -9,8 +9,18 @@ class ConfigDataset:
         self.MasterReset = self.get_json_conf_val(json_config, "master_reset", False)
         self.MetadataLakehouse = self.get_json_conf_val(json_config, "metadata_lakehouse", None)
         self.TargetLakehouse = self.get_json_conf_val(json_config, "target_lakehouse", None)
-
+        self.GCPCredentialPath = self.get_json_conf_val(json_config, "gcp_credential_path", None)
         self.Tables = []
+
+        if "async" in json_config:
+            self.Async = ConfigAsync(
+                self.get_json_conf_val(json_config["async"], "enabled", False),
+                self.get_json_conf_val(json_config["async"], "parallelism", None),
+                self.get_json_conf_val(json_config["async"], "notebook_timeout", None),
+                self.get_json_conf_val(json_config["async"], "cell_timeout", None)
+            )
+        else:
+            self.Async = ConfigAsync()
 
         if "tables" in json_config:
             for t in json_config["tables"]:
@@ -37,6 +47,13 @@ class ConfigDataset:
             return json[config_key]
         else:
             return default_val
+
+class ConfigAsync:
+    def __init__(self, enabled = False, parallelism = 5, notebook_timeout = 1800, cell_timeout = 300):
+        self.Enabled = enabled
+        self.Parallelism = parallelism
+        self.NotebookTimeout = notebook_timeout
+        self.CellTimeout = cell_timeout
 
 class ConfigTableColumn:
     def __init__(self, col = ""):
