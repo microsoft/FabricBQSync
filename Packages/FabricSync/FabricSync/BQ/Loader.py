@@ -727,6 +727,22 @@ class BQScheduleLoader(ConfigBase):
             schedule:SyncSchedule):
         """
         Sync the data for a table from BigQuery to the target Fabric Lakehouse based on configuration
+
+        1. Determines how to retrieve the data from BigQuery
+            a. PARTITION & TIME_INGESTION
+                - Data is loaded by partition using the partition filter option of the spark connector
+            b. FULL & WATERMARK
+                - Loaded using the table name or source query and any relevant predicates
+        2. Resolve BigQuery to Fabric partition mapping
+            a. BigQuery supports TIME and RANGE based partitioning
+                - TIME based partitioning support YEAR, MONTH, DAY & HOUR grains
+                    - When the grain doesn't exist or a psuedo column is used, a proxy column is added
+                        on the Fabric Lakehouse side
+                - RANGE partitioning is a backlog feature
+        3. Write data to the Fabric Lakehouse
+            a. PARTITION write use replaceWhere to overwrite the specific Delta partition
+            b. All other writes respect the configure MODE against the write destination
+        4. Collect and save telemetry
         """
         print("{0} {1}...".format(schedule.SummaryLoadType, schedule.TableName))
 
