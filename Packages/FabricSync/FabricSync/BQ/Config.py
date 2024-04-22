@@ -19,8 +19,14 @@ class SyncConstants:
     PARTITION = "PARTITION"
     WATERMARK = "WATERMARK"
     TIME_INGESTION = "TIME_INGESTION"
+    MERGE = "MERGE"
     AUTO = "AUTO"
-    TIME = "TIME"
+    TIME = "TIME"    
+    YEAR = "YEAR"
+    MONTH = "MONTH"
+    DAY = "DAY"
+    HOUR = "HOUR"
+
     INITIAL_FULL_OVERWRITE = "INITIAL_FULL_OVERWRITE"
     INFORMATION_SCHEMA_TABLES = "INFORMATION_SCHEMA.TABLES"
     INFORMATION_SCHEMA_PARTITIONS = "INFORMATION_SCHEMA.PARTITIONS"
@@ -32,6 +38,19 @@ class SyncConstants:
     SQL_TBL_SYNC_CONFIG = "bq_sync_configuration"
     SQL_TBL_DATA_TYPE_MAP = "bq_data_type_map"
     SQL_TBL_SYNC_SCHEDULE_TELEMETRY = "bq_sync_schedule_telemetry"
+
+    def get_load_strategies () -> List[str]:
+        return [SyncConstants.FULL, SyncConstants.PARTITION, SyncConstants.WATERMARK, SyncConstants.TIME_INGESTION, SyncConstants.MERGE]
+
+    def get_load_types() -> List[str]:
+        return [SyncConstants.OVERWRITE, SyncConstants.APPEND]
+
+    def get_partition_types() -> List[str]:
+        return [SyncConstants.TIME, SyncConstants.TIME_INGESTION]
+
+    def get_partition_grains() -> List[str]:
+        return [SyncConstants.YEAR, SyncConstants.MONTH, SyncConstants.DAY, SyncConstants.HOUR]
+
 
 class ScheduleDAG:
     """
@@ -172,7 +191,14 @@ class SyncSchedule:
         """
         return self.LoadStrategy == SyncConstants.TIME_INGESTION
 
-
+    @property
+    def IsTimePartitionedStrategy(self) -> bool:
+         """
+         Bool indicator for the two time partitioned strategies
+         """
+         return (self.LoadStrategy == SyncConstants.PARTITION or \
+                self.LoadStrategy == SyncConstants.TIME_INGESTION)
+    
     def UpdateRowCounts(
             self, 
             src:int, 
@@ -212,8 +238,16 @@ class ConfigDataset:
         self.MasterReset = self.get_json_conf_val(json_config, "master_reset", False)
         self.MetadataLakehouse = self.get_json_conf_val(json_config, "metadata_lakehouse", None)
         self.TargetLakehouse = self.get_json_conf_val(json_config, "target_lakehouse", None)
-        self.GCPCredentialPath = self.get_json_conf_val(json_config, "gcp_credential_path", None)
         self.Tables = []
+
+        if "gcp_credentials" in json_config:
+            self.GCPCredential = ConfigGCPCredential(
+                self.get_json_conf_val(json_config["gcp_credentials"], "credential_path", None),
+                self.get_json_conf_val(json_config["gcp_credentials"], "access_token", None),
+                self.get_json_conf_val(json_config["gcp_credentials"], "credential", None)
+            )
+        else:
+            self.GCPCredential = ConfigGCPCredential()
 
         if "async" in json_config:
             self.Async = ConfigAsync(
@@ -228,7 +262,7 @@ class ConfigDataset:
         if "tables" in json_config:
             for t in json_config["tables"]:
                 self.Tables.append(ConfigBQTable(t))
-
+    
     def get_table_name_list(self) -> list[str]:
         """
         Returns a list of table names from the user configuration
@@ -275,6 +309,26 @@ class ConfigDataset:
             return json[config_key]
         else:
             return default_val
+
+class ConfigGCPCredential:
+    """
+    GCP Credential model
+    """
+    def __init__(self, path:str = None, token:str = None, credential:str = None):
+        self.CredentialPath = path
+        self.AccessToken = token
+        self.Credential = credential
+
+class ConfigTableMaintenance:
+    """
+    User Config class for table maintenance
+    """
+    def __init__(
+            self, 
+            enabled:bool = False, 
+            interval:str = None):
+        self.Enabled = enabled
+        self.Interval = interval
 
 class ConfigAsync:
     """
@@ -346,7 +400,10 @@ class ConfigBQTable:
         self.LoadType = self.get_json_conf_val(json_config, "load_type", SyncConstants.OVERWRITE)
         self.Interval =  self.get_json_conf_val(json_config, "interval", SyncConstants.AUTO)
         self.Enabled =  self.get_json_conf_val(json_config, "enabled", True)
-
+        self.EnforcePartitionExpiration = self.get_json_conf_val(json_config, "enforce_partition_expiration", False)
+        self.EnableDeletionVectors = self.get_json_conf_val(json_config, "enable_deletion_vectors", False)
+        self.AllowSchemaEvolution = self.get_json_conf_val(json_config, "allow_schema_evoluton", False)
+        
         if "lakehouse_target" in json_config:
             self.LakehouseTarget = ConfigLakehouseTarget( \
                 self.get_json_conf_val(json_config["lakehouse_target"], "lakehouse", ""), \
@@ -369,6 +426,13 @@ class ConfigBQTable:
         else:
             self.Partitioned = ConfigPartition()
         
+        if "table_maintenance" in json_config:
+            self.TableMaintenance = ConfigTableMaintenance( \
+                self.get_json_conf_val(json_config["table_maintenance"], "enabled", False), \
+                self.get_json_conf_val(json_config["table_maintenance"], "interval", "MONTH"))
+        else:
+            self.TableMaintenance = ConfigTableMaintenance()
+
         self.Keys = []
 
         if "keys" in json_config:
@@ -394,7 +458,6 @@ class ConfigBase():
     '''
     Base class for sync objects that require access to user-supplied configuration
     '''
-
     def __init__(
               self, 
               config_path:str, 
@@ -459,8 +522,43 @@ class ConfigBase():
         if cfg is None:
             raise RuntimeError("Invalid User Config")    
         
-        if cfg.GCPCredentialPath is None:
-            raise ValueError("Missing GCP Credentials  path in JSON User Config")
+        validation_errors = []
+
+        if not cfg.ProjectID:
+            validation_errors.append("GCP Project ID missing or empty")
+        
+        if not cfg.Dataset:
+            validation_errors.append("GCP Dataset missing or empty")
+
+        if not cfg.MetadataLakehouse:
+            validation_errors.append("Metadata Lakehouse missing or empty")
+        
+        if not cfg.TargetLakehouse:
+            validation_errors.append("Target Lakehouse missing or empty")
+
+        if not cfg.GCPCredential.CredentialPath and not cfg.GCPCredential.Credential:
+            validation_errors.append("GCP Credentials Path and GCP Credentials cannot both be empty")
+        
+        for t in cfg.Tables:
+            if not t.TableName:
+                validation_errors.append("Unknown table, table with missing or empty Table Name")
+                continue
+
+            if t.LoadStrategy and not t.LoadStrategy in SyncConstants.get_load_strategies():
+                validation_errors.append(f"Table {t.TableName} has a missing or invalid load strategy")
+
+            if t.LoadType and not t.LoadType in SyncConstants.get_load_types():
+                validation_errors.append(f"Table {t.TableName} has a missing or invalid load type")
+            
+            if t.LoadStrategy == SyncConstants.WATERMARK:
+                if t.Watermark is None or not t.Watermark.Column:
+                    validation_errors.append(f"Table {t.TableName} is configured for Watermark but is missing the Watermark column")
+
+    
+        if not validation_errors:
+            config_errors = "\r\n".join(validation_errors)
+            raise ValueError(f"Errors in User Config JSON File:\r\n{config_errors}")
+        
         return True
 
     def load_gcp_credential(self) -> str:
@@ -471,26 +569,24 @@ class ConfigBase():
         """
         cred = None
 
-        if self.is_base64(self.UserConfig.GCPCredentialPath):
-            cred = self.UserConfig.GCPCredentialPath
+        if self.is_base64(self.UserConfig.GCPCredential.Credential):
+            cred = self.UserConfig.GCPCredential.Credential
         else:
-            credential = f"{mssparkutils.nbResPath}{self.UserConfig.GCPCredentialPath}"
-
-            if os.path.exists(credential):
-                file_contents = self.read_credential_file(credential)
-                cred = self.convert_to_base64string(file_contents)
-            else:
-                raise ValueError("Invalid GCP Credential path supplied.")
-
+            file_contents = self.read_credential_file()
+            cred = self.convert_to_base64string(file_contents)
+            
         return cred
 
-    def read_credential_file(
-            self, 
-            credential_path:str) -> str:
+    def read_credential_file(self) -> str:
         """
         Reads credential file from the Notebook Resource file path
         """
-        txt = Path(credential_path).read_text()
+        credential = f"{mssparkutils.nbResPath}{self.UserConfig.GCPCredential.CredentialPath}"
+
+        if not os.path.exists(credential):
+           raise ValueError("Invalid GCP Credential path supplied.")
+        
+        txt = Path(credential).read_text()
         txt = txt.replace("\n", "").replace("\r", "")
 
         return txt
