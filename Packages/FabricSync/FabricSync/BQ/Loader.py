@@ -2,10 +2,11 @@ from pyspark.sql.functions import *
 from pyspark.sql.types import *
 from delta.tables import *
 from datetime import datetime, timezone
-import json
 from json import JSONEncoder
-import base64
+import json
 from pathlib import Path
+from typing import List, Tuple
+import base64
 import os
 
 from FabricSync.BQ.Config import *
@@ -226,7 +227,10 @@ class ConfigMetadataLoader(ConfigBase):
                 - Enabling and Disabling the table sync
                 - Changing the table load Priority
                 - Updating the table load Interval
-        """    
+        """  
+
+        self.create_proxy_views()
+
         sql = f"""
         WITH default_config AS (
             SELECT autodetect, target_lakehouse FROM user_config_json
@@ -722,6 +726,74 @@ class BQScheduleLoader(ConfigBase):
         for row in df.collect():
             return row["watermark"]
 
+    def get_bq_partition_date_format(
+            self, 
+            schedule:SyncSchedule) -> str:
+        """
+        Resolve the BigQuery datetime format based on the partition grain
+        """
+        part_format = None
+
+        match schedule.PartitionGrain:
+            case "DAY":
+                part_format = "%Y%m%d"
+            case "MONTH":
+                part_format = "%Y%m"
+            case "YEAR":
+                part_format = "%Y"
+            case "HOUR":
+                part_format = "%Y%m%d%H"
+            case _:
+                raise Exception("Unsupported Partition Grain in Table Config")
+        
+        return part_format
+
+    def resolve_fabric_partition_column(
+            self, 
+            schedule:SyncSchedule, 
+            df_bq:DataFrame) -> Tuple[str, DataFrame]:
+        """
+        Resolves the fabric partition approach using a proxy column when required
+        """
+        part_format = ""
+        part_col_name = f"__bq_part_{schedule.PartitionColumn}"
+        use_proxy_col = False
+        partition = None
+
+        match schedule.PartitionGrain:
+            case "DAY":
+                part_format = "yyyyMMdd"
+
+                if dict(df_bq.dtypes)[schedule.PartitionColumn] == "date":
+                    partition = schedule.PartitionColumn
+                else:
+                    partition = f"{part_col_name}_DAY"
+                    use_proxy_col = True
+            case "MONTH":
+                part_format = "yyyyMM"
+                partition = f"{part_col_name}_MONTH"
+                use_proxy_col = True
+            case "YEAR":
+                part_format = "yyyy"
+                partition = f"{part_col_name}_YEAR"
+                use_proxy_col = True
+            case "HOUR":
+                part_format = "yyyyMMddHH"
+                partition = f"{part_col_name}_HOUR"
+                use_proxy_col = True
+            case _:
+                raise Exception("Unsupported partition grain")
+    
+        print("{0} partitioning - partitioned by {1} (Requires Proxy Column: {2})".format( \
+            schedule.PartitionGrain, \
+            partition, \
+            use_proxy_col))
+        
+        if use_proxy_col:
+            df_bq = df_bq.withColumn(partition, date_format(col(schedule.PartitionColumn), part_format))
+        
+        return (partition, df_bq)
+
     def sync_bq_table(
             self, 
             schedule:SyncSchedule):
@@ -746,24 +818,13 @@ class BQScheduleLoader(ConfigBase):
         """
         print("{0} {1}...".format(schedule.SummaryLoadType, schedule.TableName))
 
-        if (schedule.LoadStrategy == SyncConstants.PARTITION or \
-                schedule.LoadStrategy == SyncConstants.TIME_INGESTION) and schedule.PartitionId is not None:
+        if schedule.IsTimePartitionedStrategy and schedule.PartitionId is not None:
             print("Load by partition...")
             src = f"{schedule.BQTableName}"
 
-            match schedule.PartitionGrain:
-                case "DAY":
-                    part_format = "%Y%m%d"
-                case "MONTH":
-                    part_format = "%Y%m"
-                case "YEAR":
-                    part_format = "%Y"
-                case "HOUR":
-                    part_format = "%Y%m%d%H"
-                case _:
-                    raise Exception("Unsupported Partition Grain in Table Config")
+            part_format = self.get_bq_partition_date_format(schedule)
 
-            if schedule.PartitionColumn == "_PARTITIONTIME":                   
+            if schedule.IsTimeIngestionPartitioned:                   
                 part_filter = f"timestamp_trunc({schedule.PartitionColumn}, {schedule.PartitionGrain}) = PARSE_TIMESTAMP('{part_format}', '{schedule.PartitionId}')"
             else:
                 part_filter = f"date_trunc({schedule.PartitionColumn}, {schedule.PartitionGrain}) = PARSE_DATETIME('{part_format}', '{schedule.PartitionId}')"
@@ -798,65 +859,18 @@ class BQScheduleLoader(ConfigBase):
         if schedule.IsPartitioned:
             print('Resolving Fabric partitioning...')
             if schedule.PartitionType == SyncConstants.TIME:
-                partition_col = schedule.PartitionColumn
+                partition = schedule.PartitionColumn
+
                 if not schedule.IsTimeIngestionPartitioned:
-                    part_format = ""
-                    part_col_name = f"__bq_part_{partition_col}"
-                    use_proxy_col = False
-
-                    match schedule.PartitionGrain:
-                        case "DAY":
-                            part_format = "yyyyMMdd"
-
-                            if dict(df_bq.dtypes)[partition_col] == "date":
-                                partition = partition_col
-                            else:
-                                partition = f"{part_col_name}_DAY"
-                                use_proxy_col = True
-                        case "MONTH":
-                            part_format = "yyyyMM"
-                            partition = f"{part_col_name}_MONTH"
-                            use_proxy_col = True
-                        case "YEAR":
-                            part_format = "yyyy"
-                            partition = f"{part_col_name}_YEAR"
-                            use_proxy_col = True
-                        case "HOUR":
-                            part_format = "yyyyMMddHH"
-                            partition = f"{part_col_name}_HOUR"
-                            use_proxy_col = True
-                        case _:
-                            print('Unsupported partition grain...')
-                
-                    print("{0} partitioning - partitioned by {1} (Requires Proxy Column: {2})".format( \
-                        schedule.PartitionGrain, \
-                        partition, \
-                        use_proxy_col))
-                    
-                    if use_proxy_col:
-                        df_bq = df_bq.withColumn(partition, date_format(col(partition_col), part_format))
+                    partition, df_bq = self.resolve_fabric_partition_column(schedule, df_bq)
                 else:
-                    part_format = ""
-                    partition = f"__bq{partition_col}"
+                    part_format = self.get_bq_partition_date_format(schedule)
+                    partition = f"__bq{schedule.PartitionColumn}"
 
-                    match schedule.PartitionGrain:
-                        case "DAY":
-                            part_format = "%Y%m%d"
-                        case "MONTH":
-                            part_format = "%Y%m"
-                        case "YEAR":
-                            part_format = "%Y"
-                        case "HOUR":
-                            part_format = "%Y%m%d%H"
-                        case _:
-                            print('Unsupported partition grain...')
-                    
                     print("Ingestion time partitioning - partitioned by {0} ({1})".format(partition, schedule.PartitionId))
                     df_bq = df_bq.withColumn(partition, lit(schedule.PartitionId))
 
-
-        if (schedule.LoadStrategy == SyncConstants.PARTITION or \
-                schedule.LoadStrategy == SyncConstants.TIME_INGESTION) and schedule.PartitionId is not None:
+        if schedule.IsTimePartitionedStrategy and schedule.PartitionId is not None:
             print(f"Writing {schedule.TableName}${schedule.PartitionId} partition...")
             part_filter = f"{partition} = '{schedule.PartitionId}'"
 
