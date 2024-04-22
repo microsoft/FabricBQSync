@@ -40,10 +40,10 @@ class SyncConstants:
     SQL_TBL_SYNC_SCHEDULE_TELEMETRY = "bq_sync_schedule_telemetry"
 
     def get_load_strategies () -> List[str]:
-        return [SyncConstants.FULL, SyncConstants.PARTITION, SyncConstants.WATERMARK, SyncConstants.TIME_INGESTION, SyncConstants.MERGE]
+        return [SyncConstants.FULL, SyncConstants.PARTITION, SyncConstants.WATERMARK, SyncConstants.TIME_INGESTION]
 
     def get_load_types() -> List[str]:
-        return [SyncConstants.OVERWRITE, SyncConstants.APPEND]
+        return [SyncConstants.OVERWRITE, SyncConstants.APPEND, SyncConstants.MERGE]
 
     def get_partition_types() -> List[str]:
         return [SyncConstants.TIME, SyncConstants.TIME_INGESTION]
@@ -111,6 +111,7 @@ class SyncSchedule:
     SparkAppId:str = None
     MaxWatermark:str = None
     Status:str = None
+    FabricPartitionColumn:str = None
 
     def __init__(
                 self, 
@@ -161,6 +162,16 @@ class SyncSchedule:
             return self.LoadType
     
     @property
+    def Keys(self) -> list[str]:
+        """
+        Returns list of keys
+        """        
+        if self.Row["primary_keys"]:
+            return [k for k in self.Row["primary_keys"]]
+        else:
+            return None
+        
+    @property
     def PrimaryKey(self) -> str:
         """
         Returns the first instance of primary key. Only used for tables with a single primary key
@@ -203,23 +214,27 @@ class SyncSchedule:
             self, 
             src:int, 
             dest:int, 
-            insert:int, 
-            update:int):
+            insert:int = 0, 
+            update:int = 0):
         """
         Updates the telemetry row counts based on table configuration
         """
         self.SourceRows += src
         self.DestRows += dest
 
-        match self.LoadStrategy:
-            case SyncConstants.WATERMARK:
-                self.InsertedRows += src     
-            case SyncConstants.PARTITION:
-                self.InsertedRows += dest  
-            case _:
-                self.InsertedRows += dest
-
-        self.UpdatedRows = 0
+        if not self.LoadType == SyncConstants.MERGE:
+            match self.LoadStrategy:
+                case SyncConstants.WATERMARK:
+                    self.InsertedRows += src     
+                case SyncConstants.PARTITION:
+                    self.InsertedRows += dest  
+                case _:
+                    self.InsertedRows += dest
+            
+            self.UpdatedRows = 0
+        else:
+            self.InsertedRows += insert
+            self.UpdatedRows += update
 
 class ConfigDataset:
     """

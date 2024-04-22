@@ -2,12 +2,9 @@ from pyspark.sql.functions import *
 from pyspark.sql.types import *
 from delta.tables import *
 from datetime import datetime, timezone
-from json import JSONEncoder
 import json
-from pathlib import Path
 from typing import List, Tuple
-import base64
-import os
+
 
 from FabricSync.BQ.Config import *
 
@@ -626,7 +623,6 @@ class BQScheduleLoader(ConfigBase):
         df = spark.createDataFrame(rdd, schema)
         df.write.mode(SyncConstants.APPEND).saveAsTable(tbl)
 
-
     def get_table_delta_version(
             self, 
             tbl : str) -> str:
@@ -640,6 +636,41 @@ class BQScheduleLoader(ConfigBase):
         for row in df.collect():
             return row["delta_version"]
 
+    def get_delta_merge_row_counts(
+            self, 
+            schedule:SyncSchedule) -> Tuple[int, int, int]:
+        """
+        Gets the rows affected by merge operation, filters on partition id when table is partitioned
+        """
+        telemetry = spark.sql(f"DESCRIBE HISTORY {schedule.LakehouseTableName}")
+
+        telemetry = telemetry \
+            .filter("operation = 'MERGE' AND CAST(timestamp AS DATE) = current_date()") \
+            .orderBy("version", ascending=False)
+
+        inserts = 0
+        updates = 0
+        deletes = 0
+
+        for t in telemetry.collect():
+            op_metrics = None
+
+            if schedule.FabricPartitionColumn and schedule.PartitionId:
+                if "predicate" in t["operationParameters"] and \
+                    schedule.PartitionId in t["operationParameters"]["predicate"]:
+                        op_metrics = t["operationMetrics"]
+            else:
+                op_metrics = t["operationMetrics"]
+
+            if op_metrics:
+                inserts = int(op_metrics["numTargetRowsInserted"])
+                updates = int(op_metrics["numTargetRowsUpdated"])
+                deletes = int(op_metrics["numTargetRowsDeleted"])
+
+                continue
+
+        return (inserts, updates, deletes)
+    
     def get_schedule(self):
         """
         Gets the schedule activities that need to be run based on the configuration and metadat
@@ -794,6 +825,43 @@ class BQScheduleLoader(ConfigBase):
         
         return (partition, df_bq)
 
+    def merge_table(self, schedule:SyncSchedule, src:DataFrame) -> SyncSchedule:
+        """
+        Merge into Lakehouse Table based on User Configuration. Only supports Insert/Update All
+        """
+        spark.conf.set("spark.databricks.delta.merge.repartitionBeforeWrite.enabled", "true")
+
+        constraints = []
+
+        for p in schedule.Keys:
+            constraints.append(f"s.{p} = d.{p}")
+
+        if not constraints:
+            raise ValueError("One or more keys must be specified for a MERGE operation")
+        
+        if schedule.FabricPartitionColumn and schedule.PartitionId:
+            constraints.append(f"d.{schedule.FabricPartitionColumn} = '{schedule.PartitionId}'")
+
+        predicate = " AND ".join(constraints)
+
+        dest = DeltaTable.forName(spark, tableOrViewName=schedule.LakehouseTableName)
+
+        dest.alias('d') \
+        .merge(
+            src.alias('s'),
+            predicate
+        ) \
+        .whenMatchedUpdateAll() \
+        .whenNotMatchedInsertAll() \
+        .execute()
+
+        results = self.get_delta_merge_row_counts(schedule)
+
+        schedule.UpdateRowCounts(src=0, dest=0, \
+                                 insert=results[0], update=results[1])
+        
+        return schedule
+        
     def sync_bq_table(
             self, 
             schedule:SyncSchedule):
@@ -819,7 +887,7 @@ class BQScheduleLoader(ConfigBase):
         print("{0} {1}...".format(schedule.SummaryLoadType, schedule.TableName))
 
         if schedule.IsTimePartitionedStrategy and schedule.PartitionId is not None:
-            print("Load by partition...")
+            print("Load for BQ by partition...")
             src = f"{schedule.BQTableName}"
 
             part_format = self.get_bq_partition_date_format(schedule)
@@ -831,6 +899,7 @@ class BQScheduleLoader(ConfigBase):
 
             df_bq = super().read_bq_partition_to_dataframe(src, part_filter)
         else:
+            print("Load for BQ by table or query...")
             src = schedule.BQTableName     
 
             if schedule.SourceQuery != "":
@@ -841,6 +910,7 @@ class BQScheduleLoader(ConfigBase):
         predicate = None
 
         if schedule.LoadStrategy == SyncConstants.WATERMARK and not schedule.InitialLoad:
+            print("Use watermark for differential load...")
             pk = schedule.PrimaryKey
             max_watermark = schedule.MaxWatermark
 
@@ -869,25 +939,32 @@ class BQScheduleLoader(ConfigBase):
 
                     print("Ingestion time partitioning - partitioned by {0} ({1})".format(partition, schedule.PartitionId))
                     df_bq = df_bq.withColumn(partition, lit(schedule.PartitionId))
+                
+                schedule.FabricPartitionColumn = partition
 
-        if schedule.IsTimePartitionedStrategy and schedule.PartitionId is not None:
-            print(f"Writing {schedule.TableName}${schedule.PartitionId} partition...")
-            part_filter = f"{partition} = '{schedule.PartitionId}'"
+        if not schedule.LoadStrategy == SyncConstants.MERGE:
+            if schedule.IsTimePartitionedStrategy and schedule.PartitionId is not None:
+                print(f"Writing {schedule.TableName}${schedule.PartitionId} partition to Lakehouse...")
+                part_filter = f"{partition} = '{schedule.PartitionId}'"
 
-            df_bq.write \
-                .mode(SyncConstants.OVERWRITE) \
-                .option("replaceWhere", part_filter) \
-                .saveAsTable(schedule.LakehouseTableName)
-        else:
-            if partition is None:
                 df_bq.write \
-                    .mode(schedule.Mode) \
+                    .mode(SyncConstants.OVERWRITE) \
+                    .option("replaceWhere", part_filter) \
                     .saveAsTable(schedule.LakehouseTableName)
             else:
-                df_bq.write \
-                    .partitionBy(partition) \
-                    .mode(schedule.Mode) \
-                    .saveAsTable(schedule.LakehouseTableName)
+                print("Writing dataframe to Lakehouse...")
+                if partition is None:
+                    df_bq.write \
+                        .mode(schedule.Mode) \
+                        .saveAsTable(schedule.LakehouseTableName)
+                else:
+                    df_bq.write \
+                        .partitionBy(partition) \
+                        .mode(schedule.Mode) \
+                        .saveAsTable(schedule.LakehouseTableName)
+        else:
+            print("Merging dataframe to Lakehouse...")
+            schedule = self.merge_table(schedule, df_bq)
 
         if schedule.LoadStrategy == SyncConstants.WATERMARK:
             schedule.MaxWatermark = self.get_max_watermark(schedule.LakehouseTableName, schedule.PrimaryKey)
