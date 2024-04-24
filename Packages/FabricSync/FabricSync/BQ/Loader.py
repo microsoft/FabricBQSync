@@ -7,6 +7,7 @@ from typing import List, Tuple
 
 
 from FabricSync.BQ.Config import *
+from FabricSync.DeltaTableUtility import *
 
 class ConfigMetadataLoader(ConfigBase):
     """
@@ -272,6 +273,11 @@ class ConfigMetadataLoader(ConfigBase):
                 COALESCE(u.partition_grain, a.partitioning_strategy, '') AS partition_grain,
                 COALESCE(u.watermark_column, a.pk_col, '') AS watermark_column, 
                 d.autodetect,
+                COALESCE(u.enforce_partition_expiration, FALSE) AS enforce_partition_expiration,
+                COALESCE(u.enable_deletion_vectors, FALSE) AS enable_deletion_vectors,
+                COALESCE(u.allow_schema_evoluton, FALSE) AS allow_schema_evoluton,
+                COALESCE(u.table_maintenance_enabled, FALSE) AS table_maintenance_enabled,
+                COALESCE(u.table_maintenance_interval, 'AUTO') AS table_maintenance_interval,
                 CASE WHEN u.table_name IS NULL THEN FALSE ELSE TRUE END AS config_override,
                 'INIT' AS sync_state,
                 CURRENT_TIMESTAMP() as created_dt,
@@ -298,6 +304,11 @@ class ConfigMetadataLoader(ConfigBase):
                 t.enabled = s.enabled,
                 t.interval = s.interval,
                 t.priority = s.priority,
+                t.enforce_partition_expiration = s.enforce_partition_expiration,
+                t.enable_deletion_vectors = s.enable_deletion_vectors,
+                t.allow_schema_evoluton = s.allow_schema_evoluton,
+                t.table_maintenance_enabled = s.table_maintenance_enabled,
+                t.table_maintenance_interval = s.table_maintenance_interval,
                 t.last_updated_dt = CURRENT_TIMESTAMP()
         WHEN MATCHED AND t.sync_state = 'INIT' THEN
             UPDATE SET *
@@ -422,6 +433,11 @@ class SyncSetup(ConfigBase):
             partition_grain STRING,
             watermark_column STRING,
             autodetect BOOLEAN,
+            enforce_partition_expiration BOOLEAN,
+            enable_deletion_vectors BOOLEAN,
+            allow_schema_evoluton BOOLEAN,
+            table_maintenance_enabled BOOLEAN,
+            table_maintenance_interval STRING,
             config_override BOOLEAN,
             sync_state STRING,
             created_dt TIMESTAMP,
@@ -623,19 +639,6 @@ class BQScheduleLoader(ConfigBase):
         df = spark.createDataFrame(rdd, schema)
         df.write.mode(SyncConstants.APPEND).saveAsTable(tbl)
 
-    def get_table_delta_version(
-            self, 
-            tbl : str) -> str:
-        """
-        Retrieves the delta version from the delta log for the specified table
-        """
-        sql = f"DESCRIBE HISTORY {tbl}"
-        df = spark.sql(sql) \
-            .select(max(col("version")).alias("delta_version"))
-
-        for row in df.collect():
-            return row["delta_version"]
-
     def get_delta_merge_row_counts(
             self, 
             schedule:SyncSchedule) -> Tuple[int, int, int]:
@@ -824,7 +827,7 @@ class BQScheduleLoader(ConfigBase):
             df_bq = df_bq.withColumn(partition, date_format(col(schedule.PartitionColumn), part_format))
         
         return (partition, df_bq)
-
+    
     def merge_table(self, schedule:SyncSchedule, src:DataFrame) -> SyncSchedule:
         """
         Merge into Lakehouse Table based on User Configuration. Only supports Insert/Update All
@@ -844,6 +847,9 @@ class BQScheduleLoader(ConfigBase):
 
         predicate = " AND ".join(constraints)
 
+        if (schedule.AllowSchemaEvolution):
+            spark.conf.set("spark.databricks.delta.schema.autoMerge.enabled", "true")
+
         dest = DeltaTable.forName(spark, tableOrViewName=schedule.LakehouseTableName)
 
         dest.alias('d') \
@@ -854,6 +860,9 @@ class BQScheduleLoader(ConfigBase):
         .whenMatchedUpdateAll() \
         .whenNotMatchedInsertAll() \
         .execute()
+
+        if (schedule.AllowSchemaEvolution):
+            spark.conf.set("spark.databricks.delta.schema.autoMerge.enabled", "false")
 
         results = self.get_delta_merge_row_counts(schedule)
 
@@ -885,6 +894,7 @@ class BQScheduleLoader(ConfigBase):
         4. Collect and save telemetry
         """
         print("{0} {1}...".format(schedule.SummaryLoadType, schedule.TableName))
+        table_maint = DeltaTableMaintenance(schedule.LakehouseTableName)
 
         if schedule.IsTimePartitionedStrategy and schedule.PartitionId is not None:
             print("Load for BQ by partition...")
@@ -942,25 +952,35 @@ class BQScheduleLoader(ConfigBase):
                 
                 schedule.FabricPartitionColumn = partition
 
+        write_config = { "delta.enableDeletionVectors" : str(schedule.EnableDeletionVectors).lower() }
+
+        #Schema Evolution
+        if schedule.AllowSchemaEvolution:
+            table_maint.evolve_schema(df_bq)
+            write_config["mergeSchema"] = "true"
+
         if not schedule.LoadStrategy == SyncConstants.MERGE:
             if schedule.IsTimePartitionedStrategy and schedule.PartitionId is not None:
                 print(f"Writing {schedule.TableName}${schedule.PartitionId} partition to Lakehouse...")
-                part_filter = f"{partition} = '{schedule.PartitionId}'"
+
+                write_config["replaceWhere"] = f"{schedule.FabricPartitionColumn} = '{schedule.PartitionId}'"}
 
                 df_bq.write \
                     .mode(SyncConstants.OVERWRITE) \
-                    .option("replaceWhere", part_filter) \
+                    .options(**write_config) \
                     .saveAsTable(schedule.LakehouseTableName)
             else:
                 print("Writing dataframe to Lakehouse...")
                 if partition is None:
                     df_bq.write \
                         .mode(schedule.Mode) \
+                        .options( **write_config) \
                         .saveAsTable(schedule.LakehouseTableName)
                 else:
                     df_bq.write \
                         .partitionBy(partition) \
                         .mode(schedule.Mode) \
+                        .options( **write_config) \
                         .saveAsTable(schedule.LakehouseTableName)
         else:
             print("Merging dataframe to Lakehouse...")
@@ -979,7 +999,7 @@ class BQScheduleLoader(ConfigBase):
 
         schedule.UpdateRowCounts(src_cnt, dest_cnt, 0, 0)    
         schedule.SparkAppId = spark.sparkContext.applicationId
-        schedule.DeltaVersion = self.get_table_delta_version(schedule.LakehouseTableName)
+        schedule.DeltaVersion = table_maint.CurrentTableVersion
         schedule.EndTime = datetime.now(timezone.utc)
 
         df_bq.unpersist()
