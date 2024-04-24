@@ -115,7 +115,7 @@ class SyncSchedule:
 
     def __init__(
                 self, 
-                row: Row):
+                row:Row):
         """
         Scheduled load Configuration load from Data Row
         """
@@ -126,20 +126,25 @@ class SyncSchedule:
         self.LoadStrategy = row["load_strategy"]
         self.LoadType = row["load_type"]
         self.InitialLoad = row["initial_load"]
+        self.LastScheduleLoadDate = row["last_schedule_dt"]
         self.ProjectId = row["project_id"]
         self.Dataset = row["dataset"]
         self.TableName = row["table_name"]
         self.SourceQuery = row["source_query"]
         self.MaxWatermark = row["max_watermark"]
+        self.WatermarkColumn = row["watermark_column"]
         self.IsPartitioned = row["is_partitioned"]
         self.PartitionColumn = row["partition_column"]
         self.PartitionType = row["partition_type"]
         self.PartitionGrain = row["partition_grain"]
-        self.WatermarkColumn = row["watermark_column"]
-        self.LastScheduleLoadDate = row["last_schedule_dt"]
+        self.PartitionId = row["partition_id"]             
         self.Lakehouse = row["lakehouse"]
         self.DestinationTableName = row["lakehouse_table_name"]
-        self.PartitionId = row["partition_id"]
+        self.EnforcePartitionExpiration = row["enforce_partition_expiration"]
+        self.EnableDeletionVectors = row["enable_deletion_vectors"]
+        self.AllowSchemaEvolution = row["allow_schema_evoluton"]
+        self.EnableTableMaintenance = row["table_maintenance_enabled"]
+        self.TableMaintenanceInterval = row["table_maintenance_interval"]
     
     @property
     def SummaryLoadType(self) -> str:
@@ -570,7 +575,7 @@ class ConfigBase():
                     validation_errors.append(f"Table {t.TableName} is configured for Watermark but is missing the Watermark column")
 
     
-        if not validation_errors:
+        if not validation_errors and len(validation_errors) > 0:
             config_errors = "\r\n".join(validation_errors)
             raise ValueError(f"Errors in User Config JSON File:\r\n{config_errors}")
         
@@ -736,7 +741,12 @@ class ConfigBase():
                 tbl.partitioned.partition_grain,
                 tbl.lakehouse_target.lakehouse,
                 tbl.lakehouse_target.table_name AS lakehouse_target_table,
-                tbl.keys
+                tbl.keys,
+                tbl.enforce_partition_expiration AS enforce_partition_expiration,
+                tbl.enable_deletion_vectors AS enable_deletion_vectors,
+                tbl.allow_schema_evoluton AS allow_schema_evoluton,
+                tbl.table_maintenance.enabled AS table_maintenance_enabled,
+                tbl.table_maintenance.interval AS table_maintenance_interval
             FROM (SELECT project_id, dataset, EXPLODE(tables) AS tbl FROM user_config_json)
         """
         spark.sql (sql)
