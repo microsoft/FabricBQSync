@@ -17,9 +17,7 @@ class ConfigMetadataLoader(ConfigBase):
         the Lakehouse Delta tables
     2. Autodetect table sync configuration based on defined metadata & heuristics
     """
-    def __init__(
-            self, 
-            config_path : str):
+    def __init__(self, config_path : str):
         """
         Calls the parent init to load the user config JSON file
         """
@@ -156,9 +154,7 @@ class ConfigMetadataLoader(ConfigBase):
 
         self.write_lakehouse_table(df, self.UserConfig.MetadataLakehouse, tbl_nm)
 
-    def sync_bq_information_schema_table_dependent(
-            self, 
-            dependent_tbl : str):
+    def sync_bq_information_schema_table_dependent(self, dependent_tbl : str):
         """
         Reads a child INFORMATION_SCHEMA table from BigQuery for the configuration project_id 
         and dataset. The child table is joined to the TABLES table to filter for BASE TABLEs.
@@ -325,9 +321,7 @@ class SyncSetup(ConfigBase):
     1. Creates the Metadata & Target Lakehouse if they do not exists
     2. Drops & Recreates the required metadata and any supporting tables required
     """
-    def __init__(
-            self, 
-            config_path : str):
+    def __init__(self, config_path : str):
         """
         Calls the parent init to load the User Config JSON file
         """
@@ -336,9 +330,7 @@ class SyncSetup(ConfigBase):
 
         super().__init__(config_path)
 
-    def get_fabric_lakehouse(
-            self, 
-            nm : str):
+    def get_fabric_lakehouse(self, nm : str):
         """
         Returns a Fabric Lakehouse by name or None if it does not exists
         """
@@ -372,18 +364,14 @@ class SyncSetup(ConfigBase):
         spark.sql(f"USE {self.UserConfig.MetadataLakehouse}")
         self.create_all_tables()
 
-    def drop_table(
-            self, 
-            tbl : str):
+    def drop_table(self, tbl : str):
         """
         Drops an existing table from the Lakehouse if it exists
         """
         sql = f"DROP TABLE IF EXISTS {tbl}"
         spark.sql(sql)
 
-    def get_tbl_name(
-            self, 
-            tbl : str) -> str:
+    def get_tbl_name(self, tbl : str) -> str:
         """
         Returns the table name with two-part format for the configuration Metadata Lakehouse
         """
@@ -517,9 +505,7 @@ class Scheduler(ConfigBase):
     Delta table. When tables are scheduled but no updates are detected on the BigQuery side 
     a SKIPPED record is created for tracking purposes.
     """
-    def __init__(
-            self, 
-            config_path : str):
+    def __init__(self, config_path : str):
         """
         Calls the parent init to load the user config JSON file
         """
@@ -593,11 +579,7 @@ class BQScheduleLoader(ConfigBase):
     Class repsonsible for processing the sync schedule and handling data movement 
     from BigQuery to Fabric Lakehouse based on each table's configuration
     """
-    def __init__(
-            self, 
-            config_path : str, 
-            load_proxy_views : bool =True, 
-            force_config_reload : bool = False):
+    def __init__(self, config_path : str, load_proxy_views : bool =True, force_config_reload : bool = False):
         """
         Calls parent init to load User Config from JSON file
         """
@@ -607,9 +589,7 @@ class BQScheduleLoader(ConfigBase):
         if load_proxy_views:
             super().create_proxy_views()
 
-    def save_schedule_telemetry(
-            self, 
-            schedule : SyncSchedule):
+    def save_schedule_telemetry(self, schedule : SyncSchedule):
         """
         Write status and telemetry from sync schedule to Sync Schedule Telemetry Delta table
         """
@@ -639,9 +619,7 @@ class BQScheduleLoader(ConfigBase):
         df = spark.createDataFrame(rdd, schema)
         df.write.mode(SyncConstants.APPEND).saveAsTable(tbl)
 
-    def get_delta_merge_row_counts(
-            self, 
-            schedule:SyncSchedule) -> Tuple[int, int, int]:
+    def get_delta_merge_row_counts(self, schedule:SyncSchedule) -> Tuple[int, int, int]:
         """
         Gets the rows affected by merge operation, filters on partition id when table is partitioned
         """
@@ -701,7 +679,8 @@ class BQScheduleLoader(ConfigBase):
                 sp.table_catalog = s.project_id AND 
                 sp.table_schema = s.dataset AND
                 sp.table_name = s.table_name
-            WHERE ((sp.last_modified_time >= s.last_schedule_dt) OR (s.last_schedule_dt IS NULL))
+            WHERE sp.partition_id != '__NULL__'
+            AND ((sp.last_modified_time >= s.last_schedule_dt) OR (s.last_schedule_dt IS NULL))
             AND 
                 ((c.load_strategy = 'PARTITION' AND s.last_schedule_dt IS NOT NULL) OR
                     c.load_strategy = 'TIME_INGESTION')
@@ -747,10 +726,7 @@ class BQScheduleLoader(ConfigBase):
 
         return df
 
-    def get_max_watermark(
-            self, 
-            lakehouse_tbl : str, 
-            watermark_col : str) -> str:
+    def get_max_watermark(self, lakehouse_tbl : str, watermark_col : str) -> str:
         """
         Get the max value for the supplied table and column
         """
@@ -760,9 +736,7 @@ class BQScheduleLoader(ConfigBase):
         for row in df.collect():
             return row["watermark"]
 
-    def get_bq_partition_date_format(
-            self, 
-            schedule:SyncSchedule) -> str:
+    def get_bq_partition_date_format(self, schedule:SyncSchedule) -> str:
         """
         Resolve the BigQuery datetime format based on the partition grain
         """
@@ -782,10 +756,7 @@ class BQScheduleLoader(ConfigBase):
         
         return part_format
 
-    def resolve_fabric_partition_column(
-            self, 
-            schedule:SyncSchedule, 
-            df_bq:DataFrame) -> Tuple[str, DataFrame]:
+    def resolve_fabric_partition_column(self, schedule:SyncSchedule, df_bq:DataFrame) -> Tuple[str, DataFrame]:
         """
         Resolves the fabric partition approach using a proxy column when required
         """
@@ -853,10 +824,9 @@ class BQScheduleLoader(ConfigBase):
         dest = DeltaTable.forName(spark, tableOrViewName=schedule.LakehouseTableName)
 
         dest.alias('d') \
-        .merge(
-            src.alias('s'),
-            predicate
-        ) \
+        .merge( \
+            src.alias('s'), \
+            predicate) \
         .whenMatchedUpdateAll() \
         .whenNotMatchedInsertAll() \
         .execute()
@@ -871,9 +841,7 @@ class BQScheduleLoader(ConfigBase):
         
         return schedule
         
-    def sync_bq_table(
-            self, 
-            schedule:SyncSchedule):
+    def sync_bq_table(self, schedule:SyncSchedule):
         """
         Sync the data for a table from BigQuery to the target Fabric Lakehouse based on configuration
 
@@ -894,7 +862,11 @@ class BQScheduleLoader(ConfigBase):
         4. Collect and save telemetry
         """
         print("{0} {1}...".format(schedule.SummaryLoadType, schedule.TableName))
-        table_maint = DeltaTableMaintenance(schedule.LakehouseTableName)
+
+        if spark.catalog.tableExists(schedule.LakehouseTableName):
+            table_maint = DeltaTableMaintenance(schedule.LakehouseTableName)
+        else:
+            table_maint = None
 
         if schedule.IsTimePartitionedStrategy and schedule.PartitionId is not None:
             print("Load for BQ by partition...")
@@ -955,15 +927,15 @@ class BQScheduleLoader(ConfigBase):
         write_config = { "delta.enableDeletionVectors" : str(schedule.EnableDeletionVectors).lower() }
 
         #Schema Evolution
-        if schedule.AllowSchemaEvolution:
+        if schedule.AllowSchemaEvolution and table_maint:
             table_maint.evolve_schema(df_bq)
             write_config["mergeSchema"] = "true"
 
-        if not schedule.LoadStrategy == SyncConstants.MERGE:
+        if not schedule.LoadStrategy == SyncConstants.MERGE or schedule.InitialLoad:
             if schedule.IsTimePartitionedStrategy and schedule.PartitionId is not None:
                 print(f"Writing {schedule.TableName}${schedule.PartitionId} partition to Lakehouse...")
 
-                write_config["replaceWhere"] = f"{schedule.FabricPartitionColumn} = '{schedule.PartitionId}'"}
+                write_config["replaceWhere"] = f"{schedule.FabricPartitionColumn} = '{schedule.PartitionId}'"
 
                 df_bq.write \
                     .mode(SyncConstants.OVERWRITE) \
@@ -986,6 +958,9 @@ class BQScheduleLoader(ConfigBase):
             print("Merging dataframe to Lakehouse...")
             schedule = self.merge_table(schedule, df_bq)
 
+        if not table_maint:
+            table_maint = DeltaTableMaintenance(schedule.LakehouseTableName)
+
         if schedule.LoadStrategy == SyncConstants.WATERMARK:
             schedule.MaxWatermark = self.get_max_watermark(schedule.LakehouseTableName, schedule.PrimaryKey)
 
@@ -1006,9 +981,7 @@ class BQScheduleLoader(ConfigBase):
 
         return schedule
 
-    def process_load_group_telemetry(
-            self, 
-            load_grp : str = None):
+    def process_load_group_telemetry(self, load_grp : str = None):
         """
         When a load group is complete, summarizes the telemetry to close out the schedule
         """

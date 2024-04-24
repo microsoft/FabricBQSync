@@ -6,11 +6,9 @@ import httplib2
 
 class BigQueryAccessPolicy:
     """
-    BigQuery Access Policy Mode
+    BigQuery Access Policy Model
     """
-    def __init__(
-            self, 
-            json_row:str):
+    def __init__(self, json_row:str):
         """
         Initializes class from JSON object
         """
@@ -34,9 +32,7 @@ class BigQueryAccessPolicyIAM:
     """
     BiqQuery Access Policy IAM Model
     """
-    def __init__(
-            self, 
-            json_row:str):
+    def __init__(self, json_row:str):
         """
         Initializes class from JSON object
         """
@@ -47,9 +43,7 @@ class GCPRestAPI:
     """
     GCP Rest API Helper Class with Service Account Authentication
     """
-    def __init__(
-            self, 
-            json_credentials:str):
+    def __init__(self, json_credentials:str):
         """
         Class Initialization with Service Account JSON Credential Path
         """
@@ -66,9 +60,7 @@ class GCPRestAPI:
         
         return self.__Token
 
-    def load_json_credentials(
-            self, 
-            filename:str) -> str:
+    def load_json_credentials(self, filename:str) -> str:
         """
         Reads Credential JSON file from the filesystem
         """
@@ -77,20 +69,13 @@ class GCPRestAPI:
         
         return json.loads(data)
 
-    def load_private_key(
-            self, 
-            json_cred:str) -> str:
+    def load_private_key(self, json_cred:str) -> str:
         """
         Extracts the private key from the credential file
         """
         return json_cred['private_key']
 
-    def create_signed_jwt(
-            self, 
-            pkey:str, 
-            pkey_id:str, 
-            email:str, 
-            scope:str) -> str:
+    def create_signed_jwt(self, pkey:str, pkey_id:str, email:str, scope:str) -> str:
         """
         Calls the Google API OAuth service to get a signed JWT token
         """
@@ -127,9 +112,7 @@ class GCPRestAPI:
         
         return sig
 
-    def exchange_jwt_for_access_token(
-            self, 
-            signed_jwt:str) -> str:
+    def exchange_jwt_for_access_token(self, signed_jwt:str) -> str:
         """
         Calls the Google OAuth service to exchange the JWT token for a Access Token 
         """
@@ -147,10 +130,7 @@ class GCPRestAPI:
         
         return r.json()['access_token']
         
-    def execute_request(
-            self, 
-            url:str, 
-            http_method:str) -> str:
+    def execute_request(self, url:str, http_method:str) -> str:
         """
         Executes an authenticated API request
         """    

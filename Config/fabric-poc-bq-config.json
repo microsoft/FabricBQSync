@@ -6,7 +6,12 @@
 	"master_reset": false,
 	"metadata_lakehouse": "BQ_Metadata",
 	"target_lakehouse": "BQ_Data",
-	"gcp_credential_path": "/builtin/config/fabric-poc-416917-efd8038af977.json",
+	
+	"gcp_credentials": {
+		"credential_path": "/builtin/config/fabric-poc-416917-efd8038af977.json",
+		"api_token": "AIzaSyBBrkgEiaeAjuR82FFmBjacDlwvxFbflSY",
+		"credential": "base64encodedcredential"
+	},
 	
 	"async": {
 		"enabled": true,
@@ -19,7 +24,14 @@
 	"tables": [
 	{
 		"table_name": "fact_sale_1y_full_nopart",
-		"enabled" : false
+		"enabled": false,
+		"enforce_partition_expiration": true,
+		"enable_deletion_vectors": true,
+		"allow_schema_evoluton": true,
+		"table_maintenance":{
+			"enabled": true,
+			"interval": "DAY"
+		}
 	},
 	{
 		"load_priority": 200,

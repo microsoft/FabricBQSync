@@ -19,9 +19,7 @@ class DeltaTableMaintenance:
     """
     __detail:Row = None
 
-    def __init__(
-            self, 
-            table_nm:str):
+    def __init__(self, table_nm:str):
         """
         Init function, creates instance of DeltaTable class
         """
@@ -56,9 +54,7 @@ class DeltaTableMaintenance:
         """
         return self.Detail["location"]
 
-    def get_table_history(
-            self, 
-            only_current_day:bool = False) -> DataFrame:
+    def get_table_history(self, only_current_day:bool = False) -> DataFrame:
         """
         Gets the table history with optional filter for current day
         """
@@ -89,9 +85,7 @@ class DeltaTableMaintenance:
         
         return destNotPresent, srcNotPresent, typesChanged
     
-    def evolve_schema(
-            self, 
-            src:DataFrame):
+    def evolve_schema(self, src:DataFrame):
         """
         If schema differences are detected that between the source and delta table:
 
@@ -128,9 +122,7 @@ class DeltaTableMaintenance:
                 .mode("overwrite") \
                 .saveAsTable("test_table")
     
-    def drop_partition(
-            self, 
-            partition_filter:str):
+    def drop_partition(self, partition_filter:str):
         """
         Drops a partition of data from the delta table
         """
