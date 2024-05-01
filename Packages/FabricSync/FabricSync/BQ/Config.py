@@ -32,6 +32,7 @@ class SyncConstants:
     INFORMATION_SCHEMA_PARTITIONS = "INFORMATION_SCHEMA.PARTITIONS"
     INFORMATION_SCHEMA_COLUMNS = "INFORMATION_SCHEMA.COLUMNS"
     INFORMATION_SCHEMA_TABLE_CONSTRAINTS = "INFORMATION_SCHEMA.TABLE_CONSTRAINTS"
+    INFORMATION_SCHEMA_TABLE_OPTIONS = "INFORMATION_SCHEMA.TABLE_OPTIONS"
     INFORMATION_SCHEMA_KEY_COLUMN_USAGE = "INFORMATION_SCHEMA.KEY_COLUMN_USAGE"
 
     SQL_TBL_SYNC_SCHEDULE = "bq_sync_schedule"
@@ -128,11 +129,24 @@ class SyncSchedule:
         self.Lakehouse = row["lakehouse"]
         self.DestinationTableName = row["lakehouse_table_name"]
         self.EnforcePartitionExpiration = row["enforce_partition_expiration"]
-        self.EnableDeletionVectors = row["enable_deletion_vectors"]
         self.AllowSchemaEvolution = row["allow_schema_evoluton"]
         self.EnableTableMaintenance = row["table_maintenance_enabled"]
         self.TableMaintenanceInterval = row["table_maintenance_interval"]
     
+    @property
+    def TableOptions(self) -> dict[str, str]:
+        """
+        Returns the configured table options
+        """
+        opts = {}
+
+        if self.Row["table_options"]:
+            for r in self.Row["table_options"]:
+                opts[r["key"]] = r["value"]
+                
+        return opts
+
+
     @property
     def SummaryLoadType(self) -> str:
         """
@@ -246,8 +260,6 @@ class ConfigDataset(JSONConfigObj):
         Loads from use config JSON
         """
         super().__init__()
-        self.ProjectID = super().get_json_conf_val(json_config, "project_id", None)
-        self.Dataset = super().get_json_conf_val(json_config, "dataset", None)
         self.LoadAllTables = super().get_json_conf_val(json_config, "load_all_tables", True)
         self.Autodetect = super().get_json_conf_val(json_config, "autodetect", True)
         self.MasterReset = super().get_json_conf_val(json_config, "master_reset", False)
@@ -257,6 +269,8 @@ class ConfigDataset(JSONConfigObj):
 
         if "gcp_credentials" in json_config:
             self.GCPCredential = ConfigGCPCredential(
+                super().get_json_conf_val(json_config["gcp_credentials"], "project_id", None),
+                super().get_json_conf_val(json_config["gcp_credentials"], "dataset", None),
                 super().get_json_conf_val(json_config["gcp_credentials"], "credential_path", None),
                 super().get_json_conf_val(json_config["gcp_credentials"], "access_token", None),
                 super().get_json_conf_val(json_config["gcp_credentials"], "credential", None)
@@ -277,6 +291,20 @@ class ConfigDataset(JSONConfigObj):
         if "tables" in json_config:
             for t in json_config["tables"]:
                 self.Tables.append(ConfigBQTable(t))
+    
+    @property
+    def ProjectID(self) -> str:
+        """
+        GCP Project ID
+        """
+        return self.GCPCredential.ProjectID
+    
+    @property
+    def Dataset(self) -> str:
+        """
+        GCP Dataset
+        """
+        return self.GCPCredential.Dataset
     
     def get_table_name_list(self) -> list[str]:
         """
@@ -308,7 +336,9 @@ class ConfigGCPCredential:
     """
     GCP Credential model
     """
-    def __init__(self, path:str = None, token:str = None, credential:str = None):
+    def __init__(self, project_id, dataset, path:str = None, token:str = None, credential:str = None):
+        self.ProjectID = project_id
+        self.Dataset = dataset
         self.CredentialPath = path
         self.AccessToken = token
         self.Credential = credential
@@ -379,7 +409,8 @@ class ConfigBQTable (JSONConfigObj):
         self.EnforcePartitionExpiration = super().get_json_conf_val(json_config, "enforce_partition_expiration", False)
         self.EnableDeletionVectors = super().get_json_conf_val(json_config, "enable_deletion_vectors", False)
         self.AllowSchemaEvolution = super().get_json_conf_val(json_config, "allow_schema_evoluton", False)
-        
+        self.TableOptions: dict[str, str] = {}
+
         if "lakehouse_target" in json_config:
             self.LakehouseTarget = ConfigLakehouseTarget( \
                 super().get_json_conf_val(json_config["lakehouse_target"], "lakehouse", ""), \
@@ -402,6 +433,10 @@ class ConfigBQTable (JSONConfigObj):
         else:
             self.Partitioned = ConfigPartition()
         
+        if "table_options" in json_config:
+            for o in json_config["table_options"]:
+                self.TableOptions[o["key"]] = o["value"]
+
         if "table_maintenance" in json_config:
             self.TableMaintenance = ConfigTableMaintenance( \
                 super().get_json_conf_val(json_config["table_maintenance"], "enabled", False), \
@@ -420,13 +455,15 @@ class ConfigBase():
     '''
     Base class for sync objects that require access to user-supplied configuration
     '''
-    def __init__(self, config_path:str, force_reload_config:bool = False):
+    def __init__(self, context: SparkSession, spark_utils, config_path:str, force_reload_config:bool = False):
         """
         Init method loads the user JSON config from the supplied path.
         """
         if config_path is None:
             raise Exception("Missing Path to JSON User Config")
 
+        self.__context__ = context
+        self.__spark_utils__ = spark_utils
         self.ConfigPath = config_path
         self.UserConfig = None
         self.GCPCredential = None
@@ -434,6 +471,14 @@ class ConfigBase():
         self.UserConfig = self.ensure_user_config(force_reload_config)
 
         self.GCPCredential = self.load_gcp_credential()
+    
+    @property
+    def Context(self) -> SparkSession:
+        return self.__context__
+    
+    @property
+    def SparkUtils(self):
+        return self.__spark_utils__
     
     def ensure_user_config(self, reload_config:bool) -> ConfigDataset:
         """
@@ -458,17 +503,17 @@ class ConfigBase():
         """
         config_df = None
 
-        if not spark.catalog.tableExists("user_config_json") or reload_config:
-            if not os.path.exists(f"{mssparkutils.nbResPath}{config_path}"):
+        if not self.Context.catalog.tableExists("user_config_json") or reload_config:
+            if not os.path.exists(f"{self.SparkUtils.nbResPath}{config_path}"):
                 raise Exception("JSON User Config does not exists at the path supplied")
     
-            cfg_json = Path(f"{mssparkutils.nbResPath}{config_path}").read_text()
+            cfg_json = Path(f"{self.SparkUtils.nbResPath}{config_path}").read_text()
 
-            config_df = spark.read.json(spark.sparkContext.parallelize([cfg_json]))
+            config_df = self.Context.read.json(self.Context.sparkContext.parallelize([cfg_json]))
             config_df.createOrReplaceTempView("user_config_json")
             config_df.cache()
         else:
-            config_df = spark.table("user_config_json")
+            config_df = self.Context.table("user_config_json")
             
         return json.loads(config_df.toJSON().first())
 
@@ -538,7 +583,7 @@ class ConfigBase():
         """
         Reads credential file from the Notebook Resource file path
         """
-        credential = f"{mssparkutils.nbResPath}{self.UserConfig.GCPCredential.CredentialPath}"
+        credential = f"{self.SparkUtils.nbResPath}{self.UserConfig.GCPCredential.CredentialPath}"
 
         if not os.path.exists(credential):
            raise Exception("GCP Credential file does not exists at the path supplied.")
@@ -581,7 +626,7 @@ class ConfigBase():
         BigQuery does not support table decorator so the table and partition info 
         is passed using options
         """
-        df = spark.read \
+        df = self.Context.read \
             .format("bigquery") \
             .option("parentProject", self.UserConfig.ProjectID) \
             .option("credentials", self.GCPCredential) \
@@ -600,7 +645,7 @@ class ConfigBase():
         """
         Reads a BigQuery table using the BigQuery spark connector
         """
-        df = spark.read \
+        df = self.Context.read \
             .format("bigquery") \
             .option("parentProject", self.UserConfig.ProjectID) \
             .option("credentials", self.GCPCredential) \
@@ -630,7 +675,7 @@ class ConfigBase():
         clean_nm = trgt.replace(".", "_")
         vw_nm = f"BQ_{clean_nm}"
 
-        if not spark.catalog.tableExists(vw_nm) or refresh:
+        if not self.Context.catalog.tableExists(vw_nm) or refresh:
             tbl = self.UserConfig.flatten_3part_tablename(clean_nm)
             lakehouse_tbl = self.UserConfig.get_lakehouse_tablename(self.UserConfig.MetadataLakehouse, tbl)
 
@@ -640,7 +685,7 @@ class ConfigBase():
             SELECT *
             FROM {lakehouse_tbl}
             """
-            spark.sql(sql)
+            self.Context.sql(sql)
 
     def create_userconfig_tables_proxy_view(self):
         """
@@ -650,7 +695,9 @@ class ConfigBase():
             CREATE OR REPLACE TEMPORARY VIEW user_config_tables
             AS
             SELECT
-                project_id, dataset, tbl.table_name,
+                project_id, 
+                dataset, 
+                tbl.table_name,
                 tbl.enabled,tbl.load_priority,tbl.source_query,
                 tbl.load_strategy,tbl.load_type,tbl.interval,
                 tbl.watermark.column as watermark_column,
@@ -662,13 +709,18 @@ class ConfigBase():
                 tbl.lakehouse_target.table_name AS lakehouse_target_table,
                 tbl.keys,
                 tbl.enforce_partition_expiration AS enforce_partition_expiration,
-                tbl.enable_deletion_vectors AS enable_deletion_vectors,
                 tbl.allow_schema_evoluton AS allow_schema_evoluton,
                 tbl.table_maintenance.enabled AS table_maintenance_enabled,
-                tbl.table_maintenance.interval AS table_maintenance_interval
-            FROM (SELECT project_id, dataset, EXPLODE(tables) AS tbl FROM user_config_json)
+                tbl.table_maintenance.interval AS table_maintenance_interval,
+                tbl.table_options
+            FROM (
+                SELECT 
+                    gcp_credentials.project_id as project_id,
+                    gcp_credentials.dataset as dataset, 
+                    EXPLODE(tables) AS tbl 
+                FROM user_config_json)
         """
-        spark.sql (sql)
+        self.Context.sql (sql)
 
     def create_userconfig_tables_cols_proxy_view(self):
         """
@@ -682,19 +734,21 @@ class ConfigBase():
             FROM (
                 SELECT
                     project_id, dataset, tbl.table_name, EXPLODE(tbl.keys) AS pkeys
-                FROM (SELECT project_id, dataset, EXPLODE(tables) AS tbl FROM user_config_json)
+                FROM (SELECT gcp_credentials.project_id as project_id,
+                    gcp_credentials.dataset as dataset, 
+                    EXPLODE(tables) AS tbl FROM user_config_json)
             )
         """
-        spark.sql(sql)
+        self.Context.sql(sql)
 
     def create_proxy_views(self, refresh:bool = False):
         """
         Create the user config and covering BQ information schema views
         """
-        if not spark.catalog.tableExists("user_config_tables") or refresh:
+        if not self.Context.catalog.tableExists("user_config_tables") or refresh:
             self.create_userconfig_tables_proxy_view()
         
-        if not spark.catalog.tableExists("user_config_table_keys") or refresh:
+        if not self.Context.catalog.tableExists("user_config_table_keys") or refresh:
             self.create_userconfig_tables_cols_proxy_view()
 
         self.create_infosys_proxy_view(SyncConstants.INFORMATION_SCHEMA_TABLES, refresh)
@@ -702,3 +756,4 @@ class ConfigBase():
         self.create_infosys_proxy_view(SyncConstants.INFORMATION_SCHEMA_COLUMNS, refresh)
         self.create_infosys_proxy_view(SyncConstants.INFORMATION_SCHEMA_TABLE_CONSTRAINTS, refresh)
         self.create_infosys_proxy_view(SyncConstants.INFORMATION_SCHEMA_KEY_COLUMN_USAGE, refresh)
+        self.create_infosys_proxy_view(SyncConstants.INFORMATION_SCHEMA_TABLE_OPTIONS, refresh)
