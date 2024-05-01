@@ -3,8 +3,7 @@ from pyspark.sql.types import *
 from delta.tables import *
 from datetime import datetime, timezone
 import json
-from typing import List, Tuple
-
+from typing import Tuple
 
 from FabricSync.BQ.Config import *
 from FabricSync.DeltaTableUtility import *
@@ -17,14 +16,14 @@ class ConfigMetadataLoader(ConfigBase):
         the Lakehouse Delta tables
     2. Autodetect table sync configuration based on defined metadata & heuristics
     """
-    def __init__(self, config_path : str):
+    def __init__(self, context: SparkSession, spark_utils, config_path : str):
         """
         Calls the parent init to load the user config JSON file
         """
         self.JSON_Config_Path = config_path
         
-        super().__init__(config_path)
-        spark.sql(f"USE {self.UserConfig.MetadataLakehouse}")
+        super().__init__(context, spark_utils, config_path)
+        self.Context.sql(f"USE {self.UserConfig.MetadataLakehouse}")
     
     def create_autodetect_view(self):
         """
@@ -127,7 +126,7 @@ class ConfigMetadataLoader(ConfigBase):
             t.table_name = p.table_name
         """
 
-        spark.sql(sql)
+        self.Context.sql(sql)
 
     def sync_bq_information_schema_tables(self):
         """
@@ -199,6 +198,7 @@ class ConfigMetadataLoader(ConfigBase):
         self.sync_bq_information_schema_table_dependent(SyncConstants.INFORMATION_SCHEMA_COLUMNS)
         self.sync_bq_information_schema_table_dependent(SyncConstants.INFORMATION_SCHEMA_TABLE_CONSTRAINTS)
         self.sync_bq_information_schema_table_dependent(SyncConstants.INFORMATION_SCHEMA_KEY_COLUMN_USAGE)
+        self.sync_bq_information_schema_table_dependent(SyncConstants.INFORMATION_SCHEMA_TABLE_OPTIONS)
 
     def create_proxy_views(self):
         """
@@ -206,7 +206,7 @@ class ConfigMetadataLoader(ConfigBase):
         """
         super().create_proxy_views()
 
-        if not spark.catalog.tableExists("bq_table_metadata_autodetect"):
+        if not self.Context.catalog.tableExists("bq_table_metadata_autodetect"):
             self.create_autodetect_view()
 
     def auto_detect_table_profiles(self):
@@ -270,10 +270,10 @@ class ConfigMetadataLoader(ConfigBase):
                 COALESCE(u.watermark_column, a.pk_col, '') AS watermark_column, 
                 d.autodetect,
                 COALESCE(u.enforce_partition_expiration, FALSE) AS enforce_partition_expiration,
-                COALESCE(u.enable_deletion_vectors, FALSE) AS enable_deletion_vectors,
                 COALESCE(u.allow_schema_evoluton, FALSE) AS allow_schema_evoluton,
                 COALESCE(u.table_maintenance_enabled, FALSE) AS table_maintenance_enabled,
                 COALESCE(u.table_maintenance_interval, 'AUTO') AS table_maintenance_interval,
+                u.table_options,
                 CASE WHEN u.table_name IS NULL THEN FALSE ELSE TRUE END AS config_override,
                 'INIT' AS sync_state,
                 CURRENT_TIMESTAMP() as created_dt,
@@ -301,10 +301,10 @@ class ConfigMetadataLoader(ConfigBase):
                 t.interval = s.interval,
                 t.priority = s.priority,
                 t.enforce_partition_expiration = s.enforce_partition_expiration,
-                t.enable_deletion_vectors = s.enable_deletion_vectors,
                 t.allow_schema_evoluton = s.allow_schema_evoluton,
                 t.table_maintenance_enabled = s.table_maintenance_enabled,
                 t.table_maintenance_interval = s.table_maintenance_interval,
+                t.table_options = s.table_options,
                 t.last_updated_dt = CURRENT_TIMESTAMP()
         WHEN MATCHED AND t.sync_state = 'INIT' THEN
             UPDATE SET *
@@ -312,7 +312,7 @@ class ConfigMetadataLoader(ConfigBase):
             INSERT *
         """
 
-        spark.sql(sql)
+        self.Context.sql(sql)
 
 class SyncSetup(ConfigBase):
     """
@@ -321,14 +321,14 @@ class SyncSetup(ConfigBase):
     1. Creates the Metadata & Target Lakehouse if they do not exists
     2. Drops & Recreates the required metadata and any supporting tables required
     """
-    def __init__(self, config_path : str):
+    def __init__(self, context: SparkSession, spark_utils, config_path : str):
         """
         Calls the parent init to load the User Config JSON file
         """
-        if spark.catalog.tableExists("user_config_json"):
-            spark.catalog.dropTempView("user_config_json")
+        if self.Context.catalog.tableExists("user_config_json"):
+            self.Context.catalog.dropTempView("user_config_json")
 
-        super().__init__(config_path)
+        super().__init__(context, spark_utils, config_path)
 
     def get_fabric_lakehouse(self, nm : str):
         """
@@ -337,15 +337,13 @@ class SyncSetup(ConfigBase):
         lakehouse = None
 
         try:
-            lakehouse = mssparkutils.lakehouse.get(nm)
+            lakehouse = self.SparkUtils.lakehouse.get(nm)
         except Exception:
             print("Lakehouse not found: {0}".format(nm))
 
         return lakehouse
 
-    def create_fabric_lakehouse(
-            self, 
-            nm : str):
+    def create_fabric_lakehouse(self, nm : str):
         """
         Creates a Fabric Lakehouse if it does not exists
         """
@@ -353,7 +351,7 @@ class SyncSetup(ConfigBase):
 
         if (lakehouse is None):
             print("Creating Lakehouse {0}...".format(nm))
-            mssparkutils.lakehouse.create(nm)
+            self.SparkUtils.lakehouse.create(nm)
 
     def setup(self):
         """
@@ -361,7 +359,7 @@ class SyncSetup(ConfigBase):
         """
         self.create_fabric_lakehouse(self.UserConfig.MetadataLakehouse)
         self.create_fabric_lakehouse(self.UserConfig.TargetLakehouse)
-        spark.sql(f"USE {self.UserConfig.MetadataLakehouse}")
+        self.Context.sql(f"USE {self.UserConfig.MetadataLakehouse}")
         self.create_all_tables()
 
     def drop_table(self, tbl : str):
@@ -369,7 +367,7 @@ class SyncSetup(ConfigBase):
         Drops an existing table from the Lakehouse if it exists
         """
         sql = f"DROP TABLE IF EXISTS {tbl}"
-        spark.sql(sql)
+        self.Context.sql(sql)
 
     def get_tbl_name(self, tbl : str) -> str:
         """
@@ -388,9 +386,9 @@ class SyncSetup(ConfigBase):
         self.drop_table(tbl_nm)
 
         sql = f"""CREATE TABLE IF NOT EXISTS {tbl_nm} (data_type STRING, partition_type STRING, is_watermark STRING)"""
-        spark.sql(sql)
+        self.Context.sql(sql)
 
-        df = spark.read.format("csv").option("header","true").load("Files/data/bq_data_types.csv")
+        df = self.Context.read.format("csv").option("header","true").load("Files/data/bq_data_types.csv")
         df.write.mode("OVERWRITE").saveAsTable(tbl_nm)
 
     def create_sync_config_tbl(self):
@@ -422,17 +420,17 @@ class SyncSetup(ConfigBase):
             watermark_column STRING,
             autodetect BOOLEAN,
             enforce_partition_expiration BOOLEAN,
-            enable_deletion_vectors BOOLEAN,
             allow_schema_evoluton BOOLEAN,
             table_maintenance_enabled BOOLEAN,
             table_maintenance_interval STRING,
+            table_options ARRAY<STRUCT<key:STRING,value:STRING>>,
             config_override BOOLEAN,
             sync_state STRING,
             created_dt TIMESTAMP,
             last_updated_dt TIMESTAMP
         )
         """
-        spark.sql(sql)
+        self.Context.sql(sql)
     
     def create_sync_schedule_tbl(self):
         """
@@ -458,7 +456,7 @@ class SyncSetup(ConfigBase):
             priority INTEGER
         )
         """
-        spark.sql(sql)
+        self.Context.sql(sql)
 
     def create_sync_schedule_telemetry_tbl(self):
         """
@@ -487,7 +485,7 @@ class SyncSetup(ConfigBase):
             summary_load STRING
         )
         """
-        spark.sql(sql)
+        self.Context.sql(sql)
 
     def create_all_tables(self):
         """
@@ -505,12 +503,12 @@ class Scheduler(ConfigBase):
     Delta table. When tables are scheduled but no updates are detected on the BigQuery side 
     a SKIPPED record is created for tracking purposes.
     """
-    def __init__(self, config_path : str):
+    def __init__(self, context: SparkSession, spark_utils, config_path : str):
         """
         Calls the parent init to load the user config JSON file
         """
-        super().__init__(config_path)
-        spark.sql(f"USE {self.UserConfig.MetadataLakehouse}")
+        super().__init__(context, spark_utils, config_path)
+        self.Context.sql(f"USE {self.UserConfig.MetadataLakehouse}")
 
     def run(self):
         """
@@ -572,19 +570,20 @@ class Scheduler(ConfigBase):
         WHERE s.project_id = '{self.UserConfig.ProjectID}'
         AND s.dataset = '{self.UserConfig.Dataset}'
         """
-        spark.sql(sql)
+        self.Context.sql(sql)
 
 class BQScheduleLoader(ConfigBase):
     """
     Class repsonsible for processing the sync schedule and handling data movement 
     from BigQuery to Fabric Lakehouse based on each table's configuration
     """
-    def __init__(self, config_path : str, load_proxy_views : bool =True, force_config_reload : bool = False):
+    def __init__(self, context:SparkSession, spark_utils, config_path : str, \
+                 load_proxy_views : bool =True, force_config_reload : bool = False):
         """
         Calls parent init to load User Config from JSON file
         """
-        super().__init__(config_path, force_config_reload)
-        spark.sql(f"USE {self.UserConfig.MetadataLakehouse}")
+        super().__init__(context, spark_utils, config_path, force_config_reload)
+        self.Context.sql(f"USE {self.UserConfig.MetadataLakehouse}")
 
         if load_proxy_views:
             super().create_proxy_views()
@@ -595,35 +594,35 @@ class BQScheduleLoader(ConfigBase):
         """
         tbl = f"{SyncConstants.SQL_TBL_SYNC_SCHEDULE_TELEMETRY}"
 
-        schema = spark.table(tbl).schema
+        schema = self.Context.table(tbl).schema
 
-        rdd = spark.sparkContext.parallelize([Row(
-            schedule_id=schedule.ScheduleId,
-            project_id=schedule.ProjectId,
-            dataset=schedule.Dataset,
-            table_name=schedule.TableName,
-            partition_id=schedule.PartitionId,
-            status="COMPLETE",
-            started=schedule.StartTime,
-            completed=schedule.EndTime,
-            src_row_count=schedule.SourceRows,
-            dest_row_count=schedule.DestRows,
-            inserted_row_count=schedule.InsertedRows,
-            updated_row_count=schedule.UpdatedRows,
-            delta_version=schedule.DeltaVersion,
-            spark_application_id=schedule.SparkAppId,
-            max_watermark=schedule.MaxWatermark,
-            summary_load=schedule.SummaryLoadType
+        rdd = self.Context.sparkContext.parallelize([Row( \
+            schedule_id=schedule.ScheduleId, \
+            project_id=schedule.ProjectId, \
+            dataset=schedule.Dataset, \
+            table_name=schedule.TableName, \
+            partition_id=schedule.PartitionId, \
+            status="COMPLETE", \
+            started=schedule.StartTime, \
+            completed=schedule.EndTime, \
+            src_row_count=schedule.SourceRows, \
+            dest_row_count=schedule.DestRows, \
+            inserted_row_count=schedule.InsertedRows, \
+            updated_row_count=schedule.UpdatedRows, \
+            delta_version=schedule.DeltaVersion, \
+            spark_application_id=schedule.SparkAppId, \
+            max_watermark=schedule.MaxWatermark, \
+            summary_load=schedule.SummaryLoadType \
         )])
 
-        df = spark.createDataFrame(rdd, schema)
+        df = self.Context.createDataFrame(rdd, schema)
         df.write.mode(SyncConstants.APPEND).saveAsTable(tbl)
 
     def get_delta_merge_row_counts(self, schedule:SyncSchedule) -> Tuple[int, int, int]:
         """
         Gets the rows affected by merge operation, filters on partition id when table is partitioned
         """
-        telemetry = spark.sql(f"DESCRIBE HISTORY {schedule.LakehouseTableName}")
+        telemetry = self.Context.sql(f"DESCRIBE HISTORY {schedule.LakehouseTableName}")
 
         telemetry = telemetry \
             .filter("operation = 'MERGE' AND CAST(timestamp AS DATE) = current_date()") \
@@ -720,21 +719,20 @@ class BQScheduleLoader(ConfigBase):
             AND c.dataset = '{self.UserConfig.Dataset}'
         ORDER BY c.priority
         """
-        df = spark.sql(sql)
+        df = self.Context.sql(sql)
         df.createOrReplaceTempView("LoaderQueue")
         df.cache()
 
         return df
 
-    def get_max_watermark(self, lakehouse_tbl : str, watermark_col : str) -> str:
+    def get_max_watermark(self, schedule: SyncSchedule, df_bq: DataFrame) -> str:
         """
         Get the max value for the supplied table and column
         """
-        df = spark.table(lakehouse_tbl) \
-            .select(max(col(watermark_col)).alias("watermark"))
+        df = df_bq.select(max(col(schedule.WatermarkColumn)).alias("watermark"))
 
-        for row in df.collect():
-            return row["watermark"]
+        for r in df.collect():
+            return r["watermark"] 
 
     def get_bq_partition_date_format(self, schedule:SyncSchedule) -> str:
         """
@@ -803,7 +801,7 @@ class BQScheduleLoader(ConfigBase):
         """
         Merge into Lakehouse Table based on User Configuration. Only supports Insert/Update All
         """
-        spark.conf.set("spark.databricks.delta.merge.repartitionBeforeWrite.enabled", "true")
+        self.Context.conf.set("spark.databricks.delta.merge.repartitionBeforeWrite.enabled", "true")
 
         constraints = []
 
@@ -819,9 +817,9 @@ class BQScheduleLoader(ConfigBase):
         predicate = " AND ".join(constraints)
 
         if (schedule.AllowSchemaEvolution):
-            spark.conf.set("spark.databricks.delta.schema.autoMerge.enabled", "true")
+            self.Context.conf.set("spark.databricks.delta.schema.autoMerge.enabled", "true")
 
-        dest = DeltaTable.forName(spark, tableOrViewName=schedule.LakehouseTableName)
+        dest = DeltaTable.forName(self.Context, tableOrViewName=schedule.LakehouseTableName)
 
         dest.alias('d') \
         .merge( \
@@ -832,7 +830,7 @@ class BQScheduleLoader(ConfigBase):
         .execute()
 
         if (schedule.AllowSchemaEvolution):
-            spark.conf.set("spark.databricks.delta.schema.autoMerge.enabled", "false")
+            self.Context.conf.set("spark.databricks.delta.schema.autoMerge.enabled", "false")
 
         results = self.get_delta_merge_row_counts(schedule)
 
@@ -863,8 +861,8 @@ class BQScheduleLoader(ConfigBase):
         """
         print("{0} {1}...".format(schedule.SummaryLoadType, schedule.TableName))
 
-        if spark.catalog.tableExists(schedule.LakehouseTableName):
-            table_maint = DeltaTableMaintenance(schedule.LakehouseTableName)
+        if self.Context.catalog.tableExists(schedule.LakehouseTableName):
+            table_maint = DeltaTableMaintenance(self.Context, self.SparkUtils, schedule.LakehouseTableName)
         else:
             table_maint = None
 
@@ -924,14 +922,15 @@ class BQScheduleLoader(ConfigBase):
                 
                 schedule.FabricPartitionColumn = partition
 
-        write_config = { "delta.enableDeletionVectors" : str(schedule.EnableDeletionVectors).lower() }
+        #write_config = { **schedule.TableOptions }
+        write_config = { }
 
         #Schema Evolution
         if schedule.AllowSchemaEvolution and table_maint:
             table_maint.evolve_schema(df_bq)
             write_config["mergeSchema"] = "true"
 
-        if not schedule.LoadStrategy == SyncConstants.MERGE or schedule.InitialLoad:
+        if not schedule.LoadType == SyncConstants.MERGE or schedule.InitialLoad:
             if schedule.IsTimePartitionedStrategy and schedule.PartitionId is not None:
                 print(f"Writing {schedule.TableName}${schedule.PartitionId} partition to Lakehouse...")
 
@@ -962,7 +961,7 @@ class BQScheduleLoader(ConfigBase):
             table_maint = DeltaTableMaintenance(schedule.LakehouseTableName)
 
         if schedule.LoadStrategy == SyncConstants.WATERMARK:
-            schedule.MaxWatermark = self.get_max_watermark(schedule.LakehouseTableName, schedule.PrimaryKey)
+            schedule.MaxWatermark = self.get_max_watermark(schedule, df_bq)
 
         src_cnt = df_bq.count()
 
@@ -970,10 +969,10 @@ class BQScheduleLoader(ConfigBase):
                 schedule.LoadStrategy == SyncConstants.TIME_INGESTION)  and schedule.PartitionId is not None:
             dest_cnt = src_cnt
         else:
-            dest_cnt = spark.table(schedule.LakehouseTableName).count()
+            dest_cnt = self.Context.table(schedule.LakehouseTableName).count()
 
         schedule.UpdateRowCounts(src_cnt, dest_cnt, 0, 0)    
-        schedule.SparkAppId = spark.sparkContext.applicationId
+        schedule.SparkAppId = self.Context.sparkContext.applicationId
         schedule.DeltaVersion = table_maint.CurrentTableVersion
         schedule.EndTime = datetime.now(timezone.utc)
 
@@ -1070,7 +1069,7 @@ class BQScheduleLoader(ConfigBase):
                         s.max_watermark = r.max_watermark
 
         """
-        spark.sql(sql)
+        self.Context.sql(sql)
 
     def commit_table_configuration(self):
         """
@@ -1093,8 +1092,7 @@ class BQScheduleLoader(ConfigBase):
             UPDATE SET
                 t.sync_state='COMMIT'
         """
-        spark.sql(sql)
-
+        self.Context.sql(sql)
 
     def run_sequential_schedule(self):
         """
@@ -1112,7 +1110,7 @@ class BQScheduleLoader(ConfigBase):
         self.process_load_group_telemetry()
         self.commit_table_configuration()
     
-    def run_aync_schedule(self):
+    def run_async_schedule(self, visualize_dag: False):
         """
         Runs the schedule activities in parallel using the runMultiple 
         capabilities of the Fabric Spark Notebook
@@ -1154,14 +1152,14 @@ class BQScheduleLoader(ConfigBase):
                         dataset=tbl["dataset"], \
                         table_name=tbl["table_name"], \
                         partition_id=tbl["partition_id"], \
-                        config_json_path=config_json_path))
+                        config_json_path=self.ConfigPath))
 
                 checkpoint_dependencies.append(nm)
-                print(f"Load Activity: {nm}")
+                #print(f"Load Activity: {nm}")
 
             
             grp_dependency = grp_nm
-            print(f"Load Group Checkpoint: {grp_nm}")
+            #print(f"Load Group Checkpoint: {grp_nm}")
             dag.activities.append( \
                 DAGActivity(grp_nm, "BQ_LOAD_GROUP_CHECKPOINT", \
                     self.UserConfig.Async.CellTimeout, \
@@ -1174,6 +1172,10 @@ class BQScheduleLoader(ConfigBase):
         #print(dag_json)
         schedule_dag = json.loads(dag_json)
 
-        dag_result = mssparkutils.notebook.runMultiple(schedule_dag, {"displayDAGViaGraphviz":True, "DAGLayout":"spectral", "DAGSize":8})
+        dag_visual_params = {"displayDAGViaGraphviz":visualize_dag}
+
+        dag_result = self.SparkUtils.notebook.runMultiple(schedule_dag, dag_visual_params)
 
         self.commit_table_configuration()
+
+        return dag_result, schedule_dag 

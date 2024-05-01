@@ -19,13 +19,23 @@ class DeltaTableMaintenance:
     """
     __detail:Row = None
 
-    def __init__(self, table_nm:str):
+    def __init__(self, context:SparkSession, spark_utils, table_nm:str):
         """
         Init function, creates instance of DeltaTable class
         """
+        self.__context__ = context
+        self.__spark_utils__ = spark_utils
         self.TableName = table_nm
-        self.DeltaTable = DeltaTable.forName(spark, table_nm)
+        self.DeltaTable = DeltaTable.forName(context, table_nm)
 
+    @property
+    def Context(self) -> SparkSession:
+        return self.__context__
+    
+    @property
+    def SparkUtils(self):
+        return self.__spark_utils__
+    
     @property
     def CurrentTableVersion(self) -> int:
         """
@@ -132,7 +142,7 @@ class DeltaTableMaintenance:
         """
         Optimized table drop that directly deletes the table from storage
         """
-        mssparkutils.fs.rm(self.OneLakeLocation, recurse=True)
+        self.SparkUtils.fs.rm(self.OneLakeLocation, recurse=True)
     
     def optimize_and_vacuum(self, partition_filter:str = None):
         """
@@ -154,6 +164,6 @@ class DeltaTableMaintenance:
         """
         Sync vacuum with rentention forced to zero
         """
-        spark.conf.set("spark.databricks.delta.retentionDurationCheck.enabled", "false")
+        self.Context.conf.set("spark.databricks.delta.retentionDurationCheck.enabled", "false")
         self.DeltaTable.vacuum(0)
-        spark.conf.set("spark.databricks.delta.retentionDurationCheck.enabled", "true")
+        self.Context.conf.set("spark.databricks.delta.retentionDurationCheck.enabled", "true")
