@@ -10,7 +10,7 @@ This project is provided as an accelerator to help synchronize or migrate data f
 
 For many of our customers, mirroring capabilities in Fabric are one of the most exciting features of the platform. While Fabric currently supports a growing number of different mirroring sources, BigQuery is not yet supported. This current gap in capabilities is the foundation of this accelerator.
 
-The goal of this accelerator is to simplify the process of synchronizing data from Google BigQuery to Microsoft Fabric with an emphasis on reliability, performance, and cost optimization. The accelerator is implemented using many of the same concepts of an ETL framework with the added ability to resolve the most optimal way to synchronize data between the platforms. 
+The goal of this accelerator is to simplify the process of synchronizing data from Google BigQuery to Microsoft Fabric with an emphasis on reliability, performance, and cost optimization. The accelerator is implemented using Fabric Spark (PySpark) and many concepts common to an ETL framework with the added ability to resolve the most optimal way to synchronize data between the platforms. 
 
 To best understand the accelerator, we can break it down into three logical parts: Configuration, Scheduling & Synchronization
 
