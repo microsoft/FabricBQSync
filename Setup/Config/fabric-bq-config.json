@@ -1,0 +1,62 @@
+{
+	"load_all_tables": true|false,
+	"metadata_lakehouse": "[FABRIC_METADATA_LAKEHOUSE]",
+	"target_lakehouse": "[FABRIC_DEFAULT_TARGET_LAKEHOUSE]",
+	
+	"gcp_credentials": {
+		"project_id": "[GCP_PROHJECT_ID]",
+		"dataset": "[DATASET_ID]",
+		"credential_path": "/env/config/[GCP_SERVICE_ACCOUNT_CREDENTIAL_FILE_NAME].json"
+	},
+	
+	"async": {
+		"enabled": true|false,
+		"parallelism": 5,
+		"cell_timeout": 36000,
+		"notebook_timeout": 72000
+	},
+	"tables": [
+	{
+		"load_priority": 100,
+		"table_name": "[BIGQUERY_TABLE_NAME]",
+		"enabled": true|false,
+		"enforce_partition_expiration": true|false,
+		"allow_schema_evoluton": true|false,
+		"load_strategy": "[FULL|WATERMARK}PARTITION]",
+		"load_type": "[OVERWRITE|APPEND|MERGE]",
+		"interval": "AUTO",
+		"table_options": [
+		{
+			"key": "delta.enableDeletionVectors",
+			"value": "true|false"
+		},
+		{
+			"key": "delta.targetFileSize",
+			"value": "256MB"
+		},
+		{
+			"key": "delta.autoOptimize.autoCompact ",
+			"value": "true|false"
+		}
+		],
+		"keys": [
+		{
+			"column": "[MERGE_JOIN_KEY_COLUMNS]"
+		}
+		],
+		"partitioned": {
+			"enabled": true|false,
+			"type" : "[TIME|RANGE]",
+			"column": "[BQ_PARTITION_BY_COLUMN]",
+			"partition_grain":"[YEAR|MONTH|DAY|HOUR]"
+		},
+		"watermark": {
+			"column": "[BQ_WATERMARK_COLUMN]"
+		},
+		"lakehouse_target": {
+			"lakehouse": "[FABRIC_TARGET_LAKEHOUSE]",
+			"table_name": "[FABRIC_TARGET_TABLE_NAME]"
+		}
+	}
+	]	
+}
