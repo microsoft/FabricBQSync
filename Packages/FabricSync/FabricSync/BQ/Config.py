@@ -101,7 +101,7 @@ class SyncSchedule:
     SparkAppId:str = None
     MaxWatermark:str = None
     Status:str = None
-    FabricPartitionColumn:str = None
+    FabricPartitionColumns: list[str] = None
 
     def __init__(self, row:Row):
         """
