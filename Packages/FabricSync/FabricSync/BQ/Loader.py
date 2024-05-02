@@ -635,7 +635,7 @@ class BQScheduleLoader(ConfigBase):
         for t in telemetry.collect():
             op_metrics = None
 
-            if schedule.FabricPartitionColumn and schedule.PartitionId:
+            if schedule.FabricPartitionColumns and schedule.PartitionId:
                 if "predicate" in t["operationParameters"] and \
                     schedule.PartitionId in t["operationParameters"]["predicate"]:
                         op_metrics = t["operationMetrics"]
@@ -734,68 +734,101 @@ class BQScheduleLoader(ConfigBase):
         for r in df.collect():
             return r["watermark"] 
 
-    def get_bq_partition_date_format(self, schedule:SyncSchedule) -> str:
+    def get_fabric_partition_proxy_cols(self, partition_grain: str) -> list[str]:
         """
-        Resolve the BigQuery datetime format based on the partition grain
+        Resolves the Fabric partitioning columns required for Delta partitioning
         """
-        part_format = None
+        proxy_cols = ["YEAR", "MONTH", "DAY", "HOUR"]
 
-        match schedule.PartitionGrain:
+        match partition_grain:
             case "DAY":
-                part_format = "%Y%m%d"
+                proxy_cols.remove("HOUR")
             case "MONTH":
-                part_format = "%Y%m"
+                proxy_cols.remove("HOUR")
+                proxy_cols.remove("DAY")
             case "YEAR":
-                part_format = "%Y"
-            case "HOUR":
-                part_format = "%Y%m%d%H"
-            case _:
-                raise Exception("Unsupported Partition Grain in Table Config")
-        
-        return part_format
+                proxy_cols.remove("HOUR")
+                proxy_cols.remove("DAY")
+                proxy_cols.remove("MONTH")
 
-    def resolve_fabric_partition_column(self, schedule:SyncSchedule, df_bq:DataFrame) -> Tuple[str, DataFrame]:
-        """
-        Resolves the fabric partition approach using a proxy column when required
-        """
-        part_format = ""
-        part_col_name = f"__bq_part_{schedule.PartitionColumn}"
-        use_proxy_col = False
-        partition = None
+        return proxy_cols
 
-        match schedule.PartitionGrain:
+    def get_bq_partition_id_format(self, partition_grain:str) -> str: 
+        """
+        BQ Date/Time Format used for the Partition Id
+        """
+        pattern = None
+
+        match partition_grain:
             case "DAY":
-                part_format = "yyyyMMdd"
-
-                if dict(df_bq.dtypes)[schedule.PartitionColumn] == "date":
-                    partition = schedule.PartitionColumn
-                else:
-                    partition = f"{part_col_name}_DAY"
-                    use_proxy_col = True
+                pattern = "%Y%m%d"
             case "MONTH":
-                part_format = "yyyyMM"
-                partition = f"{part_col_name}_MONTH"
-                use_proxy_col = True
+                pattern = "%Y%m"
             case "YEAR":
-                part_format = "yyyy"
-                partition = f"{part_col_name}_YEAR"
-                use_proxy_col = True
+                pattern = "%Y"
             case "HOUR":
-                part_format = "yyyyMMddHH"
-                partition = f"{part_col_name}_HOUR"
-                use_proxy_col = True
-            case _:
-                raise Exception("Unsupported partition grain")
-    
-        print("{0} partitioning - partitioned by {1} (Requires Proxy Column: {2})".format( \
-            schedule.PartitionGrain, \
-            partition, \
-            use_proxy_col))
+                pattern = "%Y%m%d%H"
         
-        if use_proxy_col:
-            df_bq = df_bq.withColumn(partition, date_format(col(schedule.PartitionColumn), part_format))
+        return pattern
+
+    def get_derived_date_from_part_id(self, partition_grain: str, partition_id: str) -> datetime:
+        """
+        Derives the partition date from the partition id
+        """
+        dt_format = self.get_bq_partition_id_format(partition_grain)
+        return datetime.strptime(partition_id, dt_format)
+
+    def create_fabric_partition_proxy_cols(self, df: DataFrame, partition: str, partition_grain: str, proxy_cols: list[str]) -> DataFrame:   
+        """
+        Adds the required proxy columns to the dataframe for partitioning on the Fabric Lakehouse
+        """
+        for c in proxy_cols:
+            match c:
+                case "HOUR":
+                    df = df.withColumn(f"__{partition}_HOUR", \
+                        date_format(col(partition), "HH"))
+                case "DAY":
+                    df = df.withColumn(f"__{partition}_DAY", \
+                        date_format(col(partition), "dd"))
+                case "MONTH":
+                    df = df.withColumn(f"__{partition}_MONTH", \
+                        date_format(col(partition), "MM"))
+                case "YEAR":
+                    df = df.withColumn(f"__{partition}_YEAR", \
+                        date_format(col(partition), "yyyy"))
+                case _:
+                    next
         
-        return (partition, df_bq)
+        return df
+
+    def get_fabric_partition_cols(self, partition: str, proxy_cols: list[str]):
+        """
+        Returns a formatted list of the Fabric table partition columns
+        """
+        return [f"__{partition}_{c}" for c in proxy_cols]
+
+    def get_fabric_partition_predicate(self, partition_dt: datetime, partition: str, proxy_cols: list[str]) -> str:
+        """
+        Build a partition predicate based on the partition grain and partition column
+        """
+        partition_predicate = []
+
+        for c in proxy_cols:
+            match c:
+                case "HOUR":
+                    part_id = partition_dt.strftime("%H")
+                case "DAY":
+                    part_id = partition_dt.strftime("%d")
+                case "MONTH":
+                    part_id = partition_dt.strftime("%m")
+                case "YEAR":
+                    part_id = partition_dt.strftime("%Y")
+                case _:
+                    next
+            
+            partition_predicate.append(f"__{partition}_{c} = '{part_id}'")
+
+        return " AND ".join(partition_predicate)
     
     def merge_table(self, schedule:SyncSchedule, src:DataFrame) -> SyncSchedule:
         """
@@ -811,8 +844,9 @@ class BQScheduleLoader(ConfigBase):
         if not constraints:
             raise ValueError("One or more keys must be specified for a MERGE operation")
         
-        if schedule.FabricPartitionColumn and schedule.PartitionId:
-            constraints.append(f"d.{schedule.FabricPartitionColumn} = '{schedule.PartitionId}'")
+        if schedule.FabricPartitionColumns and schedule.PartitionId:
+            for p in schedule.FabricPartitionColumns:
+                constraints.append(f"d.{p} = '{schedule.PartitionId}'")
 
         predicate = " AND ".join(constraints)
 
@@ -870,7 +904,7 @@ class BQScheduleLoader(ConfigBase):
             print("Load for BQ by partition...")
             src = f"{schedule.BQTableName}"
 
-            part_format = self.get_bq_partition_date_format(schedule)
+            part_format = self.get_bq_partition_id_format(schedule.PartitionGrain)
 
             if schedule.IsTimeIngestionPartitioned:                   
                 part_filter = f"timestamp_trunc({schedule.PartitionColumn}, {schedule.PartitionGrain}) = PARSE_TIMESTAMP('{part_format}', '{schedule.PartitionId}')"
@@ -904,23 +938,16 @@ class BQScheduleLoader(ConfigBase):
 
         df_bq.cache()
 
-        partition = None
-
         if schedule.IsPartitioned:
             print('Resolving Fabric partitioning...')
             if schedule.PartitionType == SyncConstants.TIME:
-                partition = schedule.PartitionColumn
+                proxy_cols = self.get_fabric_partition_proxy_cols(schedule.PartitionGrain)
+                schedule.FabricPartitionColumns = self.get_fabric_partition_cols(schedule.PartitionColumn, proxy_cols)
 
-                if not schedule.IsTimeIngestionPartitioned:
-                    partition, df_bq = self.resolve_fabric_partition_column(schedule, df_bq)
-                else:
-                    part_format = self.get_bq_partition_date_format(schedule)
-                    partition = f"__bq{schedule.PartitionColumn}"
+                if schedule.IsTimeIngestionPartitioned:
+                    df_bq = df_bq.withColumn(schedule.PartitionColumn, lit(schedule.PartitionId))               
 
-                    print("Ingestion time partitioning - partitioned by {0} ({1})".format(partition, schedule.PartitionId))
-                    df_bq = df_bq.withColumn(partition, lit(schedule.PartitionId))
-                
-                schedule.FabricPartitionColumn = partition
+                df_bq = self.create_fabric_partition_proxy_cols(df_bq, schedule.PartitionColumn, schedule.PartitionGrain, proxy_cols)
 
         #write_config = { **schedule.TableOptions }
         write_config = { }
@@ -934,22 +961,26 @@ class BQScheduleLoader(ConfigBase):
             if schedule.IsTimePartitionedStrategy and schedule.PartitionId is not None:
                 print(f"Writing {schedule.TableName}${schedule.PartitionId} partition to Lakehouse...")
 
-                write_config["replaceWhere"] = f"{schedule.FabricPartitionColumn} = '{schedule.PartitionId}'"
+                derived_partition_dt = self.get_derived_date_from_part_id(schedule.PartitionGrain, schedule.PartitionId)
+                partition_predicate = self.get_fabric_partition_predicate(derived_partition_dt, schedule.PartitionColumn, proxy_cols)
+
+                write_config["replaceWhere"] = partition_predicate
 
                 df_bq.write \
+                    .partitionBy(schedule.FabricPartitionColumns) \
                     .mode(SyncConstants.OVERWRITE) \
                     .options(**write_config) \
                     .saveAsTable(schedule.LakehouseTableName)
             else:
                 print("Writing dataframe to Lakehouse...")
-                if partition is None:
+                if schedule.FabricPartitionColumns is None:
                     df_bq.write \
                         .mode(schedule.Mode) \
                         .options( **write_config) \
                         .saveAsTable(schedule.LakehouseTableName)
                 else:
                     df_bq.write \
-                        .partitionBy(partition) \
+                        .partitionBy(schedule.FabricPartitionColumns) \
                         .mode(schedule.Mode) \
                         .options( **write_config) \
                         .saveAsTable(schedule.LakehouseTableName)
@@ -958,7 +989,7 @@ class BQScheduleLoader(ConfigBase):
             schedule = self.merge_table(schedule, df_bq)
 
         if not table_maint:
-            table_maint = DeltaTableMaintenance(schedule.LakehouseTableName)
+            table_maint = DeltaTableMaintenance(self.Context, self.SparkUtils, schedule.LakehouseTableName)
 
         if schedule.LoadStrategy == SyncConstants.WATERMARK:
             schedule.MaxWatermark = self.get_max_watermark(schedule, df_bq)
