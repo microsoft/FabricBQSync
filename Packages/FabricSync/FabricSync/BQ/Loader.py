@@ -4,6 +4,9 @@ from delta.tables import *
 from datetime import datetime, timezone
 import json
 from typing import Tuple
+from queue import PriorityQueue, Queue
+from threading import Thread
+import traceback
 
 from FabricSync.BQ.Config import *
 from FabricSync.DeltaTableUtility import *
@@ -602,7 +605,619 @@ class BQScheduleLoader(ConfigBase):
             dataset=schedule.Dataset, \
             table_name=schedule.TableName, \
             partition_id=schedule.PartitionId, \
-            status="COMPLETE", \
+            status=schedule.Status, \
+            started=schedule.StartTime, \
+            completed=schedule.EndTime, \
+            src_row_count=schedule.SourceRows, \
+            dest_row_count=schedule.DestRows, \
+            inserted_row_count=schedule.InsertedRows, \
+            updated_row_count=schedule.UpdatedRows, \
+            delta_version=schedule.DeltaVersion, \
+            spark_application_id=schedule.SparkAppId, \
+            max_watermark=schedule.MaxWatermark, \
+            summary_load=schedule.SummaryLoadType \
+        )])
+
+        df = self.Context.createDataFrame(rdd, schema)
+        df.write.mode(SyncConstants.APPEND).saveAsTable(tbl)
+
+    def get_delta_merge_row_counts(self, schedule:SyncSchedule) -> Tuple[int, int, int]:
+        """
+        Gets the rows affected by merge operation, filters on partition id when table is partitioned
+        """
+        telemetry = self.Context.sql(f"DESCRIBE HISTORY {schedule.LakehouseTableName}")
+
+        telemetry = telemetry \
+            .filter("operation = 'MERGE' AND CAST(timestamp AS DATE) = current_date()") \
+            .orderBy("version", ascending=False)
+
+        inserts = 0
+        updates = 0
+        deletes = 0
+
+        for t in telemetry.collect():
+            op_metrics = None
+
+            if schedule.FabricPartitionColumns and schedule.PartitionId:
+                if "predicate" in t["operationParameters"] and \
+                    schedule.PartitionId in t["operationParameters"]["predicate"]:
+                        op_metrics = t["operationMetrics"]
+            else:
+                op_metrics = t["operationMetrics"]
+
+            if op_metrics:
+                inserts = int(op_metrics["numTargetRowsInserted"])
+                updates = int(op_metrics["numTargetRowsUpdated"])
+                deletes = int(op_metrics["numTargetRowsDeleted"])
+
+                continue
+
+        return (inserts, updates, deletes)
+    
+    def get_schedule(self):
+        """
+        Gets the schedule activities that need to be run based on the configuration and metadat
+        """
+        sql = f"""
+        WITH last_completed_schedule AS (
+            SELECT schedule_id, project_id, dataset, table_name, max_watermark, started AS last_schedule_dt
+            FROM (
+                SELECT schedule_id, project_id, dataset, table_name, started, max_watermark,
+                ROW_NUMBER() OVER(PARTITION BY project_id, dataset, table_name ORDER BY scheduled DESC) AS row_num
+                FROM {SyncConstants.SQL_TBL_SYNC_SCHEDULE}
+                WHERE status='COMPLETE'
+            )
+            WHERE row_num = 1
+        ),
+        tbl_partitions AS (
+            SELECT
+                sp.table_catalog, sp.table_schema, sp.table_name, sp.partition_id
+            FROM bq_information_schema_partitions sp
+            JOIN {SyncConstants.SQL_TBL_SYNC_CONFIG} c ON
+                sp.table_catalog = c.project_id AND 
+                sp.table_schema = c.dataset AND
+                sp.table_name = c.table_name
+            LEFT JOIN last_completed_schedule s ON 
+                sp.table_catalog = s.project_id AND 
+                sp.table_schema = s.dataset AND
+                sp.table_name = s.table_name
+            WHERE sp.partition_id != '__NULL__'
+            AND ((sp.last_modified_time >= s.last_schedule_dt) OR (s.last_schedule_dt IS NULL))
+            AND 
+                ((c.load_strategy = 'PARTITION' AND s.last_schedule_dt IS NOT NULL) OR
+                    c.load_strategy = 'TIME_INGESTION')
+        )
+
+        SELECT c.*, 
+            p.partition_id,
+            s.group_schedule_id,
+            s.schedule_id,
+            h.max_watermark,
+            h.last_schedule_dt,
+            CASE WHEN (h.schedule_id IS NULL) THEN TRUE ELSE FALSE END AS initial_load
+        FROM {SyncConstants.SQL_TBL_SYNC_CONFIG} c
+        JOIN {SyncConstants.SQL_TBL_SYNC_SCHEDULE} s ON 
+            c.project_id = s.project_id AND
+            c.dataset = s.dataset AND
+            c.table_name = s.table_name
+        LEFT JOIN last_completed_schedule h ON
+            c.project_id = h.project_id AND
+            c.dataset = h.dataset AND
+            c.table_name = h.table_name
+        LEFT JOIN tbl_partitions p ON
+            p.table_catalog = c.project_id AND 
+            p.table_schema = c.dataset AND
+            p.table_name = c.table_name
+        LEFT JOIN {SyncConstants.SQL_TBL_SYNC_SCHEDULE_TELEMETRY} t ON
+            s.schedule_id = t.schedule_id AND
+            c.project_id = t.project_id AND
+            c.dataset = t.dataset AND
+            c.table_name = t.table_name AND
+            COALESCE(p.partition_id, '0') = COALESCE(t.partition_id, '0') AND
+            t.status = 'COMPLETE'
+        WHERE s.status = 'SCHEDULED'
+            AND c.enabled = TRUE
+            AND t.schedule_id IS NULL
+            AND c.project_id = '{self.UserConfig.ProjectID}' 
+            AND c.dataset = '{self.UserConfig.Dataset}'
+        ORDER BY c.priority
+        """
+        df = self.Context.sql(sql)
+        df.createOrReplaceTempView("LoaderQueue")
+        df.cache()
+
+        return df
+
+    def get_max_watermark(self, schedule: SyncSchedule, df_bq: DataFrame) -> str:
+        """
+        Get the max value for the supplied table and column
+        """
+        df = df_bq.select(max(col(schedule.WatermarkColumn)).alias("watermark"))
+
+        max_watermark = None
+
+        for r in df.collect():
+            max_watermark = r["watermark"] 
+
+        return max_watermark
+
+    def get_fabric_partition_proxy_cols(self, partition_grain: str) -> list[str]:
+        proxy_cols = ["YEAR", "MONTH", "DAY", "HOUR"]
+
+        match partition_grain:
+            case "DAY":
+                proxy_cols.remove("HOUR")
+            case "MONTH":
+                proxy_cols.remove("HOUR")
+                proxy_cols.remove("DAY")
+            case "YEAR":
+                proxy_cols.remove("HOUR")
+                proxy_cols.remove("DAY")
+                proxy_cols.remove("MONTH")
+
+        return proxy_cols
+
+    def get_bq_partition_id_format(self, partition_grain:str) -> str: 
+        pattern = None
+
+        match partition_grain:
+            case "DAY":
+                pattern = "%Y%m%d"
+            case "MONTH":
+                pattern = "%Y%m"
+            case "YEAR":
+                pattern = "%Y"
+            case "HOUR":
+                pattern = "%Y%m%d%H"
+        
+        return pattern
+
+    def get_derived_date_from_part_id(self, partition_grain: str, partition_id: str) -> datetime:
+        dt_format = self.get_bq_partition_id_format(partition_grain)
+        return datetime.strptime(partition_id, dt_format)
+
+    def create_fabric_partition_proxy_cols(self, df: DataFrame, partition: str, partition_grain: str, proxy_cols: list[str]) -> DataFrame:   
+        print(f"partition: {partition}")
+        for c in proxy_cols:
+            match c:
+                case "HOUR":
+                    df = df.withColumn(f"__{partition}_HOUR", \
+                        date_format(col(partition), "HH"))
+                case "DAY":
+                    df = df.withColumn(f"__{partition}_DAY", \
+                        date_format(col(partition), "dd"))
+                case "MONTH":
+                    df = df.withColumn(f"__{partition}_MONTH", \
+                        date_format(col(partition), "MM"))
+                case "YEAR":
+                    df = df.withColumn(f"__{partition}_YEAR", \
+                        date_format(col(partition), "yyyy"))
+                case _:
+                    next
+        
+        return df
+
+    def get_fabric_partition_cols(self, partition: str, proxy_cols: list[str]):
+        return [f"__{partition}_{c}" for c in proxy_cols]
+
+    def get_fabric_partition_predicate(self, partition_dt: datetime, partition: str, proxy_cols: list[str]) -> str:
+        partition_predicate = []
+
+        for c in proxy_cols:
+            match c:
+                case "HOUR":
+                    part_id = partition_dt.strftime("%H")
+                case "DAY":
+                    part_id = partition_dt.strftime("%d")
+                case "MONTH":
+                    part_id = partition_dt.strftime("%m")
+                case "YEAR":
+                    part_id = partition_dt.strftime("%Y")
+                case _:
+                    next
+            
+            partition_predicate.append(f"__{partition}_{c} = '{part_id}'")
+
+        return " AND ".join(partition_predicate)
+    
+    def merge_table(self, schedule:SyncSchedule, src:DataFrame) -> SyncSchedule:
+        """
+        Merge into Lakehouse Table based on User Configuration. Only supports Insert/Update All
+        """
+        self.Context.conf.set("spark.databricks.delta.merge.repartitionBeforeWrite.enabled", "true")
+
+        constraints = []
+
+        for p in schedule.Keys:
+            constraints.append(f"s.{p} = d.{p}")
+
+        if not constraints:
+            raise ValueError("One or more keys must be specified for a MERGE operation")
+        
+        if schedule.FabricPartitionColumns and schedule.PartitionId:
+            for p in schedule.FabricPartitionColumns:
+                constraints.append(f"d.{p} = '{schedule.PartitionId}'")
+
+        predicate = " AND ".join(constraints)
+
+        if (schedule.AllowSchemaEvolution):
+            self.Context.conf.set("spark.databricks.delta.schema.autoMerge.enabled", "true")
+
+        dest = DeltaTable.forName(self.Context, tableOrViewName=schedule.LakehouseTableName)
+
+        dest.alias('d') \
+        .merge( \
+            src.alias('s'), \
+            predicate) \
+        .whenMatchedUpdateAll() \
+        .whenNotMatchedInsertAll() \
+        .execute()
+
+        if (schedule.AllowSchemaEvolution):
+            self.Context.conf.set("spark.databricks.delta.schema.autoMerge.enabled", "false")
+
+        results = self.get_delta_merge_row_counts(schedule)
+
+        schedule.UpdateRowCounts(src=0, dest=0, \
+                                 insert=results[0], update=results[1])
+        
+        return schedule
+        
+    def sync_bq_table(self, schedule:SyncSchedule):
+        """
+        Sync the data for a table from BigQuery to the target Fabric Lakehouse based on configuration
+
+        1. Determines how to retrieve the data from BigQuery
+            a. PARTITION & TIME_INGESTION
+                - Data is loaded by partition using the partition filter option of the spark connector
+            b. FULL & WATERMARK
+                - Loaded using the table name or source query and any relevant predicates
+        2. Resolve BigQuery to Fabric partition mapping
+            a. BigQuery supports TIME and RANGE based partitioning
+                - TIME based partitioning support YEAR, MONTH, DAY & HOUR grains
+                    - When the grain doesn't exist or a psuedo column is used, a proxy column is added
+                        on the Fabric Lakehouse side
+                - RANGE partitioning is a backlog feature
+        3. Write data to the Fabric Lakehouse
+            a. PARTITION write use replaceWhere to overwrite the specific Delta partition
+            b. All other writes respect the configure MODE against the write destination
+        4. Collect and save telemetry
+        """
+        print("{0} {1}...".format(schedule.SummaryLoadType, schedule.TableName))
+
+        if self.Context.catalog.tableExists(schedule.LakehouseTableName):
+            table_maint = DeltaTableMaintenance(self.Context, self.SparkUtils, schedule.LakehouseTableName)
+        else:
+            table_maint = None
+
+        if schedule.IsTimePartitionedStrategy and schedule.PartitionId is not None:
+            print("Load for BQ by partition...")
+            src = f"{schedule.BQTableName}"
+
+            part_format = self.get_bq_partition_id_format(schedule.PartitionGrain)
+
+            if schedule.IsTimeIngestionPartitioned:                   
+                part_filter = f"timestamp_trunc({schedule.PartitionColumn}, {schedule.PartitionGrain}) = PARSE_TIMESTAMP('{part_format}', '{schedule.PartitionId}')"
+            else:
+                part_filter = f"date_trunc({schedule.PartitionColumn}, {schedule.PartitionGrain}) = PARSE_DATETIME('{part_format}', '{schedule.PartitionId}')"
+
+            df_bq = super().read_bq_partition_to_dataframe(src, part_filter)
+        else:
+            print("Load for BQ by table or query...")
+            src = schedule.BQTableName     
+
+            if schedule.SourceQuery != "":
+                src = schedule.SourceQuery
+
+            df_bq = super().read_bq_to_dataframe(src)
+
+        if schedule.LoadStrategy == SyncConstants.WATERMARK and not schedule.InitialLoad:
+            print("Use watermark for differential load...")
+            predicate = f"{schedule.PrimaryKey} > '{schedule.MaxWatermark}'"
+            df_bq.where(predicate)
+
+        df_bq.cache()
+
+        if schedule.IsPartitioned:
+            print('Resolving Fabric partitioning...')
+            if schedule.PartitionType == SyncConstants.TIME:
+                proxy_cols = self.get_fabric_partition_proxy_cols(schedule.PartitionGrain)
+                schedule.FabricPartitionColumns = self.get_fabric_partition_cols(schedule.PartitionColumn, proxy_cols)
+
+                if schedule.IsTimeIngestionPartitioned:
+                    df_bq = df_bq.withColumn(schedule.PartitionColumn, lit(schedule.PartitionId))               
+
+                df_bq = self.create_fabric_partition_proxy_cols(df_bq, schedule.PartitionColumn, schedule.PartitionGrain, proxy_cols)
+
+        write_config = { **schedule.TableOptions }
+        #write_config = { }
+
+        #Schema Evolution
+        if schedule.AllowSchemaEvolution and table_maint:
+            table_maint.evolve_schema(df_bq)
+            write_config["mergeSchema"] = "true"
+
+        if not schedule.LoadType == SyncConstants.MERGE or schedule.InitialLoad:
+            if schedule.IsTimePartitionedStrategy and schedule.PartitionId is not None:
+                print(f"Writing {schedule.TableName}${schedule.PartitionId} partition to Lakehouse...")
+
+                #derived_partition_dt = self.get_derived_date_from_part_id(schedule.PartitionGrain, schedule.PartitionId)
+                #partition_predicate = self.get_fabric_partition_predicate(derived_partition_dt, schedule.PartitionColumn, proxy_cols)
+
+                write_config["partitionOverwriteMode"] = "dynamic"
+
+                df_bq.write \
+                    .partitionBy(schedule.FabricPartitionColumns) \
+                    .mode(SyncConstants.OVERWRITE) \
+                    .options(**write_config) \
+                    .saveAsTable(schedule.LakehouseTableName)
+            else:
+                print("Writing dataframe to Lakehouse...")
+                if schedule.FabricPartitionColumns is None:
+                    df_bq.write \
+                        .mode(schedule.Mode) \
+                        .options( **write_config) \
+                        .saveAsTable(schedule.LakehouseTableName)
+                else:
+                    df_bq.write \
+                        .partitionBy(schedule.FabricPartitionColumns) \
+                        .mode(schedule.Mode) \
+                        .options( **write_config) \
+                        .saveAsTable(schedule.LakehouseTableName)
+        else:
+            print("Merging dataframe to Lakehouse...")
+            schedule = self.merge_table(schedule, df_bq)
+
+        if not table_maint:
+            table_maint = DeltaTableMaintenance(self.Context, self.SparkUtils, schedule.LakehouseTableName)
+
+        if schedule.LoadStrategy == SyncConstants.WATERMARK:
+            schedule.MaxWatermark = self.get_max_watermark(schedule, df_bq)
+
+        src_cnt = df_bq.count()
+
+        if (schedule.LoadStrategy == SyncConstants.PARTITION or \
+                schedule.LoadStrategy == SyncConstants.TIME_INGESTION)  and schedule.PartitionId is not None:
+            dest_cnt = src_cnt
+        else:
+            dest_cnt = self.Context.table(schedule.LakehouseTableName).count()
+
+        schedule.UpdateRowCounts(src_cnt, dest_cnt, 0, 0)    
+        schedule.SparkAppId = self.Context.sparkContext.applicationId
+        schedule.DeltaVersion = table_maint.CurrentTableVersion
+        schedule.EndTime = datetime.now(timezone.utc)
+        schedule.Status = "COMPLETE"
+        
+        df_bq.unpersist()
+
+        return schedule
+
+    def process_load_group_telemetry(self, load_grp : str = None):
+        """
+        When a load group is complete, summarizes the telemetry to close out the schedule
+        """
+        load_grp_filter = ""
+
+        if load_grp is not None:
+            load_grp_filter = f"AND r.priority = '{load_grp}'"
+
+        sql = f"""
+        WITH schedule_telemetry AS (
+                SELECT
+                        schedule_id,
+                        project_id,
+                        dataset,
+                        table_name,
+                        SUM(CASE WHEN status='COMPLETE' THEN 1 ELSE 0 END) AS completed_activities,
+                        SUM(CASE WHEN status='FAILED' THEN 1 ELSE 0 END) AS failed_activities,
+                        MIN(started) as started,
+                        MAX(completed) as completed
+                FROM bq_sync_schedule_telemetry
+                GROUP BY
+                schedule_id,
+                project_id,
+                dataset,
+                table_name
+        ),
+        schedule_watermarks AS (
+                SELECT
+                        schedule_id,
+                        project_id,
+                        dataset,
+                        table_name,
+                        max_watermark,
+                        ROW_NUMBER() OVER(PARTITION BY schedule_id,
+                                project_id,
+                                dataset,
+                                table_name ORDER BY completed DESC) AS row_num
+                FROM bq_sync_schedule_telemetry
+                WHERE max_watermark IS NOT NULL
+        ),
+        schedule_results AS (
+                SELECT
+                        s.schedule_id,
+                        s.project_id,
+                        s.dataset,
+                        s.table_name,
+                        s.status,
+                        CASE WHEN t.failed_activities = 0 THEN 'COMPLETE' ELSE 'FAILED' END AS result_status,
+                        t.started,
+                        t.completed,
+                        t.completed_activities,
+                        t.failed_activities,
+                        w.max_watermark,
+                        s.priority 
+                FROM bq_sync_schedule s
+                JOIN schedule_telemetry t ON 
+                        s.schedule_id = t.schedule_id AND
+                        s.project_id = t.project_id AND
+                        s.dataset = t.dataset AND
+                        s.table_name = t.table_name
+                LEFT JOIN schedule_watermarks w ON
+                        s.schedule_id = w.schedule_id AND
+                        s.project_id = w.project_id AND
+                        s.dataset = w.dataset AND
+                        s.table_name = w.table_name
+        )  
+
+        MERGE INTO bq_sync_schedule s
+        USING ( 
+                SELECT *
+                FROM schedule_results r
+                WHERE r.status='SCHEDULED'
+                {load_grp_filter}
+        ) r
+        ON s.schedule_id = r.schedule_id AND
+                s.project_id = r.project_id AND
+                s.dataset = r.dataset AND
+                s.table_name = r.table_name
+        WHEN MATCHED THEN
+                UPDATE SET
+                        s.status = r.result_status,
+                        s.started = r.started,
+                        s.completed = r.completed,
+                        s.completed_activities = r.completed_activities,
+                        s.failed_activities = r.failed_activities,
+                        s.max_watermark = r.max_watermark
+
+        """
+        self.Context.sql(sql)
+
+    def commit_table_configuration(self):
+        """
+        After an initial load, locks the table configuration so no changes can occur when reprocessing metadata
+        """
+        sql = """
+        WITH committed AS (
+            SELECT project_id, dataset, table_name, MAX(started) as started
+            FROM bq_sync_schedule
+            WHERE status='COMPLETE'
+            GROUP BY project_id, dataset, table_name
+        )
+
+        MERGE INTO bq_sync_configuration t
+        USING committed c
+        ON t.project_id=c.project_id
+        AND t.dataset=c.dataset
+        AND t.table_name=c.table_name
+        WHEN MATCHED AND t.sync_state='INIT' THEN
+            UPDATE SET
+                t.sync_state='COMMIT'
+        """
+        self.Context.sql(sql)
+
+    def run_sequential_schedule(self):
+        """
+        Run the schedule activities sequentially based on priority order
+        """
+        df_schedule = self.get_schedule()
+
+        for row in df_schedule.collect():
+            schedule = SyncSchedule(row)
+
+            self.sync_bq_table(schedule)
+
+            self.save_schedule_telemetry(schedule)  
+
+        self.process_load_group_telemetry()
+        self.commit_table_configuration()
+    
+    def schedule_sync(self, schedule:SyncSchedule) -> SyncSchedule:
+        if schedule.PartitionId is None:
+            print(f"Processing table {schedule.TableName}...")
+        else:
+            print(f"Processing partition {schedule.TableName}${schedule.PartitionId}...")
+
+        schedule = self.sync_bq_table(schedule)
+        self.save_schedule_telemetry(schedule) 
+
+        return schedule
+
+    def task_runner(self, sync_function, workQueue:PriorityQueue):
+        while not workQueue.empty():
+            value = workQueue.get()
+            schedule = value[2]
+            
+            try:
+                schedule = sync_function(schedule)
+            except Exception:
+                schedule.Status = "FAILED"
+                schedule.SummaryLoadType = traceback.format_exc()
+            finally:
+                workQueue.task_done()
+
+    def process_queue(self, workQueue:PriorityQueue, task_function, sync_function):
+        for i in range(self.UserConfig.Async.Parallelism):
+            t=Thread(target=task_function, args=(sync_function, workQueue))
+            t.daemon = True
+            t.start() 
+            
+        workQueue.join()
+        
+    def run_async_schedule(self):
+        """
+        Runs the schedule activities in parallel using python threading
+
+        - Utilitizes the priority to define load groups to respect priority
+        - Parallelism is control from the User Config JSON file
+        """
+        print(f"Starting async schedule with parallelism of {schedule_loader.UserConfig.Async.Parallelism}...")
+        workQueue = PriorityQueue()
+
+        schedule = self.get_schedule()
+
+        load_grps = [i["priority"] for i in schedule.select("priority").distinct().orderBy("priority").collect()]
+
+        print(f"{len(load_grps)} Load Groups to process...")
+        for grp in load_grps:
+            grp_nm = "LOAD GROUP {0}".format(grp)
+            grp_df = schedule.where(f"priority = '{grp}'")
+
+            for tbl in grp_df.collect():
+                s = SyncSchedule(tbl)
+                nm = "{0}.{1}".format(s.Dataset, s.TableName)        
+
+                if s.PartitionId is not None:
+                    nm = "{0}${1}".format(nm, s.PartitionId)        
+
+                workQueue.put((s.Priority, nm, s))
+
+            if not workQueue.empty():
+                print(f"### Processing {grp_nm}...")
+                self.process_queue(workQueue, self.task_runner, self.schedule_sync)
+            
+            print(f"### Closing {grp_nm}...")
+            self.process_load_group_telemetry(grp)
+    """
+    Class repsonsible for processing the sync schedule and handling data movement 
+    from BigQuery to Fabric Lakehouse based on each table's configuration
+    """
+    def __init__(self, context:SparkSession, spark_utils, config_path : str, \
+                 load_proxy_views : bool =True, force_config_reload : bool = False):
+        """
+        Calls parent init to load User Config from JSON file
+        """
+        super().__init__(context, spark_utils, config_path, force_config_reload)
+        self.Context.sql(f"USE {self.UserConfig.MetadataLakehouse}")
+
+        if load_proxy_views:
+            super().create_proxy_views()
+
+    def save_schedule_telemetry(self, schedule : SyncSchedule):
+        """
+        Write status and telemetry from sync schedule to Sync Schedule Telemetry Delta table
+        """
+        tbl = f"{SyncConstants.SQL_TBL_SYNC_SCHEDULE_TELEMETRY}"
+
+        schema = self.Context.table(tbl).schema
+
+        rdd = self.Context.sparkContext.parallelize([Row( \
+            schedule_id=schedule.ScheduleId, \
+            project_id=schedule.ProjectId, \
+            dataset=schedule.Dataset, \
+            table_name=schedule.TableName, \
+            partition_id=schedule.PartitionId, \
+            status=schedule.Status, \
             started=schedule.StartTime, \
             completed=schedule.EndTime, \
             src_row_count=schedule.SourceRows, \
@@ -921,20 +1536,10 @@ class BQScheduleLoader(ConfigBase):
 
             df_bq = super().read_bq_to_dataframe(src)
 
-        predicate = None
-
         if schedule.LoadStrategy == SyncConstants.WATERMARK and not schedule.InitialLoad:
             print("Use watermark for differential load...")
-            pk = schedule.PrimaryKey
-            max_watermark = schedule.MaxWatermark
-
-            if max_watermark.isdigit():
-                predicate = f"{pk} > {max_watermark}"
-            else:
-                predicate = f"{pk} > '{max_watermark}'"
-            
-        if predicate is not None:
-            df_bq = df_bq.where(predicate)
+            predicate = f"{schedule.PrimaryKey} > '{schedule.MaxWatermarkwatermark}'"
+            df_bq.where(predicate)
 
         df_bq.cache()
 
@@ -949,8 +1554,7 @@ class BQScheduleLoader(ConfigBase):
 
                 df_bq = self.create_fabric_partition_proxy_cols(df_bq, schedule.PartitionColumn, schedule.PartitionGrain, proxy_cols)
 
-        #write_config = { **schedule.TableOptions }
-        write_config = { }
+        write_config = { **schedule.TableOptions }
 
         #Schema Evolution
         if schedule.AllowSchemaEvolution and table_maint:
@@ -1006,6 +1610,7 @@ class BQScheduleLoader(ConfigBase):
         schedule.SparkAppId = self.Context.sparkContext.applicationId
         schedule.DeltaVersion = table_maint.CurrentTableVersion
         schedule.EndTime = datetime.now(timezone.utc)
+        schedule.Status = "COMPLETE"
 
         df_bq.unpersist()
 
