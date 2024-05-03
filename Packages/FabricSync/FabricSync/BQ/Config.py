@@ -40,6 +40,74 @@ class SyncConstants:
     SQL_TBL_DATA_TYPE_MAP = "bq_data_type_map"
     SQL_TBL_SYNC_SCHEDULE_TELEMETRY = "bq_sync_schedule_telemetry"
 
+    CONFIG_JSON_TEMPLATE = """
+    {
+        "load_all_tables": true,
+        "autodetect": true,
+        "master_reset": false,
+        "metadata_lakehouse": "",
+        "target_lakehouse": "",
+        
+        "gcp_credentials": {
+            "project_id": "",
+            "dataset": "",
+            "credential_path": "",
+            "api_token": "",
+            "credential": ""
+        },
+        
+        "async": {
+            "enabled": true,
+            "parallelism": 5,
+            "cell_timeout": 0,
+            "notebook_timeout": 0
+        },
+        
+        
+        "tables": [
+        {
+            "load_priority": 100,
+            "table_name": "",
+            "enabled": true,
+            "source_query": "",
+            "enforce_partition_expiration": true,
+            "allow_schema_evoluton": true,
+            "load_strategy": "",
+            "load_type": "",
+            "interval": "",
+            "table_maintenance":{
+                "enabled": true,
+                "interval": ""
+            },
+            "table_options": [
+            {
+                "key": "",
+                "value": ""
+            }
+            ],
+            "keys": [
+            {
+                "column": ""
+            }
+            ],
+            "partitioned": {
+                "enabled": false,
+                "type" : "",
+                "column": "",
+                "partition_grain":""
+            },
+            "watermark": {
+                "column": ""
+            },
+            "lakehouse_target": {
+                "lakehouse": "",
+                "table_name": ""
+            }
+        }
+        ]	
+    }
+    """
+
     def get_load_strategies () -> List[str]:
         return [SyncConstants.FULL, SyncConstants.PARTITION, SyncConstants.WATERMARK, SyncConstants.TIME_INGESTION]
 
@@ -115,6 +183,7 @@ class SyncSchedule:
         self.LoadType = row["load_type"]
         self.InitialLoad = row["initial_load"]
         self.LastScheduleLoadDate = row["last_schedule_dt"]
+        self.Priority = row["priority"]
         self.ProjectId = row["project_id"]
         self.Dataset = row["dataset"]
         self.TableName = row["table_name"]
@@ -336,7 +405,7 @@ class ConfigGCPCredential:
     """
     GCP Credential model
     """
-    def __init__(self, project_id, dataset, path:str = None, token:str = None, credential:str = None):
+    def __init__(self, project_id = None, dataset = None, path:str = None, token:str = None, credential:str = None):
         self.ProjectID = project_id
         self.Dataset = dataset
         self.CredentialPath = path
@@ -506,10 +575,12 @@ class ConfigBase():
         if not self.Context.catalog.tableExists("user_config_json") or reload_config:
             if not os.path.exists(f"{self.SparkUtils.nbResPath}{config_path}"):
                 raise Exception("JSON User Config does not exists at the path supplied")
-    
+
+            df_schema = spark.read.json(spark.sparkContext.parallelize([SyncConstants.CONFIG_JSON_TEMPLATE]))
+
             cfg_json = Path(f"{self.SparkUtils.nbResPath}{config_path}").read_text()
 
-            config_df = self.Context.read.json(self.Context.sparkContext.parallelize([cfg_json]))
+            config_df = self.Context.read.schema(df_schema.schema).json(self.Context.sparkContext.parallelize([cfg_json]))
             config_df.createOrReplaceTempView("user_config_json")
             config_df.cache()
         else:

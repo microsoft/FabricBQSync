@@ -1,5 +1,5 @@
-DROP TABLE IF EXISTS bq_sync_schedule;
-CREATE TABLE IF NOT EXISTS bq_sync_schedule
+DROP TABLE IF EXISTS bq_data_type_map;
+CREATE TABLE IF NOT EXISTS bq_data_type_map
 (
     data_type STRING, 
     partition_type STRING, 
