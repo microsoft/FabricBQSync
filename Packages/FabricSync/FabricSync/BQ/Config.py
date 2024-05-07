@@ -120,42 +120,6 @@ class SyncConstants:
     def get_partition_grains() -> List[str]:
         return [SyncConstants.YEAR, SyncConstants.MONTH, SyncConstants.DAY, SyncConstants.HOUR]
 
-class ScheduleDAG:
-    """
-    Schedule DAG for Run Multiple Notebook implementation
-    """
-    def __init__(self, timeout:int=7200, concurrency:int=5):
-        """
-        Schedule DAG configuration. Maps DAG dependencies and sets paralellism concurrency for load
-        """
-        self.activities:list[DAGActivity] = []
-        self.timeoutInSeconds:int = timeout
-        self.concurrency:int = concurrency
-
-class ScheduleDAGEncoder(JSONEncoder):
-        """
-        JSON Encoder for Schedule DAG
-        """
-        def default(self, o):
-            return o.__dict__
-            
-class DAGActivity:
-    """
-    DAG Activity for Run Multiple Notebook implementation
-    """
-    def __init__(self, name:str, path:str, timeout:int = 3600, retry:int =  None, \
-                 retryInterval:int = None, dependencies:list[str] = [], **keyword_args):
-        """
-        DAG activity configuration. Keyword args are used to pass notebook params
-        """
-        self.name = name
-        self.path = path
-        self.timeoutPerCellInSeconds = timeout
-        self.retry = retry
-        self.retryIntervalInSeconds = retryInterval
-        self.dependencies = dependencies
-        self.args = keyword_args
-
 class SyncSchedule:
     """
     Scheduled configuration object that also is used to track and store telemetry from load process
