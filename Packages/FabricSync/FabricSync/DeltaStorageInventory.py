@@ -227,7 +227,7 @@ class DeltaStorageInventory:
         return t
 
     def lookup_delta_table_id(self, df:DataFrame) -> DataFrame:
-        lkp = spark.table(f"{self.target_lakehouse}.delta_tables") \
+        lkp = self.session.table(f"{self.target_lakehouse}.delta_tables") \
             .select("delta_table_id", "delta_table") \
             .alias("lkp")
 
