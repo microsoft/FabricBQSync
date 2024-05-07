@@ -1188,3 +1188,5 @@ class BQScheduleLoader(ConfigBase):
             
             print(f"### Closing {grp_nm}...")
             self.process_load_group_telemetry(grp)
+        
+        self.commit_table_configuration()
