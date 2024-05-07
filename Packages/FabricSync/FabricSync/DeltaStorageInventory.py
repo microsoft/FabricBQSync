@@ -175,7 +175,7 @@ class DeltaStorageInventory:
                 .withColumn("delta_partition", expr("substring(data_file, 1, len(data_file) - locate('/', reverse(data_file)))"))
 
         f = f.alias("f")
-        i = spark.table("_storage_inventory").alias("i")
+        i = self.session.table("_storage_inventory").alias("i")
 
         agg = f.join(i, (f.delta_table_path==i.Name), "left") \
             .select(f["*"], expr("coalesce(i.`content-length`, 0)").alias("content_size"))
