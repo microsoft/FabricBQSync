@@ -14,7 +14,6 @@ class DeltaStorageInventory:
                     container:str = None, storage_prefix:str = None, parallelism:int = 5, track_history:bool = False):
         self.session = session
         self.target_lakehouse = target_lakehouse
-        self.temp_work_path = temp_work_path
         self.inventory_date = inventory_date
         self.storage_prefix = storage_prefix
         self.parallelism = parallelism
@@ -35,7 +34,7 @@ class DeltaStorageInventory:
 
     def is_dbx_runtime(self):
         try:
-            dbx = spark.conf.get("spark.databricks.clusterUsageTags.sparkVersion")
+            dbx = self.session.conf.get("spark.databricks.clusterUsageTags.sparkVersion")
             databricks = True
         except Exception:
             databricks = False
