@@ -188,7 +188,9 @@ class DeltaStorageInventory:
             .filter(col("inventory_date") == self.inventory_dt)
 
         f = f.withColumn("delta_table_path", concat("delta_table", "data_file")) \
-                .withColumn("delta_partition", expr("substring(data_file, 1, len(data_file) - locate('/', reverse(data_file)))"))
+                .withColumn("delta_partition", expr("substring(data_file, 1, len(data_file) - locate('/', reverse(data_file)))")) \
+                .withColumn("delta_partition", when(col("delta_partition").contains(".parquet"), "<default>") \
+                    .otherwise(col("delta_partition")))
 
         f = f.alias("f")
         i = self.session.table("_storage_inventory").alias("i")
