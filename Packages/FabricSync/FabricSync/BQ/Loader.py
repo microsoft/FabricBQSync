@@ -19,13 +19,13 @@ class ConfigMetadataLoader(ConfigBase):
         the Lakehouse Delta tables
     2. Autodetect table sync configuration based on defined metadata & heuristics
     """
-    def __init__(self, context: SparkSession, spark_utils, config_path : str):
+    def __init__(self, context:SparkSession, spark_utils, config_path:str, reload_config:bool = False):
         """
         Calls the parent init to load the user config JSON file
         """
         self.JSON_Config_Path = config_path
         
-        super().__init__(context, spark_utils, config_path)
+        super().__init__(context, spark_utils, config_path, reload_config)
         self.Context.sql(f"USE {self.UserConfig.MetadataLakehouse}")
     
     def create_autodetect_view(self):
@@ -156,7 +156,7 @@ class ConfigMetadataLoader(ConfigBase):
 
         self.write_lakehouse_table(df, self.UserConfig.MetadataLakehouse, tbl_nm)
 
-    def sync_bq_information_schema_table_dependent(self, dependent_tbl : str):
+    def sync_bq_information_schema_table_dependent(self, dependent_tbl:str):
         """
         Reads a child INFORMATION_SCHEMA table from BigQuery for the configuration project_id 
         and dataset. The child table is joined to the TABLES table to filter for BASE TABLEs.
@@ -324,7 +324,7 @@ class SyncSetup(ConfigBase):
     1. Creates the Metadata & Target Lakehouse if they do not exists
     2. Drops & Recreates the required metadata and any supporting tables required
     """
-    def __init__(self, context: SparkSession, spark_utils, config_path : str):
+    def __init__(self, context:SparkSession, spark_utils, config_path:str):
         """
         Calls the parent init to load the User Config JSON file
         """
@@ -333,7 +333,7 @@ class SyncSetup(ConfigBase):
 
         super().__init__(context, spark_utils, config_path)
 
-    def get_fabric_lakehouse(self, nm : str):
+    def get_fabric_lakehouse(self, nm:str):
         """
         Returns a Fabric Lakehouse by name or None if it does not exists
         """
@@ -342,11 +342,11 @@ class SyncSetup(ConfigBase):
         try:
             lakehouse = self.SparkUtils.lakehouse.get(nm)
         except Exception:
-            print("Lakehouse not found: {0}".format(nm))
+            print("Lakehouse not found:{0}".format(nm))
 
         return lakehouse
 
-    def create_fabric_lakehouse(self, nm : str):
+    def create_fabric_lakehouse(self, nm:str):
         """
         Creates a Fabric Lakehouse if it does not exists
         """
@@ -365,14 +365,14 @@ class SyncSetup(ConfigBase):
         self.Context.sql(f"USE {self.UserConfig.MetadataLakehouse}")
         self.create_all_tables()
 
-    def drop_table(self, tbl : str):
+    def drop_table(self, tbl:str):
         """
         Drops an existing table from the Lakehouse if it exists
         """
         sql = f"DROP TABLE IF EXISTS {tbl}"
         self.Context.sql(sql)
 
-    def get_tbl_name(self, tbl : str) -> str:
+    def get_tbl_name(self, tbl:str) -> str:
         """
         Returns the table name with two-part format for the configuration Metadata Lakehouse
         """
@@ -506,7 +506,7 @@ class Scheduler(ConfigBase):
     Delta table. When tables are scheduled but no updates are detected on the BigQuery side 
     a SKIPPED record is created for tracking purposes.
     """
-    def __init__(self, context: SparkSession, spark_utils, config_path : str):
+    def __init__(self, context:SparkSession, spark_utils, config_path:str):
         """
         Calls the parent init to load the user config JSON file
         """
@@ -580,8 +580,8 @@ class BQScheduleLoader(ConfigBase):
     Class repsonsible for processing the sync schedule and handling data movement 
     from BigQuery to Fabric Lakehouse based on each table's configuration
     """
-    def __init__(self, context:SparkSession, spark_utils, config_path : str, \
-                 load_proxy_views : bool =True, force_config_reload : bool = False):
+    def __init__(self, context:SparkSession, spark_utils, config_path:str, \
+                 load_proxy_views:bool =True, force_config_reload:bool = False):
         """
         Calls parent init to load User Config from JSON file
         """
@@ -591,7 +591,7 @@ class BQScheduleLoader(ConfigBase):
         if load_proxy_views:
             super().create_proxy_views()
 
-    def save_schedule_telemetry(self, schedule : SyncSchedule):
+    def save_schedule_telemetry(self, schedule:SyncSchedule):
         """
         Write status and telemetry from sync schedule to Sync Schedule Telemetry Delta table
         """
@@ -728,7 +728,7 @@ class BQScheduleLoader(ConfigBase):
 
         return df
 
-    def get_max_watermark(self, schedule: SyncSchedule, df_bq: DataFrame) -> str:
+    def get_max_watermark(self, schedule:SyncSchedule, df_bq:DataFrame) -> str:
         """
         Get the max value for the supplied table and column
         """
@@ -741,7 +741,7 @@ class BQScheduleLoader(ConfigBase):
 
         return max_watermark
 
-    def get_fabric_partition_proxy_cols(self, partition_grain: str) -> list[str]:
+    def get_fabric_partition_proxy_cols(self, partition_grain:str) -> list[str]:
         proxy_cols = ["YEAR", "MONTH", "DAY", "HOUR"]
 
         match partition_grain:
@@ -757,7 +757,7 @@ class BQScheduleLoader(ConfigBase):
 
         return proxy_cols
 
-    def get_bq_partition_id_format(self, partition_grain:str) -> str: 
+    def get_bq_partition_id_format(self, partition_grain:str) -> str:
         pattern = None
 
         match partition_grain:
@@ -772,12 +772,12 @@ class BQScheduleLoader(ConfigBase):
         
         return pattern
 
-    def get_derived_date_from_part_id(self, partition_grain: str, partition_id: str) -> datetime:
+    def get_derived_date_from_part_id(self, partition_grain:str, partition_id:str) -> datetime:
         dt_format = self.get_bq_partition_id_format(partition_grain)
         return datetime.strptime(partition_id, dt_format)
 
-    def create_fabric_partition_proxy_cols(self, df: DataFrame, partition: str, partition_grain: str, proxy_cols: list[str]) -> DataFrame:   
-        print(f"partition: {partition}")
+    def create_fabric_partition_proxy_cols(self, df:DataFrame, partition:str, partition_grain:str, proxy_cols:list[str]) -> DataFrame:  
+        print(f"partition:{partition}")
         for c in proxy_cols:
             match c:
                 case "HOUR":
@@ -797,10 +797,10 @@ class BQScheduleLoader(ConfigBase):
         
         return df
 
-    def get_fabric_partition_cols(self, partition: str, proxy_cols: list[str]):
+    def get_fabric_partition_cols(self, partition:str, proxy_cols:list[str]):
         return [f"__{partition}_{c}" for c in proxy_cols]
 
-    def get_fabric_partition_predicate(self, partition_dt: datetime, partition: str, proxy_cols: list[str]) -> str:
+    def get_fabric_partition_predicate(self, partition_dt:datetime, partition:str, proxy_cols:list[str]) -> str:
         partition_predicate = []
 
         for c in proxy_cols:
@@ -896,7 +896,7 @@ class BQScheduleLoader(ConfigBase):
 
             part_format = self.get_bq_partition_id_format(schedule.PartitionGrain)
 
-            if schedule.IsTimeIngestionPartitioned:                   
+            if schedule.IsTimeIngestionPartitioned:                  
                 part_filter = f"timestamp_trunc({schedule.PartitionColumn}, {schedule.PartitionGrain}) = PARSE_TIMESTAMP('{part_format}', '{schedule.PartitionId}')"
             else:
                 part_filter = f"date_trunc({schedule.PartitionColumn}, {schedule.PartitionGrain}) = PARSE_DATETIME('{part_format}', '{schedule.PartitionId}')"
@@ -992,7 +992,7 @@ class BQScheduleLoader(ConfigBase):
 
         return schedule
 
-    def process_load_group_telemetry(self, load_grp : str = None):
+    def process_load_group_telemetry(self, load_grp:str = None):
         """
         When a load group is complete, summarizes the telemetry to close out the schedule
         """
@@ -1188,5 +1188,3 @@ class BQScheduleLoader(ConfigBase):
             
             print(f"### Closing {grp_nm}...")
             self.process_load_group_telemetry(grp)
-        
-        self.commit_table_configuration()

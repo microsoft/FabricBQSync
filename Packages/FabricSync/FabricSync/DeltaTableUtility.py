@@ -1,7 +1,6 @@
 from pyspark.sql import *
 from pyspark.sql.functions import * 
 from delta.tables import *
-from typing import Tuple
 
 class DeltaTableMaintenance:
     """

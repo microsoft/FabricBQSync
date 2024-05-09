@@ -42,66 +42,66 @@ class SyncConstants:
 
     CONFIG_JSON_TEMPLATE = """
     {
-        "load_all_tables": true,
-        "autodetect": true,
-        "master_reset": false,
-        "metadata_lakehouse": "",
-        "target_lakehouse": "",
+        "load_all_tables":true,
+        "autodetect":true,
+        "master_reset":false,
+        "metadata_lakehouse":"",
+        "target_lakehouse":"",
         
-        "gcp_credentials": {
-            "project_id": "",
-            "dataset": "",
-            "credential_path": "",
-            "api_token": "",
-            "credential": ""
+        "gcp_credentials":{
+            "project_id":"",
+            "dataset":"",
+            "credential_path":"",
+            "api_token":"",
+            "credential":""
         },
         
-        "async": {
-            "enabled": true,
-            "parallelism": 5,
-            "cell_timeout": 0,
-            "notebook_timeout": 0
+        "async":{
+            "enabled":true,
+            "parallelism":5,
+            "cell_timeout":0,
+            "notebook_timeout":0
         },
         
         
-        "tables": [
+        "tables":[
         {
-            "load_priority": 100,
-            "table_name": "",
-            "enabled": true,
-            "source_query": "",
-            "enforce_partition_expiration": true,
-            "allow_schema_evoluton": true,
-            "load_strategy": "",
-            "load_type": "",
-            "interval": "",
+            "load_priority":100,
+            "table_name":"",
+            "enabled":true,
+            "source_query":"",
+            "enforce_partition_expiration":true,
+            "allow_schema_evoluton":true,
+            "load_strategy":"",
+            "load_type":"",
+            "interval":"",
             "table_maintenance":{
-                "enabled": true,
-                "interval": ""
+                "enabled":true,
+                "interval":""
             },
-            "table_options": [
+            "table_options":[
             {
-                "key": "",
-                "value": ""
+                "key":"",
+                "value":""
             }
             ],
-            "keys": [
+            "keys":[
             {
-                "column": ""
+                "column":""
             }
             ],
-            "partitioned": {
-                "enabled": false,
-                "type" : "",
-                "column": "",
+            "partitioned":{
+                "enabled":false,
+                "type":"",
+                "column":"",
                 "partition_grain":""
             },
-            "watermark": {
-                "column": ""
+            "watermark":{
+                "column":""
             },
-            "lakehouse_target": {
-                "lakehouse": "",
-                "table_name": ""
+            "lakehouse_target":{
+                "lakehouse":"",
+                "table_name":""
             }
         }
         ]	
@@ -133,7 +133,7 @@ class SyncSchedule:
     SparkAppId:str = None
     MaxWatermark:str = None
     Status:str = None
-    FabricPartitionColumns: list[str] = None
+    FabricPartitionColumns:list[str] = None
 
     def __init__(self, row:Row):
         """
@@ -442,7 +442,7 @@ class ConfigBQTable (JSONConfigObj):
         self.EnforcePartitionExpiration = super().get_json_conf_val(json_config, "enforce_partition_expiration", False)
         self.EnableDeletionVectors = super().get_json_conf_val(json_config, "enable_deletion_vectors", False)
         self.AllowSchemaEvolution = super().get_json_conf_val(json_config, "allow_schema_evoluton", False)
-        self.TableOptions: dict[str, str] = {}
+        self.TableOptions:dict[str, str] = {}
 
         if "lakehouse_target" in json_config:
             self.LakehouseTarget = ConfigLakehouseTarget( \
@@ -488,7 +488,7 @@ class ConfigBase():
     '''
     Base class for sync objects that require access to user-supplied configuration
     '''
-    def __init__(self, context: SparkSession, spark_utils, config_path:str, force_reload_config:bool = False):
+    def __init__(self, context:SparkSession, spark_utils, config_path:str, force_reload_config:bool = False):
         """
         Init method loads the user JSON config from the supplied path.
         """
@@ -502,7 +502,6 @@ class ConfigBase():
         self.GCPCredential = None
 
         self.UserConfig = self.ensure_user_config(force_reload_config)
-
         self.GCPCredential = self.load_gcp_credential()
     
     @property
@@ -537,12 +536,12 @@ class ConfigBase():
         config_df = None
 
         if not self.Context.catalog.tableExists("user_config_json") or reload_config:
-            if not os.path.exists(f"{self.SparkUtils.nbResPath}{config_path}"):
+            if not os.path.exists(f"{config_path}"):
                 raise Exception("JSON User Config does not exists at the path supplied")
 
             df_schema = spark.read.json(spark.sparkContext.parallelize([SyncConstants.CONFIG_JSON_TEMPLATE]))
 
-            cfg_json = Path(f"{self.SparkUtils.nbResPath}{config_path}").read_text()
+            cfg_json = Path(f"{config_path}").read_text()
 
             config_df = self.Context.read.schema(df_schema.schema).json(self.Context.sparkContext.parallelize([cfg_json]))
             config_df.createOrReplaceTempView("user_config_json")
@@ -618,10 +617,10 @@ class ConfigBase():
         """
         Reads credential file from the Notebook Resource file path
         """
-        credential = f"{self.SparkUtils.nbResPath}{self.UserConfig.GCPCredential.CredentialPath}"
+        credential = f"{self.UserConfig.GCPCredential.CredentialPath}"
 
         if not os.path.exists(credential):
-           raise Exception("GCP Credential file does not exists at the path supplied.")
+           raise Exception(f"GCP Credential file does not exists at the path supplied:{credential}")
         
         txt = Path(credential).read_text()
         txt = txt.replace("\n", "").replace("\r", "")
@@ -632,7 +631,6 @@ class ConfigBase():
         """
         Converts string to base64 encoding, returns ascii value of bytes
         """
-
         credential_val_bytes = credential_val.encode("ascii") 
         
         base64_bytes = b64.b64encode(credential_val_bytes) 
@@ -645,15 +643,16 @@ class ConfigBase():
         Evaluates a string to determine if its base64 encoded
         """
         try:
-                if isinstance(val, str):
-                        sb_bytes = bytes(val, 'ascii')
-                elif isinstance(val, bytes):
-                        sb_bytes = val
-                else:
-                        raise ValueError("Argument must be string or bytes")
-                return b64.b64encode(b64.b64decode(sb_bytes)) == sb_bytes
-        except Exception:
-                return False
+            if isinstance(val, str):
+                sb_bytes = bytes(val, 'ascii')
+            elif isinstance(val, bytes):
+                sb_bytes = val
+            else:
+                raise ValueError("Argument must be string or bytes")
+
+            return b64.b64encode(b64.b64decode(sb_bytes)) == sb_bytes
+        except Exception as e:
+            return False
 
     def read_bq_partition_to_dataframe(self, table:str, partition_filter:str, cache_results:bool=False) -> DataFrame:
         """
