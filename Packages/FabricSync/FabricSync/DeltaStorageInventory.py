@@ -1,11 +1,13 @@
 from pyspark.sql.functions import *
 import os
+import json
 from datetime import datetime
 from delta.tables import *
 from queue import Queue
 from threading import Thread
 from pyspark.sql.types import *
 from uuid import uuid4
+from pathlib import Path
 
 class DeltaStorageInventory:
     inventory_tables = ["delta_tables","delta_table_files","delta_table_partitions","delta_table_history","delta_table_snapshot"]
@@ -41,10 +43,19 @@ class DeltaStorageInventory:
         
         return databricks
     
+    def get_files_schema(self, with_table:bool = True):
+        base_definition = [StructField('data_file', StringType(), True), \
+            StructField('file_info', StructType([StructField('operation', StringType(), True), \
+            StructField('file_size', LongType(), True), StructField('row_count', LongType(), True), \
+            StructField('delta_version', LongType(), True)]), True)]
+
+        if not with_table:
+            return StructType(base_definition)
+
+        return StructType(base_definition + [StructField('delta_table', StringType(), True)])
+    
     def create_temp_tables(self):
-        files_schema = StructType([ \
-            StructField('data_file', StringType(), True), StructField('operation', StringType(), True), \
-            StructField('delta_table', StringType(), True)])
+        files_schema = self.get_files_schema()
 
         df = self.session.createDataFrame([], files_schema)
         df.write.mode("OVERWRITE").saveAsTable(f"{self.target_lakehouse}.tmpFiles")
@@ -89,15 +100,16 @@ class DeltaStorageInventory:
 
         for f in delta_df.collect():
             path = f["Name"]
+
             delta_tbl = os.path.dirname(path).replace("_delta_log", "")
 
             if delta_tbl not in delta_tbls:
                 delta_tbls[delta_tbl] = []
             
-            ext = os.path.splitext(path)[1]
+            ext = Path(path).suffix
 
             if ext == ".json":
-                delta_version = int(os.path.basename(path).replace(ext, ""))
+                delta_version = int(Path(path).stem)
                 
                 if delta_version not in delta_tbls[delta_tbl]:
                     delta_tbls[delta_tbl].append(delta_version)   
@@ -131,19 +143,29 @@ class DeltaStorageInventory:
         file_analysis = {}
 
         for r in ddf.orderBy("filename").collect():
+            file_name = r["filename"]
+            delta_version = int(Path(file_name).stem)
+
             if "add" in r and r["add"]:
-                f = r['add']['path']
+                f = r["add"]["path"]
 
                 if f not in file_analysis:
-                    file_analysis[f] = "ADD"
+                    stats = json.loads(r["add"]["stats"])
+                    file_data = ("ADD", r["add"]["size"], stats["numRecords"], delta_version)
+
+                    file_analysis[f] = file_data
                 
             if "remove" in r and r["remove"]:
-                f = r['remove']['path']
+                f = r["remove"]["path"]
 
-                if f in file_analysis and file_analysis[f] == "ADD":
-                    file_analysis[f] = "REMOVE"
-            
-        f = self.session.createDataFrame(file_analysis.items(), ["data_file", "operation"]) \
+                if f in file_analysis and file_analysis[f][0] == "ADD":
+                    file_data = list(file_analysis[f])
+                    file_data[0] = "REMOVE"
+                    file_data[3] = delta_version
+                    file_analysis[f] = tuple(file_data)
+
+        files_schema = self.get_files_schema(False)    
+        f = self.session.createDataFrame(file_analysis.items(), files_schema) \
             .withColumn("delta_table", lit(tbl)) 
         f.write.mode("APPEND").saveAsTable(f"{self.target_lakehouse}.tmpFiles")        
 
@@ -162,10 +184,10 @@ class DeltaStorageInventory:
         while not workQueue.empty():
             tbl = workQueue.get()
     
-            #try:
-            work_function(tbl)
-            #finally:
-            workQueue.task_done()
+            try:
+                work_function(tbl)
+            finally:
+                workQueue.task_done()
 
     def process_queue(self, workQueue:Queue):
         for i in range(self.parallelism):
@@ -185,20 +207,17 @@ class DeltaStorageInventory:
 
     def get_delta_file_size_from_inventory(self) -> DataFrame:
         f = self.session.table(f"{self.target_lakehouse}.delta_table_files") \
-            .filter(col("inventory_date") == self.inventory_dt)
+            .filter(col("inventory_date") == self.inventory_dt) \
+            .select("*", expr("file_info['operation']").alias("operation"), \
+                expr("file_info['file_size']").alias("content_size"), \
+                expr("file_info['row_count']").alias("row_count"))
 
         f = f.withColumn("delta_table_path", concat("delta_table", "data_file")) \
                 .withColumn("delta_partition", expr("substring(data_file, 1, len(data_file) - locate('/', reverse(data_file)))")) \
                 .withColumn("delta_partition", when(col("delta_partition").contains(".parquet"), "<default>") \
                     .otherwise(col("delta_partition")))
-
-        f = f.alias("f")
-        i = self.session.table("_storage_inventory").alias("i")
-
-        agg = f.join(i, (f.delta_table_path==i.Name), "left") \
-            .select(f["*"], expr("coalesce(i.`content-length`, 0)").alias("content_size"))
         
-        return agg
+        return f
 
     def get_delta_partitions_source(self) -> DataFrame:
         agg = self.get_delta_file_size_from_inventory()
@@ -207,7 +226,8 @@ class DeltaStorageInventory:
                 "delta_partition", \
                 "operation") \
             .agg(count("*").alias("files_count"), \
-                sum("content_size").alias("file_size"))
+                sum("content_size").alias("file_size"), \
+                sum("row_count").alias("row_count"))
 
         a = agg.where("operation = 'ADD'").alias("a")
         r = agg.where("operation = 'REMOVE'").alias("r")
@@ -215,14 +235,18 @@ class DeltaStorageInventory:
         p = a.join(r, (a.delta_table==r.delta_table) & (a.delta_partition==r.delta_partition), "left") \
             .select(a["*"], \
                 col("r.files_count").alias("removed_files_count"), \
-                col("r.file_size").alias("removed_file_size"))
+                col("r.file_size").alias("removed_file_size"), \
+                col("r.row_count").alias("removed_row_count"))
 
         p = p.withColumn('removed_files_count', \
                 when(col("removed_files_count").isNull(), 0).otherwise(col("removed_files_count"))) \
             .withColumn('removed_file_size', \
                 when(col("removed_file_size").isNull(), 0).otherwise(col("removed_file_size"))) \
+            .withColumn('removed_row_count', \
+                when(col("removed_row_count").isNull(), 0).otherwise(col("removed_row_count"))) \
             .withColumn("total_files_count", col("files_count") + col("removed_files_count")) \
             .withColumn("total_file_size", col("file_size") + col("removed_file_size")) \
+            .withColumn("total_row_count", col("row_count") + col("removed_row_count")) \
             .drop("operation")
 
         return p
@@ -231,10 +255,13 @@ class DeltaStorageInventory:
         t = partitions.groupBy("delta_table") \
             .agg(sum("files_count").alias("active_files_count"), \
                 sum("file_size").alias("active_files_size"), \
+                sum("row_count").alias("active_row_count"), \
                 sum("removed_files_count").alias("removed_files_count"), \
                 sum("removed_file_size").alias("removed_files_size"), \
+                sum("removed_row_count").alias("removed_row_count"), \
                 sum("total_files_count").alias("total_files_count"), \
                 sum("total_file_size").alias("total_files_size"), \
+                sum("total_row_count").alias("total_row_count"), \
                 countDistinct("delta_partition").alias("table_partitions"))
 
         return t
