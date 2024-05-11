@@ -1,6 +1,7 @@
 from pyspark.sql import *
 from pyspark.sql.functions import * 
 from delta.tables import *
+from typing import Tuple
 
 class DeltaTableMaintenance:
     """
@@ -18,22 +19,13 @@ class DeltaTableMaintenance:
     """
     __detail:Row = None
 
-    def __init__(self, context:SparkSession, spark_utils, table_nm:str):
+    def __init__(self, context:SparkSession, table_nm:str):
         """
         Init function, creates instance of DeltaTable class
         """
-        self.__context__ = context
-        self.__spark_utils__ = spark_utils
+        self.Context = context
         self.TableName = table_nm
         self.DeltaTable = DeltaTable.forName(context, table_nm)
-
-    @property
-    def Context(self) -> SparkSession:
-        return self.__context__
-    
-    @property
-    def SparkUtils(self):
-        return self.__spark_utils__
     
     @property
     def CurrentTableVersion(self) -> int:
@@ -141,7 +133,7 @@ class DeltaTableMaintenance:
         """
         Optimized table drop that directly deletes the table from storage
         """
-        self.SparkUtils.fs.rm(self.OneLakeLocation, recurse=True)
+        self.Context.sql(f"DROP TABLE IF EXISTS {self.TableName}")
     
     def optimize_and_vacuum(self, partition_filter:str = None):
         """

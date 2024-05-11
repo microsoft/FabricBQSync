@@ -8,6 +8,7 @@ from json import JSONEncoder
 import base64 as b64
 from pathlib import Path
 import os
+import hashlib
 
 class SyncConstants:
     '''
@@ -26,6 +27,14 @@ class SyncConstants:
     MONTH = "MONTH"
     DAY = "DAY"
     HOUR = "HOUR"
+    TIMESTAMP = "TIMESTAMP"
+    RANGE = "RANGE"
+    EMPTY_STRING = ""
+    COMPLETE = "COMPLETE"
+    TRUE = "true"
+    FALSE = "false"
+    DYNAMIC = "dynamic"
+    AUTO = "AUTO"
 
     INITIAL_FULL_OVERWRITE = "INITIAL_FULL_OVERWRITE"
     INFORMATION_SCHEMA_TABLES = "INFORMATION_SCHEMA.TABLES"
@@ -66,7 +75,7 @@ class SyncConstants:
         
         "tables":[
         {
-            "load_priority":100,
+            "priority":100,
             "table_name":"",
             "enabled":true,
             "source_query":"",
@@ -94,7 +103,9 @@ class SyncConstants:
                 "enabled":false,
                 "type":"",
                 "column":"",
-                "partition_grain":""
+                "partition_grain":"",
+                "partition_column_data_type":"",
+                "partition_range":""
             },
             "watermark":{
                 "column":""
@@ -119,6 +130,14 @@ class SyncConstants:
 
     def get_partition_grains() -> List[str]:
         return [SyncConstants.YEAR, SyncConstants.MONTH, SyncConstants.DAY, SyncConstants.HOUR]
+    
+    def get_information_schema_views() -> List[str]:
+        return [SyncConstants.INFORMATION_SCHEMA_TABLES, \
+            SyncConstants.INFORMATION_SCHEMA_PARTITIONS, \
+            SyncConstants.INFORMATION_SCHEMA_COLUMNS, \
+            SyncConstants.INFORMATION_SCHEMA_TABLE_CONSTRAINTS, \
+            SyncConstants.INFORMATION_SCHEMA_KEY_COLUMN_USAGE, \
+            SyncConstants.INFORMATION_SCHEMA_TABLE_OPTIONS]
 
 class SyncSchedule:
     """
@@ -126,7 +145,6 @@ class SyncSchedule:
     """
     EndTime:datetime = None
     SourceRows:int = 0
-    DestRows:int = 0
     InsertedRows:int = 0
     UpdatedRows:int = 0
     DeltaVersion:str = None
@@ -158,7 +176,9 @@ class SyncSchedule:
         self.PartitionColumn = row["partition_column"]
         self.PartitionType = row["partition_type"]
         self.PartitionGrain = row["partition_grain"]
-        self.PartitionId = row["partition_id"]             
+        self.PartitionId = row["partition_id"]     
+        self.PartitionDataType = row["partition_data_type"]   
+        self.PartitionRange = row["partition_range"]     
         self.Lakehouse = row["lakehouse"]
         self.DestinationTableName = row["lakehouse_table_name"]
         self.EnforcePartitionExpiration = row["enforce_partition_expiration"]
@@ -246,25 +266,17 @@ class SyncSchedule:
          """
          Bool indicator for the two time partitioned strategies
          """
-         return (self.LoadStrategy == SyncConstants.PARTITION or \
-                self.LoadStrategy == SyncConstants.TIME_INGESTION)
+         return ((self.LoadStrategy == SyncConstants.PARTITION and 
+            self.PartitionType == SyncConstants.TIME) or self.LoadStrategy == SyncConstants.TIME_INGESTION)
     
-    def UpdateRowCounts(self, src:int, dest:int, insert:int = 0, update:int = 0):
+    def UpdateRowCounts(self, src:int, insert:int = 0, update:int = 0):
         """
         Updates the telemetry row counts based on table configuration
         """
         self.SourceRows += src
-        self.DestRows += dest
 
         if not self.LoadType == SyncConstants.MERGE:
-            match self.LoadStrategy:
-                case SyncConstants.WATERMARK:
-                    self.InsertedRows += src     
-                case SyncConstants.PARTITION:
-                    self.InsertedRows += dest  
-                case _:
-                    self.InsertedRows += dest
-            
+            self.InsertedRows += src            
             self.UpdatedRows = 0
         else:
             self.InsertedRows += insert
@@ -413,11 +425,14 @@ class ConfigPartition:
     """
     User Config class for Big Query Table partition configuration
     """
-    def __init__(self, enabled:bool = False, partition_type:str = "", col:ConfigTableColumn = ConfigTableColumn(), grain:str = ""):
+    def __init__(   self, enabled:bool = False, partition_type:str = "", col:ConfigTableColumn = ConfigTableColumn(), \
+                    grain:str = "", partition_data_type:str = "", partition_range:str = ""):
         self.Enabled = enabled
         self.PartitionType = partition_type
         self.PartitionColumn = col
         self.Granularity = grain
+        self.PartitionDataType = partition_data_type
+        self.PartitionRange = partition_range
 
 class ConfigBQTable (JSONConfigObj):
     """
@@ -462,7 +477,9 @@ class ConfigBQTable (JSONConfigObj):
                 super().get_json_conf_val(json_config["partitioned"], "enabled", False), \
                 super().get_json_conf_val(json_config["partitioned"], "type", ""), \
                 super().get_json_conf_val(json_config["partitioned"], "column", ""), \
-                super().get_json_conf_val(json_config["partitioned"], "partition_grain", ""))
+                super().get_json_conf_val(json_config["partitioned"], "partition_grain", ""), \
+                super().get_json_conf_val(json_config["partitioned"], "partition_data_type", ""), \
+                super().get_json_conf_val(json_config["partitioned"], "partition_range", ""))
         else:
             self.Partitioned = ConfigPartition()
         
@@ -483,42 +500,96 @@ class ConfigBQTable (JSONConfigObj):
             for c in json_config["keys"]:
                 self.Keys.append(ConfigTableColumn( \
                     super().get_json_conf_val(c, "column", "")))
-   
+
 class ConfigBase():
     '''
     Base class for sync objects that require access to user-supplied configuration
     '''
-    def __init__(self, context:SparkSession, spark_utils, config_path:str, force_reload_config:bool = False):
+    def __init__(self, context:SparkSession, user_config, gcp_credential:str):
+        """
+        Init method loads the common config base class
+        """
+        self.Context = context
+        self.UserConfig = user_config
+        self.GCPCredential = gcp_credential
+    
+    def read_bq_partition_to_dataframe(self, table:str, partition_filter:str, cache_results:bool=False) -> DataFrame:
+        """
+        Reads a specific partition using the BigQuery spark connector.
+        BigQuery does not support table decorator so the table and partition info 
+        is passed using options
+        """
+        print(f"Filter: {partition_filter}")
+        df = self.Context.read \
+            .format("bigquery") \
+            .option("parentProject", self.UserConfig.ProjectID) \
+            .option("credentials", self.GCPCredential) \
+            .option("viewsEnabled", "true") \
+            .option("materializationDataset", self.UserConfig.Dataset) \
+            .option("table", table) \
+            .option("filter", partition_filter) \
+            .load()
+        
+        if cache_results:
+            df.cache()
+        
+        return df
+
+    def read_bq_to_dataframe(self, query:str, cache_results:bool=False) -> DataFrame:
+        """
+        Reads a BigQuery table using the BigQuery spark connector
+        """
+        df = self.Context.read \
+            .format("bigquery") \
+            .option("parentProject", self.UserConfig.ProjectID) \
+            .option("credentials", self.GCPCredential) \
+            .option("viewsEnabled", "true") \
+            .option("materializationDataset", self.UserConfig.Dataset) \
+            .load(query)
+        
+        if cache_results:
+            df.cache()
+        
+        return df
+
+    def write_lakehouse_table(self, df:DataFrame, lakehouse:str, tbl_nm:str, mode:str=SyncConstants.OVERWRITE):
+        """
+        Write a DataFrame to the lakehouse using the Lakehouse.TableName notation
+        """
+        dest_table = self.UserConfig.get_lakehouse_tablename(lakehouse, tbl_nm)
+
+        df.write \
+            .mode(mode) \
+            .saveAsTable(dest_table)
+
+class SyncBase():
+    '''
+    Base class for sync objects that require access to user-supplied configuration
+    '''
+    def __init__(self, context:SparkSession, config_path:str):
         """
         Init method loads the user JSON config from the supplied path.
         """
         if config_path is None:
             raise Exception("Missing Path to JSON User Config")
 
-        self.__context__ = context
-        self.__spark_utils__ = spark_utils
+        self.Context = context
         self.ConfigPath = config_path
         self.UserConfig = None
         self.GCPCredential = None
+        self.ConfigMD5Hash = None
 
-        self.UserConfig = self.ensure_user_config(force_reload_config)
+        self.UserConfig = self.ensure_user_config()
         self.GCPCredential = self.load_gcp_credential()
+        self.Context.sql(f"USE {self.UserConfig.MetadataLakehouse}")
     
-    @property
-    def Context(self) -> SparkSession:
-        return self.__context__
-    
-    @property
-    def SparkUtils(self):
-        return self.__spark_utils__
-    
-    def ensure_user_config(self, reload_config:bool) -> ConfigDataset:
+    def ensure_user_config(self) -> ConfigDataset:
         """
         Load the user JSON config if it hasn't been loaded or 
         returns the local user config as an ConfigDataset object
         """
-        if (self.UserConfig is None or reload_config) and self.ConfigPath is not None:
-            config = self.load_user_config(self.ConfigPath, reload_config)
+        if self.UserConfig is None and self.ConfigPath is not None:
+            config = self.load_user_config(self.ConfigPath)
 
             cfg = ConfigDataset(config)
 
@@ -528,28 +599,72 @@ class ConfigBase():
         else:
             return self.UserConfig
     
-    def load_user_config(self, config_path:str, reload_config:bool)->str:
+    def generate_md5_file_hash(self, file_path:str):
+        """
+        Generates a md5 hash for a file. Used to detect user-config changes to trigger configuration reloads
+        """
+        if not os.path.exists(file_path):
+            raise Exception("MD5 File Hash Failed: File path provided does not exists.")
+
+        md5 = hashlib.md5()
+        BUF_SIZE = 65536  # 64KB
+
+        with open(file_path, 'rb') as f:
+            while True:
+                data = f.read(BUF_SIZE)
+                if not data:
+                    break
+                md5.update(data)
+
+        return md5.hexdigest()
+    
+    def get_current_config_hash(self, config_df:DataFrame) -> str:
+        if not self.ConfigMD5Hash:
+            cfg = [c for c in config_df.collect()]
+
+            if cfg:
+                self.ConfigMD5Hash = cfg[0]["md5_file_hash"]
+        
+        return self.ConfigMD5Hash
+
+    def load_user_config(self, config_path:str)->str:
         """
         If the spark dataframe is not cached, loads the user config JSON to a dataframe,
         caches it, creates a temporary session view and then returns a JSON object
         """
         config_df = None
 
-        if not self.Context.catalog.tableExists("user_config_json") or reload_config:
-            if not os.path.exists(f"{config_path}"):
-                raise Exception("JSON User Config does not exists at the path supplied")
-
-            df_schema = spark.read.json(spark.sparkContext.parallelize([SyncConstants.CONFIG_JSON_TEMPLATE]))
-
-            cfg_json = Path(f"{config_path}").read_text()
-
-            config_df = self.Context.read.schema(df_schema.schema).json(self.Context.sparkContext.parallelize([cfg_json]))
-            config_df.createOrReplaceTempView("user_config_json")
-            config_df.cache()
+        if not self.Context.catalog.tableExists("user_config_json"):
+            config_df = self.load_user_config_from_json(config_path)
         else:
             config_df = self.Context.table("user_config_json")
+
+            file_hash = self.generate_md5_file_hash(config_path)
+            current_hash = self.get_current_config_hash(config_df)
+
+            if file_hash != current_hash:
+                config_df = self.load_user_config_from_json(config_path)
             
         return json.loads(config_df.toJSON().first())
+
+    def load_user_config_from_json(self, config_path:str) -> DataFrame:
+        """
+        Loads and caches the user config json file
+        """
+        if not os.path.exists(config_path):
+            raise Exception("JSON User Config does not exists at the path supplied")
+
+        self.ConfigMD5Hash = self.generate_md5_file_hash(config_path)
+        df_schema = spark.read.json(spark.sparkContext.parallelize([SyncConstants.CONFIG_JSON_TEMPLATE]))
+
+        cfg_json = Path(config_path).read_text()
+
+        config_df = self.Context.read.schema(df_schema.schema).json(self.Context.sparkContext.parallelize([cfg_json]))
+        config_df = config_df.withColumn("md5_file_hash", lit(self.ConfigMD5Hash))
+        config_df.createOrReplaceTempView("user_config_json")
+        config_df.cache()
+
+        return config_df
 
     def validate_user_config(self, cfg:ConfigDataset) -> bool:
         """
@@ -653,141 +768,3 @@ class ConfigBase():
             return b64.b64encode(b64.b64decode(sb_bytes)) == sb_bytes
         except Exception as e:
             return False
-
-    def read_bq_partition_to_dataframe(self, table:str, partition_filter:str, cache_results:bool=False) -> DataFrame:
-        """
-        Reads a specific partition using the BigQuery spark connector.
-        BigQuery does not support table decorator so the table and partition info 
-        is passed using options
-        """
-        df = self.Context.read \
-            .format("bigquery") \
-            .option("parentProject", self.UserConfig.ProjectID) \
-            .option("credentials", self.GCPCredential) \
-            .option("viewsEnabled", "true") \
-            .option("materializationDataset", self.UserConfig.Dataset) \
-            .option("table", table) \
-            .option("filter", partition_filter) \
-            .load()
-        
-        if cache_results:
-            df.cache()
-        
-        return df
-
-    def read_bq_to_dataframe(self, query:str, cache_results:bool=False) -> DataFrame:
-        """
-        Reads a BigQuery table using the BigQuery spark connector
-        """
-        df = self.Context.read \
-            .format("bigquery") \
-            .option("parentProject", self.UserConfig.ProjectID) \
-            .option("credentials", self.GCPCredential) \
-            .option("viewsEnabled", "true") \
-            .option("materializationDataset", self.UserConfig.Dataset) \
-            .load(query)
-        
-        if cache_results:
-            df.cache()
-        
-        return df
-
-    def write_lakehouse_table(self, df:DataFrame, lakehouse:str, tbl_nm:str, mode:str=SyncConstants.OVERWRITE):
-        """
-        Write a DataFrame to the lakehouse using the Lakehouse.TableName notation
-        """
-        dest_table = self.UserConfig.get_lakehouse_tablename(lakehouse, tbl_nm)
-
-        df.write \
-            .mode(mode) \
-            .saveAsTable(dest_table)
-    
-    def create_infosys_proxy_view(self, trgt:str, refresh:bool = False):
-        """
-        Creates a covering temporary view over top of the Big Query metadata tables
-        """
-        clean_nm = trgt.replace(".", "_")
-        vw_nm = f"BQ_{clean_nm}"
-
-        if not self.Context.catalog.tableExists(vw_nm) or refresh:
-            tbl = self.UserConfig.flatten_3part_tablename(clean_nm)
-            lakehouse_tbl = self.UserConfig.get_lakehouse_tablename(self.UserConfig.MetadataLakehouse, tbl)
-
-            sql = f"""
-            CREATE OR REPLACE TEMPORARY VIEW {vw_nm}
-            AS
-            SELECT *
-            FROM {lakehouse_tbl}
-            """
-            self.Context.sql(sql)
-
-    def create_userconfig_tables_proxy_view(self):
-        """
-        Explodes the User Config table configuration into a temporary view
-        """
-        sql = """
-            CREATE OR REPLACE TEMPORARY VIEW user_config_tables
-            AS
-            SELECT
-                project_id, 
-                dataset, 
-                tbl.table_name,
-                tbl.enabled,tbl.load_priority,tbl.source_query,
-                tbl.load_strategy,tbl.load_type,tbl.interval,
-                tbl.watermark.column as watermark_column,
-                tbl.partitioned.enabled as partition_enabled,
-                tbl.partitioned.type as partition_type,
-                tbl.partitioned.column as partition_column,
-                tbl.partitioned.partition_grain,
-                tbl.lakehouse_target.lakehouse,
-                tbl.lakehouse_target.table_name AS lakehouse_target_table,
-                tbl.keys,
-                tbl.enforce_partition_expiration AS enforce_partition_expiration,
-                tbl.allow_schema_evoluton AS allow_schema_evoluton,
-                tbl.table_maintenance.enabled AS table_maintenance_enabled,
-                tbl.table_maintenance.interval AS table_maintenance_interval,
-                tbl.table_options
-            FROM (
-                SELECT 
-                    gcp_credentials.project_id as project_id,
-                    gcp_credentials.dataset as dataset, 
-                    EXPLODE(tables) AS tbl 
-                FROM user_config_json)
-        """
-        self.Context.sql (sql)
-
-    def create_userconfig_tables_cols_proxy_view(self):
-        """
-        Explodes the User Config table primary keys into a temporary view
-        """
-        sql = """
-            CREATE OR REPLACE TEMPORARY VIEW user_config_table_keys
-            AS
-            SELECT
-                project_id, dataset, table_name, pkeys.column
-            FROM (
-                SELECT
-                    project_id, dataset, tbl.table_name, EXPLODE(tbl.keys) AS pkeys
-                FROM (SELECT gcp_credentials.project_id as project_id,
-                    gcp_credentials.dataset as dataset, 
-                    EXPLODE(tables) AS tbl FROM user_config_json)
-            )
-        """
-        self.Context.sql(sql)
-
-    def create_proxy_views(self, refresh:bool = False):
-        """
-        Create the user config and covering BQ information schema views
-        """
-        if not self.Context.catalog.tableExists("user_config_tables") or refresh:
-            self.create_userconfig_tables_proxy_view()
-        
-        if not self.Context.catalog.tableExists("user_config_table_keys") or refresh:
-            self.create_userconfig_tables_cols_proxy_view()
-
-        self.create_infosys_proxy_view(SyncConstants.INFORMATION_SCHEMA_TABLES, refresh)
-        self.create_infosys_proxy_view(SyncConstants.INFORMATION_SCHEMA_PARTITIONS, refresh)
-        self.create_infosys_proxy_view(SyncConstants.INFORMATION_SCHEMA_COLUMNS, refresh)
-        self.create_infosys_proxy_view(SyncConstants.INFORMATION_SCHEMA_TABLE_CONSTRAINTS, refresh)
-        self.create_infosys_proxy_view(SyncConstants.INFORMATION_SCHEMA_KEY_COLUMN_USAGE, refresh)
-        self.create_infosys_proxy_view(SyncConstants.INFORMATION_SCHEMA_TABLE_OPTIONS, refresh)
