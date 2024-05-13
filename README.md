@@ -6,6 +6,29 @@ This project is provided as an accelerator to help synchronize or migrate data f
  - BigQuery customers who wish to continue to leverage their existing data estate while optimizing their PowerBI experience and reducing overall analytics TCO
  - BigQuery customers who wish to migrate all or part of their data estate to Microsoft Fabric
 
+# Getting Started
+
+The accelerator includes an automated installer that can set-up your Fabric workspace and install all requried dependencies automatically. To use the installer:
+1. Download the [https://github.com/microsoft/FabricBQSync/blob/main/Notebooks/Installer.ipynb][Installer Notebook]
+2. Import the [Installer Notebook] into your Fabric Workspace
+3. Attach the [Installer Notebook] to a lakehouse within the Workspace
+4. Upload your GCP Service Account credential json file to OneLake
+5. Update the configuration parameters:
+   - <code>metadata_lakehouse</code> - name of the lakehouse used to drive the BQ Sync process
+   - <code>target_lakehouse</code> - name of the lakehouse where the BQ Sync data will be landed
+   - <code>gcp_project_id</code> - the GCP billing project id that contains the in-scope dataset
+   - <code>gcp_dataset_id</code> - the target BQ dataset name/id
+   - <code>gcp_credential_path</code> - the File API Path to your JSON credential file (Example: <code>/lakehouse/default/Files/my-credential-file.json"</code>)
+6. Run the [Installer Notebook] notebook
+   
+The installer performs the following actions:
+ - Creates the required lakehouses if they do not exists
+ - Creates the metadata tables and required metadata
+ - Downloads the correct version of your BQ Spark connector based on your configured spark runtime
+ - Downloads the BQ Sync python package
+ - Creates the a default user configuration file based on your config parameters
+ - Installs a fully configured and ready to run BQ-Sync-Notebook into your workspace
+
 # Project Overview
 
 For many of our customers, mirroring capabilities in Fabric are one of the most exciting features of the platform. While Fabric currently supports a growing number of different mirroring sources, BigQuery is not yet supported. This current gap in capabilities is the foundation of this accelerator.
@@ -58,8 +81,6 @@ Regardless of the approach used, the synchronization process follows these steps
 -	Collects and stores telemetry about the synchronization process for visibility and auditability.
 
 Once the data is synchronized to the Fabric Lakehouse it is immediately available for downstream consumption in PowerBI and by any other compute engines capable of talking directly to OneLake.
-
-
 
 # Contributing
 
