@@ -6,6 +6,7 @@ from typing import Tuple
 from queue import PriorityQueue
 from threading import Thread, Lock
 import uuid
+import traceback
 
 from FabricSync.BQ.Config import *
 from FabricSync.DeltaTableUtility import *
@@ -23,7 +24,6 @@ class ConfigMetadataLoader(ConfigBase):
         Calls the parent init to load the user config JSON file
         """        
         super().__init__(context, user_config, gcp_credential)
-        self.create_proxy_views()
     
     def create_autodetect_view(self):
         """
@@ -211,6 +211,7 @@ class ConfigMetadataLoader(ConfigBase):
         3. COLUMNS
         4. TABLE_CONSTRAINTS
         5. KEY_COLUMN_USAGE
+        5. TABLE_OPTIONS
         """
         self.sync_bq_information_schema_tables()
         self.sync_bq_information_schema_table_dependent(SyncConstants.INFORMATION_SCHEMA_PARTITIONS)
@@ -218,6 +219,8 @@ class ConfigMetadataLoader(ConfigBase):
         self.sync_bq_information_schema_table_dependent(SyncConstants.INFORMATION_SCHEMA_TABLE_CONSTRAINTS)
         self.sync_bq_information_schema_table_dependent(SyncConstants.INFORMATION_SCHEMA_KEY_COLUMN_USAGE)
         self.sync_bq_information_schema_table_dependent(SyncConstants.INFORMATION_SCHEMA_TABLE_OPTIONS)
+
+        self.create_proxy_views()
 
     def create_infosys_proxy_view(self, trgt:str):
         """
@@ -254,6 +257,8 @@ class ConfigMetadataLoader(ConfigBase):
                 tbl.partitioned.type as partition_type,
                 tbl.partitioned.column as partition_column,
                 tbl.partitioned.partition_grain,
+                tbl.partitioned.partition_data_type,
+                tbl.partitioned.partition_range,
                 tbl.lakehouse_target.lakehouse,
                 tbl.lakehouse_target.table_name AS lakehouse_target_table,
                 tbl.keys,
@@ -419,12 +424,37 @@ class Scheduler(ConfigBase):
         """
         super().__init__(context, user_config, gcp_credential)
 
-    def build_schedule(self, schedule_type:str) -> str:
-        group_schedule_id = uuid.uuid4()
+    def get_current_schedule(self, schedule_type:str) -> str:
+        sql = f"""
+        SELECT group_schedule_id FROM bq_sync_schedule
+        WHERE project_id = '{self.UserConfig.ProjectID}'
+        AND dataset = '{self.UserConfig.Dataset}'
+        AND schedule_type = '{schedule_type}'
+        """
+        df = self.Context.sql(sql)
 
+        schedule = [s["group_schedule_id"] for s in df.collect()]
+        schedule_id = None
+
+        if schedule:
+            schedule_id = schedule[0]
+    
+        return schedule_id
+    
+    def build_schedule(self, schedule_type:str) -> str:
+        schedule_id = self.get_current_schedule(schedule_type)
+
+        if not schedule_id:
+            schedule_id = self.build_new_schedule(schedule_type)
+        
+        return schedule_id
+
+    def build_new_schedule(self, schedule_type:str) -> str:
         """
         Process responsible for creating and saving the sync schedule
         """
+        group_schedule_id = uuid.uuid4()
+
         sql = f"""
         WITH new_schedule AS ( 
             SELECT '{group_schedule_id}' AS group_schedule_id, CURRENT_TIMESTAMP() as scheduled
@@ -463,7 +493,8 @@ class Scheduler(ConfigBase):
                 c.project_id= s.project_id AND
                 c.dataset = s.dataset AND
                 c.table_name = s.table_name AND
-                s.status = 'SCHEDULED'
+                s.schedule_type = '{schedule_type}' AND
+                s.status = 'SCHEDULED' 
             LEFT JOIN last_bq_tbl_updates b ON
                 c.project_id= b.table_catalog AND
                 c.dataset = b.table_schema AND
@@ -496,6 +527,25 @@ class BQScheduleLoader(ConfigBase):
         Calls parent init to load User Config from JSON file
         """
         super().__init__(context, user_config, gcp_credential)
+        self._SyncTableIndex:list[str] = []
+        self._TableIndexLock = Lock()
+
+    def appendTableIndex(self, table:str):
+        """
+        Thread-safe list of sync'd tables
+        """
+        with self._TableIndexLock:
+            if not table in self._SyncTableIndex:
+                self._SyncTableIndex.append(table)
+    
+    def isTabledSynced(self, table:str) -> bool:
+        """
+        Thread-safe list exists for sync'd tables
+        """
+        with self._TableIndexLock:
+            exists = (table in self._SyncTableIndex)
+        
+        return exists
 
     def save_schedule_telemetry(self, schedule:SyncSchedule):
         """
@@ -682,7 +732,6 @@ class BQScheduleLoader(ConfigBase):
         return datetime.strptime(partition_id, dt_format)
 
     def create_fabric_partition_proxy_cols(self, df:DataFrame, partition:str, partition_grain:str, proxy_cols:list[str]) -> DataFrame:  
-        print(f"partition:{partition}")
         for c in proxy_cols:
             match c:
                 case "HOUR":
@@ -744,11 +793,11 @@ class BQScheduleLoader(ConfigBase):
         return df_bq
 
     def get_partition_range_predicate(self, schedule:SyncSchedule) -> str:
-        partition_range = self.get_bq_range_map(tbl_ranges)
+        partition_range = self.get_bq_range_map(schedule.PartitionRange)
         r = [x for x in partition_range if str(x[1]) == schedule.PartitionId]
 
         if not r:
-            raise Exception(f"Unable to match range partition id {partition_id} to range map.")
+            raise Exception(f"Unable to match range partition id {schedule.PartitionId} to range map.")
 
         return f"{schedule.PartitionColumn} >= {r[0][1]} AND {schedule.PartitionColumn} < {r[0][2]}"
 
@@ -816,13 +865,12 @@ class BQScheduleLoader(ConfigBase):
         """
         print("{0} {1}...".format(schedule.SummaryLoadType, schedule.TableName))
 
-        if self.Context.catalog.tableExists(schedule.LakehouseTableName):
+        if not schedule.InitialLoad and self.Context.catalog.tableExists(schedule.LakehouseTableName):
             table_maint = DeltaTableMaintenance(self.Context, schedule.LakehouseTableName)
         else:
             table_maint = None
 
         if schedule.IsTimePartitionedStrategy and schedule.PartitionId is not None:
-            print("Load from BQ by time-based partition...")
             part_format = self.get_bq_partition_id_format(schedule.PartitionGrain)
 
             if schedule.PartitionDataType == SyncConstants.TIMESTAMP:                  
@@ -831,12 +879,10 @@ class BQScheduleLoader(ConfigBase):
                 part_filter = f"date_trunc({schedule.PartitionColumn}, {schedule.PartitionGrain}) = PARSE_DATETIME('{part_format}', '{schedule.PartitionId}')"
 
             df_bq = self.read_bq_partition_to_dataframe(schedule.BQTableName, part_filter)
-        elif schedule.LoadStrategy == SyncConstants.PARTITION and schedule.PartitionType == SyncConstants.RANGE:
-            print("Load from BQ by range partition...")
+        elif schedule.IsRangePartitioned:
             part_filter = self.get_partition_range_predicate(schedule)
             df_bq = self.read_bq_partition_to_dataframe(schedule.BQTableName, part_filter)
         else:
-            print("Load for BQ by table or query...")
             src = schedule.BQTableName     
 
             if schedule.SourceQuery != SyncConstants.EMPTY_STRING:
@@ -845,14 +891,12 @@ class BQScheduleLoader(ConfigBase):
             df_bq = self.read_bq_to_dataframe(src)
 
         if schedule.LoadStrategy == SyncConstants.WATERMARK and not schedule.InitialLoad:
-            print("Use watermark for differential load...")
             predicate = f"{schedule.PrimaryKey} > '{schedule.MaxWatermark}'"
             df_bq.where(predicate)
 
         df_bq.cache()
 
         if schedule.IsPartitioned:
-            print('Resolving Fabric partitioning...')
             if schedule.PartitionType == SyncConstants.TIME:
                 proxy_cols = self.get_fabric_partition_proxy_cols(schedule.PartitionGrain)
                 schedule.FabricPartitionColumns = self.get_fabric_partition_cols(schedule.PartitionColumn, proxy_cols)
@@ -868,24 +912,33 @@ class BQScheduleLoader(ConfigBase):
         write_config = { **schedule.TableOptions }
 
         #Schema Evolution
-        if schedule.AllowSchemaEvolution and table_maint:
-            table_maint.evolve_schema(df_bq)
-            write_config["mergeSchema"] = SyncConstants.TRUE
+        if not schedule.InitialLoad:
+            if schedule.AllowSchemaEvolution and table_maint:
+                table_maint.evolve_schema(df_bq)
+                write_config["mergeSchema"] = SyncConstants.TRUE
 
         if not schedule.LoadType == SyncConstants.MERGE or schedule.InitialLoad:
-            if (schedule.IsTimePartitionedStrategy and schedule.PartitionId is not None) or \
-                (schedule.LoadStrategy == SyncConstants.PARTITION and schedule.PartitionType == SyncConstants.RANGE):
-                print(f"Writing {schedule.TableName}${schedule.PartitionId} partition to Lakehouse...")
+            if (schedule.IsTimePartitionedStrategy and schedule.PartitionId is not None) or schedule.IsRangePartitioned:
+                has_lock = False
 
-                write_config["partitionOverwriteMode"] = SyncConstants.DYNAMIC
+                if schedule.InitialLoad:
+                    has_lock = True
+                    lock.acquire()
+                else:
+                    write_config["partitionOverwriteMode"] = SyncConstants.DYNAMIC
+                
+                try:
+                    df_bq.write \
+                        .partitionBy(schedule.FabricPartitionColumns) \
+                        .mode(SyncConstants.OVERWRITE) \
+                        .options(**write_config) \
+                        .saveAsTable(schedule.LakehouseTableName)
+                finally:
+                    self.appendTableIndex(schedule.LakehouseTableName)
 
-                df_bq.write \
-                    .partitionBy(schedule.FabricPartitionColumns) \
-                    .mode(SyncConstants.OVERWRITE) \
-                    .options(**write_config) \
-                    .saveAsTable(schedule.LakehouseTableName)
+                    if has_lock:
+                        lock.release()
             else:
-                print("Writing dataframe to Lakehouse...")
                 if schedule.FabricPartitionColumns is None:
                     df_bq.write \
                         .mode(schedule.Mode) \
@@ -897,9 +950,11 @@ class BQScheduleLoader(ConfigBase):
                         .mode(schedule.Mode) \
                         .options( **write_config) \
                         .saveAsTable(schedule.LakehouseTableName)
+                
+                self.appendTableIndex(schedule.LakehouseTableName)
         else:
-            print("Merging dataframe to Lakehouse...")
             schedule = self.merge_table(schedule, df_bq)
+            self.appendTableIndex(schedule.LakehouseTableName)
 
         if not table_maint:
             table_maint = DeltaTableMaintenance(self.Context, schedule.LakehouseTableName)
@@ -1033,6 +1088,7 @@ class BQScheduleLoader(ConfigBase):
         """
         Run the schedule activities sequentially based on priority order
         """
+        print(f"Sequential schedule sync starting...")
         df_schedule = self.get_schedule(group_schedule_id)
 
         for row in df_schedule.collect():
@@ -1041,13 +1097,9 @@ class BQScheduleLoader(ConfigBase):
             self.save_schedule_telemetry(schedule)  
 
         self.process_load_group_telemetry(group_schedule_id)
+        print(f"Sequential schedule sync complete...")
     
     def schedule_sync(self, schedule:SyncSchedule, lock:Lock) -> SyncSchedule:
-        if schedule.PartitionId is None:
-            print(f"Processing table {schedule.TableName}...")
-        else:
-            print(f"Processing partition {schedule.TableName}${schedule.PartitionId}...")
-
         schedule = self.sync_bq_table(schedule, lock)
         self.save_schedule_telemetry(schedule) 
 
@@ -1082,7 +1134,7 @@ class BQScheduleLoader(ConfigBase):
         - Utilitizes the priority to define load groups to respect priority
         - Parallelism is control from the User Config JSON file
         """
-        print(f"Starting async schedule with parallelism of {self.UserConfig.Async.Parallelism}...")
+        print(f"Async schedule started with parallelism of {self.UserConfig.Async.Parallelism}...")
         workQueue = PriorityQueue()
 
         schedule = self.get_schedule(group_schedule_id)
@@ -1090,7 +1142,6 @@ class BQScheduleLoader(ConfigBase):
         load_grps = [i["priority"] for i in schedule.select("priority").distinct().orderBy("priority").collect()]
 
         if load_grps:
-            print(f"{len(load_grps)} Load Groups to process...")
             for grp in load_grps:
                 grp_nm = "LOAD GROUP {0}".format(grp)
                 grp_df = schedule.where(f"priority = '{grp}'")
@@ -1109,6 +1160,8 @@ class BQScheduleLoader(ConfigBase):
                     self.process_queue(workQueue, self.task_runner, self.schedule_sync)
 
             self.process_load_group_telemetry(group_schedule_id)
+       
+        print(f"Async schedule sync complete...")
 
 class BQSync(SyncBase):
     def __init__(self, context:SparkSession, config_path:str):
@@ -1127,6 +1180,8 @@ class BQSync(SyncBase):
     def build_schedule(self, sync_metadata:bool = True, schedule_type:str = SyncConstants.AUTO) -> str:
         if sync_metadata:
             self.sync_metadata()
+        else:
+            self.MetadataLoader.create_proxy_views()
 
         return self.Scheduler.build_schedule(schedule_type)
     

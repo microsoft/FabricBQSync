@@ -104,7 +104,7 @@ class SyncConstants:
                 "type":"",
                 "column":"",
                 "partition_grain":"",
-                "partition_column_data_type":"",
+                "partition_data_type":"",
                 "partition_range":""
             },
             "watermark":{
@@ -205,7 +205,7 @@ class SyncSchedule:
         """
         Summarized the load strategy based on context
         """
-        if self.InitialLoad:
+        if self.InitialLoad and not self.IsTimeIngestionPartitioned and not self.IsRangePartitioned:
             return SyncConstants.INITIAL_FULL_OVERWRITE
         else:
             return "{0}_{1}".format(self.LoadStrategy, self.LoadType)
@@ -261,6 +261,13 @@ class SyncSchedule:
         """
         return self.LoadStrategy == SyncConstants.TIME_INGESTION
 
+    @property
+    def IsRangePartitioned(self) -> bool:
+        """
+        Bol indicator for range partitioned tables
+        """
+        return self.LoadStrategy == SyncConstants.PARTITION and self.PartitionType == SyncConstants.RANGE
+    
     @property
     def IsTimePartitionedStrategy(self) -> bool:
          """
@@ -519,7 +526,6 @@ class ConfigBase():
         BigQuery does not support table decorator so the table and partition info 
         is passed using options
         """
-        print(f"Filter: {partition_filter}")
         df = self.Context.read \
             .format("bigquery") \
             .option("parentProject", self.UserConfig.ProjectID) \
@@ -655,7 +661,7 @@ class SyncBase():
             raise Exception("JSON User Config does not exists at the path supplied")
 
         self.ConfigMD5Hash = self.generate_md5_file_hash(config_path)
-        df_schema = spark.read.json(spark.sparkContext.parallelize([SyncConstants.CONFIG_JSON_TEMPLATE]))
+        df_schema = self.Context.read.json(self.Context.sparkContext.parallelize([SyncConstants.CONFIG_JSON_TEMPLATE]))
 
         cfg_json = Path(config_path).read_text()
 
