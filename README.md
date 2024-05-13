@@ -9,7 +9,7 @@ This project is provided as an accelerator to help synchronize or migrate data f
 # Getting Started
 
 The accelerator includes an automated installer that can set-up your Fabric workspace and install all requried dependencies automatically. To use the installer:
-1. Download the [https://github.com/microsoft/FabricBQSync/blob/main/Notebooks/Installer.ipynb][Installer Notebook]
+1. Download the [Installer Notebook](https://github.com/microsoft/FabricBQSync/blob/main/Notebooks/Installer.ipynb)
 2. Import the [Installer Notebook] into your Fabric Workspace
 3. Attach the [Installer Notebook] to a lakehouse within the Workspace
 4. Upload your GCP Service Account credential json file to OneLake
