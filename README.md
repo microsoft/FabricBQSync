@@ -10,8 +10,8 @@ This project is provided as an accelerator to help synchronize or migrate data f
 
 The accelerator includes an automated installer that can set-up your Fabric workspace and install all requried dependencies automatically. To use the installer:
 1. Download the [Installer Notebook](https://github.com/microsoft/FabricBQSync/blob/main/Notebooks/Installer.ipynb)
-2. Import the [Installer Notebook] into your Fabric Workspace
-3. Attach the [Installer Notebook] to a lakehouse within the Workspace
+2. Import the installer into your Fabric Workspace
+3. Attach the installer to a lakehouse within the Workspace
 4. Upload your GCP Service Account credential json file to OneLake
 5. Update the configuration parameters:
    - <code>metadata_lakehouse</code> - name of the lakehouse used to drive the BQ Sync process
@@ -19,7 +19,7 @@ The accelerator includes an automated installer that can set-up your Fabric work
    - <code>gcp_project_id</code> - the GCP billing project id that contains the in-scope dataset
    - <code>gcp_dataset_id</code> - the target BQ dataset name/id
    - <code>gcp_credential_path</code> - the File API Path to your JSON credential file (Example: <code>/lakehouse/default/Files/my-credential-file.json"</code>)
-6. Run the [Installer Notebook] notebook
+6. Run the installer notebook
    
 The installer performs the following actions:
  - Creates the required lakehouses if they do not exists
