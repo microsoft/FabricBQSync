@@ -101,6 +101,9 @@ class DeltaStorageInventory:
         for f in delta_df.collect():
             path = f["Name"]
 
+            if "compacted" in path:
+                continue
+
             delta_tbl = os.path.dirname(path).replace("_delta_log", "")
 
             if delta_tbl not in delta_tbls:
