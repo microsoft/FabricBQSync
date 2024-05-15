@@ -147,6 +147,10 @@ class DeltaStorageInventory:
 
         for r in ddf.orderBy("filename").collect():
             file_name = r["filename"]
+
+            if "compacted" in file_name:
+                continue
+
             delta_version = int(Path(file_name).stem)
 
             if "add" in r and r["add"]:
