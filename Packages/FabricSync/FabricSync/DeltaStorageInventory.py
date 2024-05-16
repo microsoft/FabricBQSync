@@ -47,7 +47,8 @@ class DeltaStorageInventory:
         base_definition = [StructField('data_file', StringType(), True), \
             StructField('file_info', StructType([StructField('operation', StringType(), True), \
             StructField('file_size', LongType(), True), StructField('row_count', LongType(), True), \
-            StructField('delta_version', LongType(), True)]), True)]
+            StructField('delta_version', LongType(), True), \
+            StructField('deletionVectorSize', LongType(), True)]), True)]
 
         if not with_table:
             return StructType(base_definition)
@@ -131,6 +132,21 @@ class DeltaStorageInventory:
         self.create_temp_tables()
         self.process_queue(workQueue)
 
+    def get_deletion_vector_bytes(self, data) -> int:
+        deletionVectorBytes = 0
+
+        if "deletionVector" in data:
+            deletionVector = data["deletionVector"]
+
+            if deletionVector:
+                deletionVectorBytes = int(deletionVector["sizeInBytes"])
+        
+        return deletionVectorBytes
+    
+    def get_row_count(self, data) -> int:
+        stats = json.loads(data["stats"])
+        return stats["numRecords"]
+
     def process_delta_log(self, tbl:str):
         started = datetime.today()
         print(f"Starting table {tbl} ...")
@@ -140,7 +156,7 @@ class DeltaStorageInventory:
         else:
             tbl_path = tbl
 
-        ddf = self.session.read.format("json").load(f"{self.storage_prefix}{tbl_path}/_delta_log/*.json")
+        ddf = self.session.read.format("json").load(f"{self.storage_prefix}{tbl_path}/_delta_log/????????????????????.json")
         ddf = ddf.withColumn("filename", input_file_name())
 
         file_analysis = {}
@@ -154,21 +170,29 @@ class DeltaStorageInventory:
             delta_version = int(Path(file_name).stem)
 
             if "add" in r and r["add"]:
-                f = r["add"]["path"]
+                f = r["add"]["path"]                
+                
+                deletionVectorBytes = self.get_deletion_vector_bytes(r["add"])
 
-                if f not in file_analysis:
-                    stats = json.loads(r["add"]["stats"])
-                    file_data = ("ADD", r["add"]["size"], stats["numRecords"], delta_version)
-
+                if f not in file_analysis:   
+                    row_count = self.get_row_count(r["add"])               
+                    file_data = ("ADD", r["add"]["size"], row_count, delta_version, deletionVectorBytes)                    
                     file_analysis[f] = file_data
+                elif deletionVectorBytes > 0:
+                    file_data = list(file_analysis[f])
+                    file_data[4] = deletionVectorBytes
+                    file_analysis[f] = tuple(file_data)
                 
             if "remove" in r and r["remove"]:
                 f = r["remove"]["path"]
+
+                deletionVectorBytes = self.get_deletion_vector_bytes(r["remove"])
 
                 if f in file_analysis and file_analysis[f][0] == "ADD":
                     file_data = list(file_analysis[f])
                     file_data[0] = "REMOVE"
                     file_data[3] = delta_version
+                    file_data[4] = deletionVectorBytes
                     file_analysis[f] = tuple(file_data)
 
         files_schema = self.get_files_schema(False)    

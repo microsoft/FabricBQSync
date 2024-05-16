@@ -139,6 +139,18 @@ class SyncConstants:
             SyncConstants.INFORMATION_SCHEMA_KEY_COLUMN_USAGE, \
             SyncConstants.INFORMATION_SCHEMA_TABLE_OPTIONS]
 
+    def get_sync_temp_views() -> List[str]:
+        return ["bq_information_schema_columns", \
+            "bq_information_schema_key_column_usage", \
+            "bq_information_schema_partitions", \
+            "bq_information_schema_table_constraints", \
+            "bq_information_schema_table_options", \
+            "bq_information_schema_tables", \
+            "bq_table_metadata_autodetect", \
+            "user_config_json", \
+            "user_config_table_keys", \
+            "user_config_tables"]
+
 class SyncSchedule:
     """
     Scheduled configuration object that also is used to track and store telemetry from load process
