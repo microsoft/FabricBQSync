@@ -1,5 +1,6 @@
 from pyspark.sql.functions import *
 from pyspark.sql.types import *
+from pyspark.sql import Row
 from delta.tables import *
 from datetime import datetime, timezone
 from typing import Tuple
@@ -1194,9 +1195,86 @@ class BQSync(SyncBase):
         self.Loader.commit_table_configuration(group_schedule_id)
         self.optimize_metadata_tbls()
     
+    def cleanup_session(self):
+        temp_views = SyncConstants.get_sync_temp_views()
+        list(map(lambda x: self.Context.sql(f"DROP TABLE IF EXISTS {x}"), temp_views))
+
     def optimize_metadata_tbls(self):
         tbls = ["bq_sync_configuration", "bq_sync_schedule", "bq_sync_schedule_telemetry"]
 
         for tbl in tbls:
             table_maint = DeltaTableMaintenance(self.Context, tbl)
             table_maint.optimize_and_vacuum()
+    
+    def generate_user_config_json_from_metadata(self, path:str):
+        bq_tables = self.Context.table(SyncConstants.SQL_TBL_SYNC_CONFIG)
+        bq_tables = bq_tables.filter(col("project_id") == self.UserConfig.ProjectID)
+        bq_tables = bq_tables.filter(col("dataset") == self.UserConfig.Dataset)
+
+        user_cfg = self.build_user_config_json(bq_tables.collect())
+
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(user_cfg, f, ensure_ascii=False, indent=4)
+
+    def build_user_config_json(self, tbls:list) -> str:
+        tables = list(map(lambda x: self.get_table_config_json(x), tbls))
+
+        return {
+            "load_all_tables":self.UserConfig.LoadAllTables,
+            "autodetect":self.UserConfig.Autodetect,
+            "metadata_lakehouse":self.UserConfig.MetadataLakehouse,
+            "target_lakehouse":self.UserConfig.TargetLakehouse,
+            
+            "gcp_credentials":{
+                "project_id":self.UserConfig.GCPCredential.ProjectID,
+                "dataset":self.UserConfig.GCPCredential.Dataset,
+                "credential":self.UserConfig.GCPCredential.Credential
+            },
+            
+            "async":{
+                "enabled":self.UserConfig.Async.Enabled,
+                "parallelism":self.UserConfig.Async.Parallelism,
+                "cell_timeout":self.UserConfig.Async.CellTimeout,
+                "notebook_timeout":self.UserConfig.Async.NotebookTimeout
+            },        
+            
+            "tables": tables
+        }
+
+    def get_table_keys_config_json(self, pk:list):
+        return [{"column": k} for k in pk]
+
+    def get_table_config_json(self, tbl:Row) -> str:
+        keys = self.get_table_keys_config_json(tbl["primary_keys"])
+
+        return {
+            "priority":tbl["priority"],
+            "table_name":tbl["table_name"],
+            "enabled":tbl["enabled"],
+            "source_query":tbl["source_query"],
+            "enforce_partition_expiration":tbl["enforce_partition_expiration"],
+            "allow_schema_evoluton":tbl["allow_schema_evoluton"],
+            "load_strategy":tbl["load_strategy"],
+            "load_type":tbl["load_type"],
+            "interval":tbl["interval"],
+            "table_maintenance":{
+                "enabled":tbl["table_maintenance_enabled"],
+                "interval":tbl["table_maintenance_interval"]
+            },
+            "keys":keys,
+            "partitioned":{
+                "enabled":tbl["is_partitioned"],
+                "type":tbl["partition_type"],
+                "column":tbl["partition_column"],
+                "partition_grain":tbl["partition_grain"],
+                "partition_data_type":tbl["partition_data_type"],
+                "partition_range":tbl["partition_range"]
+            },
+            "watermark":{
+                "column":tbl["watermark_column"]
+            },
+            "lakehouse_target":{
+                "lakehouse":tbl["lakehouse"],
+                "table_name":tbl["lakehouse_table_name"]
+            }
+        }
