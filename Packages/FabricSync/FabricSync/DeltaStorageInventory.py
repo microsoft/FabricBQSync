@@ -10,10 +10,14 @@ from uuid import uuid4
 from pathlib import Path
 
 class DeltaStorageInventory:
+    temp_tables = ["tmpFiles", "tmpHistory"]
     inventory_tables = ["delta_tables","delta_table_files","delta_table_partitions","delta_table_history","delta_table_snapshot"]
 
     def __init__(   self, session:SparkSession, target_lakehouse:str, inventory_date:str = None, \
                     container:str = None, storage_prefix:str = None, parallelism:int = 5, track_history:bool = False):
+        self.sc = session.sparkContext
+        self.fs = self.sc._jvm.org.apache.hadoop.fs.FileSystem.get(self.sc._jsc.hadoopConfiguration())
+
         self.session = session
         self.target_lakehouse = target_lakehouse
         self.inventory_date = inventory_date
@@ -89,9 +93,18 @@ class DeltaStorageInventory:
         df = self.session.createDataFrame([], history_schema)
         df.write.mode("OVERWRITE").saveAsTable(f"{self.target_lakehouse}.tmpHistory")
 
+    def clear_temp_tables(self):
+        list(map(lambda x: self.session.sql(f"DROP TABLE IF EXISTS {self.target_lakehouse}.{x}"), self.temp_tables))
+
     def clear_delta_inventory_schema(self):
-        for tbl in self.inventory_tables:
-            self.session.sql(f"DROP TABLE IF EXISTS {self.target_lakehouse}.{tbl}")
+        list(map(lambda x: self.session.sql(f"DROP TABLE IF EXISTS {self.target_lakehouse}.{x}"), self.inventory_tables))
+
+    def path_exists(self, path):
+        return self.fs.exists(self.sc._jvm.org.apache.hadoop.fs.Path(path))
+
+    def check_tbl_exists(self, delta_tbl:str) -> bool:
+        tbl_path = self.get_clean_tbl_path(delta_tbl)
+        return self.path_exists(tbl_path)
 
     def get_delta_tables_from_inventory(self):
         delta_df = self.session.table("_storage_inventory") \
@@ -100,13 +113,13 @@ class DeltaStorageInventory:
         delta_tbls = {}
 
         for f in delta_df.collect():
-            path = f["Name"]
-
-            if "compacted" in path:
-                continue
+            path = f["Name"]            
 
             delta_tbl = os.path.dirname(path).replace("_delta_log", "")
 
+            if "compacted" in path or not self.check_tbl_exists(delta_tbl):
+                continue
+            
             if delta_tbl not in delta_tbls:
                 delta_tbls[delta_tbl] = []
             
@@ -147,16 +160,25 @@ class DeltaStorageInventory:
         stats = json.loads(data["stats"])
         return stats["numRecords"]
 
-    def process_delta_log(self, tbl:str):
-        started = datetime.today()
-        print(f"Starting table {tbl} ...")
-        
+    def get_clean_tbl_path(self, tbl:str) -> str:
         if self.container is not None:
             tbl_path = tbl.replace(f"{self.container}/", "", 1)
         else:
             tbl_path = tbl
+        
+        return f"{self.storage_prefix}{tbl_path}"
 
-        ddf = self.session.read.format("json").load(f"{self.storage_prefix}{tbl_path}/_delta_log/????????????????????.json")
+    def process_delta_log(self, tbl:str):
+        tbl_path = self.get_clean_tbl_path(tbl)
+
+        if not self.path_exists(tbl_path):
+            print(f"SKIPPED - {tbl} path does not exists")
+            return
+
+        started = datetime.today()
+        print(f"Starting table {tbl} ...")
+
+        ddf = self.session.read.format("json").load(f"{tbl_path}/_delta_log/????????????????????.json")
         ddf = ddf.withColumn("filename", input_file_name())
 
         file_analysis = {}
@@ -200,7 +222,7 @@ class DeltaStorageInventory:
             .withColumn("delta_table", lit(tbl)) 
         f.write.mode("APPEND").saveAsTable(f"{self.target_lakehouse}.tmpFiles")        
 
-        deltaTbl = DeltaTable.forPath(self.session, f"{self.storage_prefix}{tbl_path}")
+        deltaTbl = DeltaTable.forPath(self.session, f"{tbl_path}")
         h = deltaTbl.history() \
             .withColumn("delta_table", lit(tbl))
         h.write.mode("APPEND").saveAsTable(f"{self.target_lakehouse}.tmpHistory")
@@ -210,13 +232,14 @@ class DeltaStorageInventory:
 
         print(f"Completed table {tbl} in {(runtime.total_seconds()/60):.4f} mins ...")
         
-
     def task_runner(self, work_function, workQueue:Queue):
         while not workQueue.empty():
             tbl = workQueue.get()
     
             try:
                 work_function(tbl)
+            except Exception as e:
+                print(f"ERROR loading table {tbl}: {e}")
             finally:
                 workQueue.task_done()
 
@@ -339,6 +362,8 @@ class DeltaStorageInventory:
         started = datetime.today()
 
         print(f"Starting Delta Inventory for Rule: {rule} ...")
+        self.clear_temp_tables()
+
         if not self.track_history:
             print("Historical data disabled, resetting repository ...")
             self.clear_delta_inventory_schema()
@@ -374,8 +399,7 @@ class DeltaStorageInventory:
         print(f"Saving inventory [snapshot] ...")
         self.save_dataframe(snapshot, f"{self.target_lakehouse}.delta_table_snapshot")
 
-        self.session.sql(f"DROP TABLE IF EXISTS {self.target_lakehouse}.tmpFiles")
-        self.session.sql(f"DROP TABLE IF EXISTS {self.target_lakehouse}.tmpHistory")
+        self.clear_temp_tables()
 
         completed = datetime.today()
         runtime = completed - started
