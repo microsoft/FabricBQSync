@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS bq_sync_configuration
     watermark_column STRING,
     autodetect BOOLEAN,
     enforce_partition_expiration BOOLEAN,
-    allow_schema_evoluton BOOLEAN,
+    allow_schema_evolution BOOLEAN,
     table_maintenance_enabled BOOLEAN,
     table_maintenance_interval STRING,
     table_options ARRAY<STRUCT<key:STRING,value:STRING>>,
