@@ -212,6 +212,9 @@ class SetupUtil():
         for notebook in git_notebooks:
             nb_data = self.download_encoded_to_string(notebook["url"])
 
+            nb_data = nb_data.replace("<<<FABRIC_WORKSPACE_ID>>>", workspace_id)
+            nb_data = nb_data.replace("<<<METADATA_LAKEHOUSE_ID>>>", metadata_lakehouse_id)
+            nb_data = nb_data.replace("<<<METADATA_LAKEHOUSE_NAME>>>", data["metadata_lakehouse"])
             nb_data = nb_data.replace("<<<PATH_SPARK_BQ_JAR>>>", spark_jar_path)
             nb_data = nb_data.replace("<<<PATH_TO_BQ_SYNC_PACKAGE>>>", wheel_path)
             nb_data = nb_data.replace("<<<PATH_TO_USER_CONFIG>>>", user_config_file_path)
