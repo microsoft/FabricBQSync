@@ -264,7 +264,7 @@ class ConfigMetadataLoader(ConfigBase):
                 tbl.lakehouse_target.table_name AS lakehouse_target_table,
                 tbl.keys,
                 tbl.enforce_partition_expiration AS enforce_partition_expiration,
-                tbl.allow_schema_evoluton AS allow_schema_evoluton,
+                tbl.allow_schema_evolution AS allow_schema_evolution,
                 tbl.table_maintenance.enabled AS table_maintenance_enabled,
                 tbl.table_maintenance.interval AS table_maintenance_interval,
                 tbl.table_options
@@ -368,7 +368,7 @@ class ConfigMetadataLoader(ConfigBase):
                 COALESCE(u.watermark_column, a.pk_col, '') AS watermark_column, 
                 d.autodetect,
                 COALESCE(u.enforce_partition_expiration, FALSE) AS enforce_partition_expiration,
-                COALESCE(u.allow_schema_evoluton, FALSE) AS allow_schema_evoluton,
+                COALESCE(u.allow_schema_evolution, FALSE) AS allow_schema_evolution,
                 COALESCE(u.table_maintenance_enabled, FALSE) AS table_maintenance_enabled,
                 COALESCE(u.table_maintenance_interval, 'AUTO') AS table_maintenance_interval,
                 u.table_options,
@@ -399,7 +399,7 @@ class ConfigMetadataLoader(ConfigBase):
                 t.interval = s.interval,
                 t.priority = s.priority,
                 t.enforce_partition_expiration = s.enforce_partition_expiration,
-                t.allow_schema_evoluton = s.allow_schema_evoluton,
+                t.allow_schema_evolution = s.allow_schema_evolution,
                 t.table_maintenance_enabled = s.table_maintenance_enabled,
                 t.table_maintenance_interval = s.table_maintenance_interval,
                 t.table_options = s.table_options,
@@ -431,6 +431,7 @@ class Scheduler(ConfigBase):
         WHERE project_id = '{self.UserConfig.ProjectID}'
         AND dataset = '{self.UserConfig.Dataset}'
         AND schedule_type = '{schedule_type}'
+        AND status != '{SyncConstants.COMPLETE}'
         """
         df = self.Context.sql(sql)
 
@@ -1253,7 +1254,7 @@ class BQSync(SyncBase):
             "enabled":tbl["enabled"],
             "source_query":tbl["source_query"],
             "enforce_partition_expiration":tbl["enforce_partition_expiration"],
-            "allow_schema_evoluton":tbl["allow_schema_evoluton"],
+            "allow_schema_evolution":tbl["allow_schema_evolution"],
             "load_strategy":tbl["load_strategy"],
             "load_type":tbl["load_type"],
             "interval":tbl["interval"],

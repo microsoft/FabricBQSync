@@ -80,7 +80,7 @@ class SyncConstants:
             "enabled":true,
             "source_query":"",
             "enforce_partition_expiration":true,
-            "allow_schema_evoluton":true,
+            "allow_schema_evolution":true,
             "load_strategy":"",
             "load_type":"",
             "interval":"",
@@ -194,7 +194,7 @@ class SyncSchedule:
         self.Lakehouse = row["lakehouse"]
         self.DestinationTableName = row["lakehouse_table_name"]
         self.EnforcePartitionExpiration = row["enforce_partition_expiration"]
-        self.AllowSchemaEvolution = row["allow_schema_evoluton"]
+        self.AllowSchemaEvolution = row["allow_schema_evolution"]
         self.EnableTableMaintenance = row["table_maintenance_enabled"]
         self.TableMaintenanceInterval = row["table_maintenance_interval"]
     
@@ -475,7 +475,7 @@ class ConfigBQTable (JSONConfigObj):
         self.Enabled =  super().get_json_conf_val(json_config, "enabled", True)
         self.EnforcePartitionExpiration = super().get_json_conf_val(json_config, "enforce_partition_expiration", False)
         self.EnableDeletionVectors = super().get_json_conf_val(json_config, "enable_deletion_vectors", False)
-        self.AllowSchemaEvolution = super().get_json_conf_val(json_config, "allow_schema_evoluton", False)
+        self.AllowSchemaEvolution = super().get_json_conf_val(json_config, "allow_schema_evolution", False)
         self.TableOptions:dict[str, str] = {}
 
         if "lakehouse_target" in json_config:
