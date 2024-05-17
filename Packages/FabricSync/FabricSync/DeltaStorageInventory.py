@@ -117,7 +117,7 @@ class DeltaStorageInventory:
 
             delta_tbl = os.path.dirname(path).replace("_delta_log", "")
 
-            if "compacted" in path or not self.check_tbl_exists(delta_tbl):
+            if "compacted" in path:
                 continue
             
             if delta_tbl not in delta_tbls:
