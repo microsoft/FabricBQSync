@@ -168,7 +168,7 @@ class ConfigMetadataLoader(ConfigBase):
         df = self.read_bq_to_dataframe(bql)
 
         if not self.UserConfig.LoadAllTables:
-            filter_list = self.UserConfig.get_table_name_list()
+            filter_list = self.UserConfig.get_table_name_list(True)
             df = df.filter(col("table_name").isin(filter_list))    
 
         self.write_lakehouse_table(df, self.UserConfig.MetadataLakehouse, tbl_nm)
@@ -198,7 +198,7 @@ class ConfigMetadataLoader(ConfigBase):
         df = self.read_bq_to_dataframe(bql)
 
         if not self.UserConfig.LoadAllTables:
-            filter_list = self.UserConfig.get_table_name_list()
+            filter_list = self.UserConfig.get_table_name_list(True)
             df = df.filter(col("table_name").isin(filter_list)) 
 
         self.write_lakehouse_table(df, self.UserConfig.MetadataLakehouse, tbl_nm)
@@ -308,6 +308,11 @@ class ConfigMetadataLoader(ConfigBase):
 
         self.create_autodetect_view()      
 
+    def enforce_load_all(self):
+        if not self.UserConfig.LoadAllTables:
+            sql = "UPDATE bq_sync_configuration SET enabled='FALSE'"
+            self.Context.sql(sql)
+
     def auto_detect_table_profiles(self):
         """
         The autodetect provided the following capabilities:
@@ -320,10 +325,12 @@ class ConfigMetadataLoader(ConfigBase):
                 - Enabling and Disabling the table sync
                 - Changing the table load Priority
                 - Updating the table load Interval
-        """  
+        """
+        self.enforce_load_all()
+        
         sql = f"""
         WITH default_config AS (
-            SELECT autodetect, target_lakehouse FROM user_config_json
+            SELECT COALESCE(autodetect, TRUE) AS autodetect, load_all_tables, target_lakehouse FROM user_config_json
         ),
         pk AS (
             SELECT
@@ -340,7 +347,9 @@ class ConfigMetadataLoader(ConfigBase):
                 a.table_catalog as project_id,
                 a.table_schema as dataset,
                 a.table_name as table_name,
-                COALESCE(u.enabled, TRUE) AS enabled,
+                CASE WHEN d.load_all_tables THEN
+                    COALESCE(u.enabled, TRUE) ELSE
+                    COALESCE(u.enabled, FALSE) END AS enabled,
                 COALESCE(u.lakehouse, d.target_lakehouse) AS lakehouse,
                 COALESCE(u.lakehouse_target_table, a.table_name) AS lakehouse_table_name,
                 COALESCE(u.source_query, '') AS source_query,
