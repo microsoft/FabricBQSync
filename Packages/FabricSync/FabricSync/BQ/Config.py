@@ -370,11 +370,16 @@ class ConfigDataset(JSONConfigObj):
         """
         return self.GCPCredential.Dataset
     
-    def get_table_name_list(self) -> list[str]:
+    def get_table_name_list(self, only_enabled:bool = False) -> list[str]:
         """
         Returns a list of table names from the user configuration
         """
-        return [str(x.TableName) for x in self.Tables]
+        if not only_enabled:
+            tbls = [str(x.TableName) for x in self.Tables]
+        else:
+            tbls = [str(x.TableName) for x in self.Tables if x.Enabled == True]
+
+        return tbls
 
     def get_bq_table_fullname(self, tbl_name:str) -> str:
         """
