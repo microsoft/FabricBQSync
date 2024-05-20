@@ -99,13 +99,6 @@ class DeltaStorageInventory:
     def clear_delta_inventory_schema(self):
         list(map(lambda x: self.session.sql(f"DROP TABLE IF EXISTS {self.target_lakehouse}.{x}"), self.inventory_tables))
 
-    def path_exists(self, path):
-        return self.fs.exists(self.sc._jvm.org.apache.hadoop.fs.Path(path))
-
-    def check_tbl_exists(self, delta_tbl:str) -> bool:
-        tbl_path = self.get_clean_tbl_path(delta_tbl)
-        return self.path_exists(tbl_path)
-
     def get_delta_tables_from_inventory(self):
         delta_df = self.session.table("_storage_inventory") \
             .where(col("Name").like("%_delta_log%.%")) \
@@ -170,10 +163,6 @@ class DeltaStorageInventory:
 
     def process_delta_log(self, tbl:str):
         tbl_path = self.get_clean_tbl_path(tbl)
-
-        if not self.path_exists(tbl_path):
-            print(f"SKIPPED - {tbl} path does not exists")
-            return
 
         started = datetime.today()
         print(f"Starting table {tbl} ...")
