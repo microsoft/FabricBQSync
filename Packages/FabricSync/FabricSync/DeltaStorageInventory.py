@@ -1,5 +1,6 @@
 from pyspark.sql.functions import *
 import os
+import sys
 import json
 from datetime import datetime
 from delta.tables import *
@@ -8,16 +9,15 @@ from threading import Thread
 from pyspark.sql.types import *
 from uuid import uuid4
 from pathlib import Path
+from functools import reduce
 
 class DeltaStorageInventory:
     temp_tables = ["tmpFiles", "tmpHistory"]
     inventory_tables = ["delta_tables","delta_table_files","delta_table_partitions","delta_table_history","delta_table_snapshot"]
 
     def __init__(   self, session:SparkSession, target_lakehouse:str, inventory_date:str = None, \
-                    container:str = None, storage_prefix:str = None, parallelism:int = 5, track_history:bool = False):
-        self.sc = session.sparkContext
-        self.fs = self.sc._jvm.org.apache.hadoop.fs.FileSystem.get(self.sc._jsc.hadoopConfiguration())
-
+                    container:str = None, storage_prefix:str = None, parallelism:int = 5, track_history:bool = False,
+                    batch_size = 125000000):
         self.session = session
         self.target_lakehouse = target_lakehouse
         self.inventory_date = inventory_date
@@ -25,6 +25,7 @@ class DeltaStorageInventory:
         self.parallelism = parallelism
         self.track_history = track_history
         self.container = container
+        self.batch_size = batch_size
 
         if self.storage_prefix is None:
             self.storage_prefix = "Files/"
@@ -206,10 +207,7 @@ class DeltaStorageInventory:
                     file_data[4] = deletionVectorBytes
                     file_analysis[f] = tuple(file_data)
 
-        files_schema = self.get_files_schema(False)    
-        f = self.session.createDataFrame(file_analysis.items(), files_schema) \
-            .withColumn("delta_table", lit(tbl)) 
-        f.write.mode("APPEND").saveAsTable(f"{self.target_lakehouse}.tmpFiles")        
+        self.save_files_analysis(tbl, file_analysis)       
 
         deltaTbl = DeltaTable.forPath(self.session, f"{tbl_path}")
         h = deltaTbl.history() \
@@ -220,7 +218,42 @@ class DeltaStorageInventory:
         runtime = completed - started
 
         print(f"Completed table {tbl} in {(runtime.total_seconds()/60):.4f} mins ...")
-        
+
+    def save_files_analysis(self, tbl:str, file_analysis):
+        files_schema = self.get_files_schema(False) 
+        metadata_size = self.get_size(file_analysis)
+
+        if metadata_size > self.batch_size:
+            files = []
+            size = 0
+
+            for f in file_analysis.items():
+                size += sys.getsizeof(f[0])
+                files.append(f)
+
+                if size >= self.batch_size:
+                    self.write_files_analysis_list(tbl, files_schema, files)
+                    files = []
+                    size = 0
+
+            if len(files) > 0:
+                self.write_files_analysis_list(tbl, files_schema, files)
+        else: 
+            self.write_files_analysis_list(tbl, files_schema, file_analysis.items())
+
+    def write_files_analysis_list(self, tbl:str, files_schema, files):
+        f = self.session.createDataFrame(files, files_schema) \
+            .withColumn("delta_table", lit(tbl)) 
+        f.write.mode("APPEND").saveAsTable(f"{self.target_lakehouse}.tmpFiles")
+
+    def get_size(self, obj):
+        size = 0
+
+        if obj and obj.keys():
+            size = reduce(lambda x, y: x + y, [sys.getsizeof(v) for v in obj.keys()])
+            
+        return size 
+
     def task_runner(self, work_function, workQueue:Queue):
         while not workQueue.empty():
             tbl = workQueue.get()
@@ -346,23 +379,7 @@ class DeltaStorageInventory:
         else:
             df.write.mode("OVERWRITE").saveAsTable(delta_table)
 
-    def run_from_storage_inventory(self, rule:str, inventory_data_path:str, \
-                                    inventory_output_type:str):
-        started = datetime.today()
-
-        print(f"Starting Delta Inventory for Rule: {rule} ...")
-        self.clear_temp_tables()
-
-        if not self.track_history:
-            print("Historical data disabled, resetting repository ...")
-            self.clear_delta_inventory_schema()
-        
-        inventory_file_path = f"{inventory_data_path}{self.inventory_date}/*/{rule}/*.{inventory_output_type}"
-   
-        print(f"Getting blob inventory {inventory_file_path} ...")
-        self.load_storage_inventory(inventory_file_path, inventory_output_type)
-        delta_tables, tables = self.get_delta_tables_from_inventory()
-
+    def process_delta_inventory(self, delta_tables:list[str], tables:DataFrame):
         print(f"Processing delta table logs ...")
         self.process_delta_table_logs(delta_tables)
 
@@ -389,6 +406,28 @@ class DeltaStorageInventory:
         self.save_dataframe(snapshot, f"{self.target_lakehouse}.delta_table_snapshot")
 
         self.clear_temp_tables()
+
+    def initialize_delta_inventory(self):
+        self.clear_temp_tables()
+
+        if not self.track_history:
+            print("Historical data disabled, resetting repository ...")
+            self.clear_delta_inventory_schema()
+    
+    def run_from_storage_inventory(self, rule:str, inventory_data_path:str, \
+                                    inventory_output_type:str):
+        started = datetime.today()
+
+        print(f"Starting Delta Inventory for Rule: {rule} ...")
+        self.initialize_delta_inventory()
+        
+        inventory_file_path = f"{inventory_data_path}{self.inventory_date}/*/{rule}/*.{inventory_output_type}"
+   
+        print(f"Getting blob inventory {inventory_file_path} ...")
+        self.load_storage_inventory(inventory_file_path, inventory_output_type)
+        delta_tables, tables = self.get_delta_tables_from_inventory()
+
+        self.process_delta_inventory(delta_tables, tables)
 
         completed = datetime.today()
         runtime = completed - started
