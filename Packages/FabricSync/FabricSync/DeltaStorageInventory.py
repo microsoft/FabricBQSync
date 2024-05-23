@@ -48,12 +48,12 @@ class DeltaStorageInventory:
         
         return databricks
     
-    def get_files_schema(self, with_table:bool = True):
+    def get_files_schema(self, with_table:bool = True):        
         base_definition = [StructField('data_file', StringType(), True), \
-            StructField('file_info', StructType([StructField('operation', StringType(), True), \
+            StructField('file_info', StructType([StructField('operation', StringType(), False), \
             StructField('file_size', LongType(), True), StructField('row_count', LongType(), True), \
-            StructField('delta_version', LongType(), True), \
-            StructField('deletionVectorSize', LongType(), True)]), True)]
+            StructField('delta_version', IntegerType(), True), \
+            StructField('deletionVectorSize', LongType(), False)]), False)]
 
         if not with_table:
             return StructType(base_definition)
@@ -101,34 +101,21 @@ class DeltaStorageInventory:
         list(map(lambda x: self.session.sql(f"DROP TABLE IF EXISTS {self.target_lakehouse}.{x}"), self.inventory_tables))
 
     def get_delta_tables_from_inventory(self):
-        delta_df = self.session.table("_storage_inventory") \
-            .where(col("Name").like("%_delta_log%.%")) \
-            .orderBy("Name")
-        delta_tbls = {}
-
-        for f in delta_df.collect():
-            path = f["Name"]            
-
-            delta_tbl = os.path.dirname(path).replace("_delta_log", "")
-
-            if "compacted" in path:
-                continue
-            
-            if delta_tbl not in delta_tbls:
-                delta_tbls[delta_tbl] = []
-            
-            ext = Path(path).suffix
-
-            if ext == ".json":
-                delta_version = int(Path(path).stem)
-                
-                if delta_version not in delta_tbls[delta_tbl]:
-                    delta_tbls[delta_tbl].append(delta_version)   
+        df = spark.table("_storage_inventory") \
+            .where(col("Name").like("%/_delta_log/%.json")) \
+            .withColumn("index", expr("len(name) - locate('/', reverse(name))")) \
+            .withColumn("delta_table", expr("replace(substring(name, 1, index), '/_delta_log', '')")) \
+            .withColumn("file_name", expr("substring(name, index + 2, len(name) - index)")) \
+            .withColumn("delta_version", expr("substring(name, index + 2, 20)").cast("int")) \
+            .where(~col("file_name").contains("compact")) \
+            .select("delta_table", "name", "delta_version") \
+            .groupBy("delta_table").agg(collect_list("delta_version").alias("delta_versions"))
         
-        t = self.session.createDataFrame(delta_tbls.items(), ["delta_table", "delta_versions"]) \
-            .withColumn("delta_table_id", expr("uuid()"))
+        df = df.withColumn("delta_table_id", expr("uuid()"))
 
-        return (list(delta_tbls.keys()), t)
+        tbls = [r["delta_table"] for r in df.collect()]
+
+        return (tbls, df)
 
     def process_delta_table_logs(self, delta_tables:list[str]):
         workQueue = Queue()
@@ -138,21 +125,6 @@ class DeltaStorageInventory:
 
         self.create_temp_tables()
         self.process_queue(workQueue)
-
-    def get_deletion_vector_bytes(self, data) -> int:
-        deletionVectorBytes = 0
-
-        if "deletionVector" in data:
-            deletionVector = data["deletionVector"]
-
-            if deletionVector:
-                deletionVectorBytes = int(deletionVector["sizeInBytes"])
-        
-        return deletionVectorBytes
-    
-    def get_row_count(self, data) -> int:
-        stats = json.loads(data["stats"])
-        return stats["numRecords"]
 
     def get_clean_tbl_path(self, tbl:str) -> str:
         if self.container is not None:
@@ -168,46 +140,63 @@ class DeltaStorageInventory:
         started = datetime.today()
         print(f"Starting table {tbl} ...")
 
-        ddf = self.session.read.format("json").load(f"{tbl_path}/_delta_log/????????????????????.json")
-        ddf = ddf.withColumn("filename", input_file_name())
+        stats_schema = StructType([StructField('numRecords', LongType(), True)])
+        files_schema = StructType( \
+            [StructField('dataChange', BooleanType(), True), \
+            StructField('deletionVector', StructType([ \
+                StructField('sizeInBytes', LongType(), True)]), True), \
+            StructField('path', StringType(), True), \
+            StructField('stats', StringType(), True), \
+            StructField('size', LongType(), True)])
 
-        file_analysis = {}
+        df = self.session.read.format("json").load(f"{tbl_path}/_delta_log/????????????????????.json")
 
-        for r in ddf.orderBy("filename").collect():
-            file_name = r["filename"]
+        if not "add" in df.columns:
+            df = df.withColumn("add", struct(*[]))
 
-            if "compacted" in file_name:
-                continue
+        if not "remove" in df.columns:
+            df = df.withColumn("remove", struct(*[]))
 
-            delta_version = int(Path(file_name).stem)
+        df = df.withColumn("filename", input_file_name()) \
+            .withColumn("_delta_version", expr("substring(filename, len(filename) - locate('/', reverse(filename)) + 2, 20)").cast("int")) \
+            .withColumn("added", from_json(to_json(col("add")), files_schema)) \
+            .withColumn("removed", from_json(to_json(col("remove")), files_schema)) \
+            .withColumn("add_path", col("added.path")) \
+            .withColumn("remove_path", col("removed.path")) \
+            .withColumn("stats", from_json(col("added.stats"), stats_schema)) \
+            .withColumn("_num_records", col("stats.numRecords")) \
+            .withColumn("_file_size", col("added.size")) \
+            .withColumn("add_dv_sizeInBytes", col("added.deletionVector.sizeInBytes")) \
+            .withColumn("remove_dv_sizeInBytes", col("removed.deletionVector.sizeInBytes"))
 
-            if "add" in r and r["add"]:
-                f = r["add"]["path"]                
-                
-                deletionVectorBytes = self.get_deletion_vector_bytes(r["add"])
+        adds = df.where(col("add").isNotNull()) \
+            .groupBy(col("add_path").alias("path")) \
+            .agg(min("_delta_version").alias("dv"), \
+                max("_file_size").alias("file_size"), \
+                max("_num_records").alias("row_count"), \
+                max("add_dv_sizeInBytes").alias("dv_sizeInBytes")) \
+            .select("path", "dv", "file_size", "row_count", "dv_sizeInBytes")
+            
+        removes = df.where(col("remove").isNotNull()) \
+            .groupBy(col("remove_path").alias("path")) \
+            .agg(max("_delta_version").alias("dv"), \
+                max("remove_dv_sizeInBytes").alias("dv_sizeInBytes")) \
+            .select("path", "dv", "dv_sizeInBytes")    
 
-                if f not in file_analysis:   
-                    row_count = self.get_row_count(r["add"])               
-                    file_data = ("ADD", r["add"]["size"], row_count, delta_version, deletionVectorBytes)                    
-                    file_analysis[f] = file_data
-                elif deletionVectorBytes > 0:
-                    file_data = list(file_analysis[f])
-                    file_data[4] = deletionVectorBytes
-                    file_analysis[f] = tuple(file_data)
-                
-            if "remove" in r and r["remove"]:
-                f = r["remove"]["path"]
+        adds = adds.alias("a")
+        removes = removes.alias("r")
 
-                deletionVectorBytes = self.get_deletion_vector_bytes(r["remove"])
+        f = adds.join(removes, "path", "left") \
+            .withColumn("data_file", coalesce("r.path", "a.path")) \
+            .withColumn("operation", when(isnull("r.path"), lit("ADD")).otherwise(lit("REMOVE"))) \
+            .withColumn("delta_version", coalesce("r.dv", "a.dv")) \
+            .withColumn("deletionVectorSize", coalesce("r.dv_sizeInBytes", "a.dv_sizeInBytes", lit(0))) \
+            .withColumn("file_info", \
+                struct(*[col("operation"), col("file_size"), col("row_count"), col("delta_version"), col("deletionVectorSize")])) \
+            .select("data_file", "file_info")
 
-                if f in file_analysis and file_analysis[f][0] == "ADD":
-                    file_data = list(file_analysis[f])
-                    file_data[0] = "REMOVE"
-                    file_data[3] = delta_version
-                    file_data[4] = deletionVectorBytes
-                    file_analysis[f] = tuple(file_data)
-
-        self.save_files_analysis(tbl, file_analysis)       
+        f = f.withColumn("delta_table", lit(tbl)) 
+        f.write.mode("APPEND").saveAsTable(f"{self.target_lakehouse}.tmpFiles")
 
         deltaTbl = DeltaTable.forPath(self.session, f"{tbl_path}")
         h = deltaTbl.history() \
@@ -218,41 +207,6 @@ class DeltaStorageInventory:
         runtime = completed - started
 
         print(f"Completed table {tbl} in {(runtime.total_seconds()/60):.4f} mins ...")
-
-    def save_files_analysis(self, tbl:str, file_analysis):
-        files_schema = self.get_files_schema(False) 
-        metadata_size = self.get_size(file_analysis)
-
-        if metadata_size > self.batch_size:
-            files = []
-            size = 0
-
-            for f in file_analysis.items():
-                size += sys.getsizeof(f[0])
-                files.append(f)
-
-                if size >= self.batch_size:
-                    self.write_files_analysis_list(tbl, files_schema, files)
-                    files = []
-                    size = 0
-
-            if len(files) > 0:
-                self.write_files_analysis_list(tbl, files_schema, files)
-        else: 
-            self.write_files_analysis_list(tbl, files_schema, file_analysis.items())
-
-    def write_files_analysis_list(self, tbl:str, files_schema, files):
-        f = self.session.createDataFrame(files, files_schema) \
-            .withColumn("delta_table", lit(tbl)) 
-        f.write.mode("APPEND").saveAsTable(f"{self.target_lakehouse}.tmpFiles")
-
-    def get_size(self, obj):
-        size = 0
-
-        if obj and obj.keys():
-            size = reduce(lambda x, y: x + y, [sys.getsizeof(v) for v in obj.keys()])
-            
-        return size 
 
     def task_runner(self, work_function, workQueue:Queue):
         while not workQueue.empty():
