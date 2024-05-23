@@ -101,7 +101,7 @@ class DeltaStorageInventory:
         list(map(lambda x: self.session.sql(f"DROP TABLE IF EXISTS {self.target_lakehouse}.{x}"), self.inventory_tables))
 
     def get_delta_tables_from_inventory(self):
-        df = spark.table("_storage_inventory") \
+        df = self.session.table("_storage_inventory") \
             .where(col("Name").like("%/_delta_log/%.json")) \
             .withColumn("index", expr("len(name) - locate('/', reverse(name))")) \
             .withColumn("delta_table", expr("replace(substring(name, 1, index), '/_delta_log', '')")) \
