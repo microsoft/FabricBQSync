@@ -12,12 +12,12 @@ from pathlib import Path
 from functools import reduce
 
 class DeltaStorageInventory:
-    temp_tables = ["tmpFiles", "tmpHistory"]
-    inventory_tables = ["delta_tables","delta_table_files","delta_table_partitions","delta_table_history","delta_table_snapshot"]
+    __temp_tables__ = ["tmpFiles", "tmpHistory"]
+    __inventory_tables__ = ["delta_tables","delta_table_files","delta_table_partitions","delta_table_history","delta_table_snapshot"]
 
     def __init__(   self, session:SparkSession, target_lakehouse:str, inventory_date:str = None, \
                     container:str = None, storage_prefix:str = None, parallelism:int = 5, track_history:bool = False,
-                    batch_size = 125000000):
+                    async_process:bool = True):
         self.session = session
         self.target_lakehouse = target_lakehouse
         self.inventory_date = inventory_date
@@ -25,10 +25,7 @@ class DeltaStorageInventory:
         self.parallelism = parallelism
         self.track_history = track_history
         self.container = container
-        self.batch_size = batch_size
-
-        if self.storage_prefix is None:
-            self.storage_prefix = "Files/"
+        self.async_process = async_process
 
         if self.inventory_date is None:
             self.inventory_date = datetime.today().strftime("%Y/%m/%d")
@@ -39,7 +36,7 @@ class DeltaStorageInventory:
         self.inventory_month = self.inventory_dt.strftime("%m")
         self.inventory_day = self.inventory_dt.strftime("%d")
 
-    def is_dbx_runtime(self):
+    def __is_dbx_runtime__(self):
         try:
             dbx = self.session.conf.get("spark.databricks.clusterUsageTags.sparkVersion")
             databricks = True
@@ -48,7 +45,7 @@ class DeltaStorageInventory:
         
         return databricks
     
-    def get_files_schema(self, with_table:bool = True):        
+    def __get_files_schema__(self, with_table:bool = True):        
         base_definition = [StructField('data_file', StringType(), True), \
             StructField('file_info', StructType([StructField('operation', StringType(), False), \
             StructField('file_size', LongType(), True), StructField('row_count', LongType(), True), \
@@ -60,8 +57,8 @@ class DeltaStorageInventory:
 
         return StructType(base_definition + [StructField('delta_table', StringType(), True)])
     
-    def create_temp_tables(self):
-        files_schema = self.get_files_schema()
+    def __create_temp_tables__(self):
+        files_schema = self.__get_files_schema__()
 
         df = self.session.createDataFrame([], files_schema)
         df.write.mode("OVERWRITE").saveAsTable(f"{self.target_lakehouse}.tmpFiles")
@@ -80,7 +77,7 @@ class DeltaStorageInventory:
                         StructField('runId', StringType(), True), StructField('jobOwnerId', StringType(), True), \
                         StructField('triggerType', StringType(), True)]), True)]
 
-        if not self.is_dbx_runtime():
+        if not self.__is_dbx_runtime__():
             job_definition = [StructField('job', StructType([StructField('jobId', StringType(), True), StructField('jobName', StringType(), True), \
                 StructField('runId', StringType(), True), StructField('jobOwnerId', StringType(), True), \
                 StructField('triggerType', StringType(), True)]), True)]
@@ -94,13 +91,13 @@ class DeltaStorageInventory:
         df = self.session.createDataFrame([], history_schema)
         df.write.mode("OVERWRITE").saveAsTable(f"{self.target_lakehouse}.tmpHistory")
 
-    def clear_temp_tables(self):
-        list(map(lambda x: self.session.sql(f"DROP TABLE IF EXISTS {self.target_lakehouse}.{x}"), self.temp_tables))
+    def __clear_temp_tables__(self):
+        list(map(lambda x: self.session.sql(f"DROP TABLE IF EXISTS {self.target_lakehouse}.{x}"), self.__temp_tables__))
 
-    def clear_delta_inventory_schema(self):
-        list(map(lambda x: self.session.sql(f"DROP TABLE IF EXISTS {self.target_lakehouse}.{x}"), self.inventory_tables))
+    def __clear_delta_inventory_schema__(self):
+        list(map(lambda x: self.session.sql(f"DROP TABLE IF EXISTS {self.target_lakehouse}.{x}"), self.__inventory_tables__))
 
-    def get_delta_tables_from_inventory(self):
+    def __get_delta_tables_from_inventory__(self):
         df = self.session.table("_storage_inventory") \
             .where(col("Name").like("%/_delta_log/%.json")) \
             .withColumn("index", expr("len(name) - locate('/', reverse(name))")) \
@@ -117,16 +114,28 @@ class DeltaStorageInventory:
 
         return (tbls, df)
 
-    def process_delta_table_logs(self, delta_tables:list[str]):
+    def __process_delta_table_logs_sync__(self, delta_tables:list[str]):
+        for tbl in delta_tables:
+            self.__process_delta_log__(tbl)
+
+    def __process_delta_table_logs_async__(self, delta_tables:list[str]):
         workQueue = Queue()
 
         for tbl in delta_tables:
             workQueue.put(tbl)
 
-        self.create_temp_tables()
-        self.process_queue(workQueue)
+        self.__process_queue__(workQueue)
 
-    def get_clean_tbl_path(self, tbl:str) -> str:
+    def __process_delta_table_logs__(self, delta_tables:list[str]):
+        self.__create_temp_tables__()
+
+        if self.async_process:
+            self.__process_delta_table_logs_async__(delta_tables)
+        else:
+            self.__process_delta_table_logs_sync__(delta_tables)
+        
+
+    def __get_clean_tbl_path__(self, tbl:str) -> str:
         if self.container is not None:
             tbl_path = tbl.replace(f"{self.container}/", "", 1)
         else:
@@ -134,8 +143,8 @@ class DeltaStorageInventory:
         
         return f"{self.storage_prefix}{tbl_path}"
 
-    def process_delta_log(self, tbl:str):
-        tbl_path = self.get_clean_tbl_path(tbl)
+    def __process_delta_log__(self, tbl:str):
+        tbl_path = self.__get_clean_tbl_path__(tbl)
 
         started = datetime.today()
         print(f"Starting table {tbl} ...")
@@ -152,10 +161,10 @@ class DeltaStorageInventory:
         df = self.session.read.format("json").load(f"{tbl_path}/_delta_log/????????????????????.json")
 
         if not "add" in df.columns:
-            df = df.withColumn("add", struct(*[]))
+            df = df.withColumn("add", struct(*[lit("x__path")]))
 
         if not "remove" in df.columns:
-            df = df.withColumn("remove", struct(*[]))
+            df = df.withColumn("remove", struct(*[lit("x__path")]))
 
         df = df.withColumn("filename", input_file_name()) \
             .withColumn("_delta_version", expr("substring(filename, len(filename) - locate('/', reverse(filename)) + 2, 20)").cast("int")) \
@@ -208,7 +217,7 @@ class DeltaStorageInventory:
 
         print(f"Completed table {tbl} in {(runtime.total_seconds()/60):.4f} mins ...")
 
-    def task_runner(self, work_function, workQueue:Queue):
+    def __task_runner__(self, work_function, workQueue:Queue):
         while not workQueue.empty():
             tbl = workQueue.get()
     
@@ -219,15 +228,15 @@ class DeltaStorageInventory:
             finally:
                 workQueue.task_done()
 
-    def process_queue(self, workQueue:Queue):
+    def __process_queue__(self, workQueue:Queue):
         for i in range(self.parallelism):
-            t=Thread(target=self.task_runner, args=(self.process_delta_log, workQueue))
+            t=Thread(target=self.__task_runner__, args=(self.__process_delta_log__, workQueue))
             t.daemon = True
             t.start() 
                 
         workQueue.join()
 
-    def load_storage_inventory(self, inventory_file_path:str, output_type:str):
+    def __load_storage_inventory__(self, inventory_file_path:str, output_type:str):
         if output_type.lower() == "csv":
             df = self.session.read.format(output_type).option("header","true").load(inventory_file_path)
         else:
@@ -235,7 +244,19 @@ class DeltaStorageInventory:
 
         df.createOrReplaceTempView(f"_storage_inventory")
 
-    def get_delta_file_size_from_inventory(self) -> DataFrame:
+        return self.__get_delta_tables_from_inventory__()
+
+    def __load_onelake_tables__(self, lakehouse_name:str):
+        onelake_tables = [f"{lakehouse_name}/{t.name}" for t in spark.catalog.listTables()]
+        
+        schema = StructType([StructField('delta_table', StringType(), True), StructField('delta_versions', ArrayType(LongType(), True), True)])
+        df = spark.createDataFrame([{"delta_table": t, "delta_versions":[]} for t in onelake_tables], \
+        schema=schema)
+        df = df.withColumn("delta_table_id", expr("uuid()"))       
+
+        return (onelake_tables, df)
+        
+    def __get_delta_file_size_from_inventory__(self) -> DataFrame:
         f = self.session.table(f"{self.target_lakehouse}.delta_table_files") \
             .filter(col("inventory_date") == self.inventory_dt) \
             .select("*", expr("file_info['operation']").alias("operation"), \
@@ -249,8 +270,8 @@ class DeltaStorageInventory:
         
         return f
 
-    def get_delta_partitions_source(self) -> DataFrame:
-        agg = self.get_delta_file_size_from_inventory()
+    def __get_delta_partitions_source__(self) -> DataFrame:
+        agg = self.__get_delta_file_size_from_inventory__()
         
         agg = agg.groupBy("delta_table", \
                 "delta_partition", \
@@ -281,7 +302,7 @@ class DeltaStorageInventory:
 
         return p
 
-    def get_delta_table_snapshot(self, partitions:DataFrame) -> DataFrame:
+    def __get_delta_table_snapshot__(self, partitions:DataFrame) -> DataFrame:
         t = partitions.groupBy("delta_table") \
             .agg(sum("files_count").alias("active_files_count"), \
                 sum("file_size").alias("active_files_size"), \
@@ -296,7 +317,7 @@ class DeltaStorageInventory:
 
         return t
 
-    def lookup_delta_table_id(self, df:DataFrame) -> DataFrame:
+    def __lookup_delta_table_id__(self, df:DataFrame) -> DataFrame:
         lkp = self.session.table(f"{self.target_lakehouse}.delta_tables") \
             .select("delta_table_id", "delta_table") \
             .alias("lkp")
@@ -307,9 +328,9 @@ class DeltaStorageInventory:
             
         return df
 
-    def save_dataframe(self, df:DataFrame, delta_table:str, merge_criteria:list[str] = [], temporal:bool = True):
+    def __save_dataframe__(self, df:DataFrame, delta_table:str, merge_criteria:list[str] = [], temporal:bool = True):
         if not "delta_table_id" in df.columns and "delta_table" in df.columns:
-            df = self.lookup_delta_table_id(df)
+            df = self.__lookup_delta_table_id__(df)
 
         if temporal and not "inventory_date" in df.columns:
             df = df.withColumn("inventory_date", lit(self.inventory_dt))
@@ -333,57 +354,74 @@ class DeltaStorageInventory:
         else:
             df.write.mode("OVERWRITE").saveAsTable(delta_table)
 
-    def process_delta_inventory(self, delta_tables:list[str], tables:DataFrame):
+    def __process_delta_inventory__(self, delta_tables:list[str], tables:DataFrame):
         print(f"Processing delta table logs ...")
-        self.process_delta_table_logs(delta_tables)
+        self.__process_delta_table_logs__(delta_tables)
 
         print(f"Saving inventory [tables] ...")
-        self.save_dataframe(tables, f"{self.target_lakehouse}.delta_tables", ["delta_table"], False)
+        self.__save_dataframe__(tables, f"{self.target_lakehouse}.delta_tables", ["delta_table"], False)
 
         print(f"Saving inventory [files] ...")
         df = self.session.table(f"{self.target_lakehouse}.tmpFiles") \
             .withColumn("inventory_date", lit(self.inventory_dt))
-        self.save_dataframe(df, f"{self.target_lakehouse}.delta_table_files", ["data_file"])
+        self.__save_dataframe__(df, f"{self.target_lakehouse}.delta_table_files", ["data_file"])
         
         print(f"Saving inventory [history] ...")
         df = self.session.table(f"{self.target_lakehouse}.tmpHistory") \
             .withColumn("inventory_date", lit(self.inventory_dt))
-        self.save_dataframe(df, f"{self.target_lakehouse}.delta_table_history", ["version"])
+        self.__save_dataframe__(df, f"{self.target_lakehouse}.delta_table_history", ["version"])
 
-        partitions = self.get_delta_partitions_source()
-        snapshot = self.get_delta_table_snapshot(partitions)
+        partitions = self.__get_delta_partitions_source__()
+        snapshot = self.__get_delta_table_snapshot__(partitions)
         
         print(f"Saving inventory [partitions] ...")
-        self.save_dataframe(partitions, f"{self.target_lakehouse}.delta_table_partitions", ["delta_partition"])
+        self.__save_dataframe__(partitions, f"{self.target_lakehouse}.delta_table_partitions", ["delta_partition"])
         
         print(f"Saving inventory [snapshot] ...")
-        self.save_dataframe(snapshot, f"{self.target_lakehouse}.delta_table_snapshot")
+        self.__save_dataframe__(snapshot, f"{self.target_lakehouse}.delta_table_snapshot")
 
-        self.clear_temp_tables()
+        self.__clear_temp_tables__()
 
-    def initialize_delta_inventory(self):
-        self.clear_temp_tables()
+    def __initialize_delta_inventory__(self):
+        self.__clear_temp_tables__()
 
         if not self.track_history:
             print("Historical data disabled, resetting repository ...")
-            self.clear_delta_inventory_schema()
+            self.__clear_delta_inventory_schema__()
     
     def run_from_storage_inventory(self, rule:str, inventory_data_path:str, \
                                     inventory_output_type:str):
         started = datetime.today()
 
         print(f"Starting Delta Inventory for Rule: {rule} ...")
-        self.initialize_delta_inventory()
+        self.__initialize_delta_inventory__()
         
         inventory_file_path = f"{inventory_data_path}{self.inventory_date}/*/{rule}/*.{inventory_output_type}"
    
         print(f"Getting blob inventory {inventory_file_path} ...")
-        self.load_storage_inventory(inventory_file_path, inventory_output_type)
-        delta_tables, tables = self.get_delta_tables_from_inventory()
+        delta_tables, tables = self.__load_storage_inventory__(inventory_file_path, inventory_output_type)
 
-        self.process_delta_inventory(delta_tables, tables)
+        self.__process_delta_inventory__(delta_tables, tables)
 
         completed = datetime.today()
         runtime = completed - started
 
         print(f"Finished Delta Inventory for Rule: {rule} in {(runtime.total_seconds()/60):.4f} mins ...")
+
+    def run_onelake_lakehouse_catalog(self, workspace_id:str, lakehouse_id:str, lakehouse_name:str):
+        started = datetime.today()
+
+        print(f"Starting OneLake Lakehouse Inventory for {lakehouse_name} ...")
+        self.__initialize_delta_inventory__()
+
+        self.container = lakehouse_name
+        self.storage_prefix = f"abfss://{workspace_id}@onelake.dfs.fabric.microsoft.com/{lakehouse_id}/Tables/"
+        
+        delta_tables, tables = self.__load_onelake_tables__(lakehouse_name)
+
+        self.__process_delta_inventory__(delta_tables, tables)
+
+        completed = datetime.today()
+        runtime = completed - started
+
+        print(f"Finished OneLake LakehouseInventory for {lakehouse_name} in {(runtime.total_seconds()/60):.4f} mins ...")
