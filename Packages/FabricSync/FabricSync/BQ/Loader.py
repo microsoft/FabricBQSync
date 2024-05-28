@@ -363,9 +363,10 @@ class ConfigMetadataLoader(ConfigBase):
                         AND COALESCE(u.partition_column, a.partition_col, '') IN 
                             ('_PARTITIONTIME', '_PARTITIONDATE') THEN 'TIME_INGESTION'
                     ELSE 'FULL' END AS load_strategy,
-                CASE WHEN (COALESCE(u.watermark_column, a.pk_col) IS NOT NULL AND
+                COALESCE(u.load_type, 
+                    CASE WHEN (COALESCE(u.watermark_column, a.pk_col) IS NOT NULL AND
                         COALESCE(u.watermark_column, a.pk_col) <> '') THEN 'APPEND' ELSE
-                    'OVERWRITE' END AS load_type,
+                    'OVERWRITE' END) AS load_type,
                 COALESCE(u.interval, 'AUTO') AS interval,
                 p.pk AS primary_keys,
                 COALESCE(u.partition_enabled, a.is_partitioned) AS is_partitioned,
@@ -440,7 +441,7 @@ class Scheduler(ConfigBase):
         WHERE project_id = '{self.UserConfig.ProjectID}'
         AND dataset = '{self.UserConfig.Dataset}'
         AND schedule_type = '{schedule_type}'
-        AND status != '{SyncConstants.COMPLETE}'
+        AND status NOT IN ('{SyncConstants.COMPLETE}', '{SyncConstants.SKIPPED}')
         """
         df = self.Context.sql(sql)
 
@@ -705,7 +706,16 @@ class BQScheduleLoader(ConfigBase):
         for r in df.collect():
             max_watermark = r["watermark"] 
 
-        return max_watermark
+        val = None
+
+        if type(max_watermark) is date:
+            val = max_watermark.strftime("%Y-%m-%d")
+        elif type(max_watermark) is datetime:
+            val = max_watermark.strftime("%Y-%m-%d %H:%M:%S%z")
+        else:
+            val = str(max_watermark)
+
+        return val
 
     def get_fabric_partition_proxy_cols(self, partition_grain:str) -> list[str]:
         proxy_cols = ["YEAR", "MONTH", "DAY", "HOUR"]
@@ -902,7 +912,7 @@ class BQScheduleLoader(ConfigBase):
             df_bq = self.read_bq_to_dataframe(src)
 
         if schedule.LoadStrategy == SyncConstants.WATERMARK and not schedule.InitialLoad:
-            predicate = f"{schedule.PrimaryKey} > '{schedule.MaxWatermark}'"
+            predicate = f"{schedule.WatermarkColumn} > '{schedule.MaxWatermark}'"
             df_bq.where(predicate)
 
         df_bq.cache()
@@ -1176,6 +1186,7 @@ class BQScheduleLoader(ConfigBase):
 
 class BQSync(SyncBase):
     def __init__(self, context:SparkSession, config_path:str):
+        self.cleanup_session(context)
         super().__init__(context, config_path)
 
         self.MetadataLoader = ConfigMetadataLoader(context, self.UserConfig, self.GCPCredential)
@@ -1196,18 +1207,20 @@ class BQSync(SyncBase):
 
         return self.Scheduler.build_schedule(schedule_type)
     
-    def run_schedule(self, group_schedule_id:str):
+    def run_schedule(self, group_schedule_id:str, optimize_metadata:bool=True):
         if self.UserConfig.Async.Enabled:
             self.Loader.run_async_schedule(group_schedule_id)
         else:
             self.Loader.run_sequential_schedule(group_schedule_id)
         
         self.Loader.commit_table_configuration(group_schedule_id)
-        self.optimize_metadata_tbls()
+
+        if optimize_metadata:
+            self.optimize_metadata_tbls()
     
-    def cleanup_session(self):
+    def cleanup_session(self, context:SparkSession):
         temp_views = SyncConstants.get_sync_temp_views()
-        list(map(lambda x: self.Context.sql(f"DROP TABLE IF EXISTS {x}"), temp_views))
+        list(map(lambda x: context.sql(f"DROP TABLE IF EXISTS {x}"), temp_views))
 
     def optimize_metadata_tbls(self):
         tbls = ["bq_sync_configuration", "bq_sync_schedule", "bq_sync_schedule_telemetry"]
