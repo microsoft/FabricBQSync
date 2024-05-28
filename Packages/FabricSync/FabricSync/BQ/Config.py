@@ -31,6 +31,7 @@ class SyncConstants:
     RANGE = "RANGE"
     EMPTY_STRING = ""
     COMPLETE = "COMPLETE"
+    SKIPPED = "SKIPPED"
     TRUE = "true"
     FALSE = "false"
     DYNAMIC = "dynamic"
