@@ -10,7 +10,6 @@ from pyspark.sql.types import *
 from uuid import uuid4
 from pathlib import Path
 from functools import reduce
-
 class DeltaStorageInventory:
     __temp_tables__ = ["tmpFiles", "tmpHistory"]
     __inventory_tables__ = ["delta_tables","delta_table_files","delta_table_partitions","delta_table_history","delta_table_snapshot"]
