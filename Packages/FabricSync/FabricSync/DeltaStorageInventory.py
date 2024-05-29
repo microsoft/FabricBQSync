@@ -15,6 +15,7 @@ class DeltaStorageInventory:
     __temp_tables__ = ["tmpFiles", "tmpHistory"]
     __inventory_tables__ = ["delta_tables","delta_table_files","delta_table_partitions","delta_table_history","delta_table_snapshot"]
 
+
     def __init__(   self, session:SparkSession, target_lakehouse:str, inventory_date:str = None, \
                     container:str = None, storage_prefix:str = None, parallelism:int = 5, track_history:bool = False,
                     async_process:bool = True):
