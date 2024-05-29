@@ -2,7 +2,7 @@ from pyspark.sql.functions import *
 from pyspark.sql.types import *
 from pyspark.sql import Row
 from delta.tables import *
-from datetime import datetime, timezone
+from datetime import datetime, date, timezone
 from typing import Tuple
 from queue import PriorityQueue
 from threading import Thread, Lock
