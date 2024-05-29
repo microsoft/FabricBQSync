@@ -247,10 +247,11 @@ class DeltaStorageInventory:
         return self.__get_delta_tables_from_inventory__()
 
     def __load_onelake_tables__(self, lakehouse_name:str):
-        onelake_tables = [f"{lakehouse_name}/{t.name}" for t in spark.catalog.listTables()]
+        self.session.sql(f"USE {lakehouse_name}")
+        onelake_tables = [f"{lakehouse_name}/{t.name}" for t in self.session.catalog.listTables()]
         
         schema = StructType([StructField('delta_table', StringType(), True), StructField('delta_versions', ArrayType(LongType(), True), True)])
-        df = spark.createDataFrame([{"delta_table": t, "delta_versions":[]} for t in onelake_tables], \
+        df = self.session.createDataFrame([{"delta_table": t, "delta_versions":[]} for t in onelake_tables], \
         schema=schema)
         df = df.withColumn("delta_table_id", expr("uuid()"))       
 
