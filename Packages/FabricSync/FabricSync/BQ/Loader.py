@@ -899,23 +899,21 @@ class BQScheduleLoader(ConfigBase):
             else:
                 part_filter = f"date_trunc({schedule.PartitionColumn}, {schedule.PartitionGrain}) = PARSE_DATETIME('{part_format}', '{schedule.PartitionId}')"
 
-            df_bq = self.read_bq_partition_to_dataframe(schedule.BQTableName, part_filter)
+            df_bq = self.read_bq_partition_to_dataframe(schedule.BQTableName, part_filter, True)
         elif schedule.IsRangePartitioned:
             part_filter = self.get_partition_range_predicate(schedule)
-            df_bq = self.read_bq_partition_to_dataframe(schedule.BQTableName, part_filter)
+            df_bq = self.read_bq_partition_to_dataframe(schedule.BQTableName, part_filter, True)
         else:
-            src = schedule.BQTableName     
+            if schedule.LoadStrategy == SyncConstants.WATERMARK and not schedule.InitialLoad:
+                predicate = f"{schedule.WatermarkColumn} > '{schedule.MaxWatermark}'"
+                df_bq = self.read_bq_partition_to_dataframe(schedule.BQTableName, predicate, True)
+            else:
+                src = schedule.BQTableName     
 
-            if schedule.SourceQuery != SyncConstants.EMPTY_STRING:
-                src = schedule.SourceQuery
+                if schedule.SourceQuery != SyncConstants.EMPTY_STRING:
+                    src = schedule.SourceQuery
 
-            df_bq = self.read_bq_to_dataframe(src)
-
-        if schedule.LoadStrategy == SyncConstants.WATERMARK and not schedule.InitialLoad:
-            predicate = f"{schedule.WatermarkColumn} > '{schedule.MaxWatermark}'"
-            df_bq.where(predicate)
-
-        df_bq.cache()
+                df_bq = self.read_bq_to_dataframe(src, True)
 
         if schedule.IsPartitioned:
             if schedule.PartitionType == SyncConstants.TIME:
