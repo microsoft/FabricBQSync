@@ -214,12 +214,14 @@ class ConfigMetadataLoader(ConfigBase):
         5. KEY_COLUMN_USAGE
         5. TABLE_OPTIONS
         """
+        self.Context.conf.set("spark.databricks.delta.schema.autoMerge.enabled", "true")
         self.sync_bq_information_schema_tables()
         self.sync_bq_information_schema_table_dependent(SyncConstants.INFORMATION_SCHEMA_PARTITIONS)
         self.sync_bq_information_schema_table_dependent(SyncConstants.INFORMATION_SCHEMA_COLUMNS)
         self.sync_bq_information_schema_table_dependent(SyncConstants.INFORMATION_SCHEMA_TABLE_CONSTRAINTS)
         self.sync_bq_information_schema_table_dependent(SyncConstants.INFORMATION_SCHEMA_KEY_COLUMN_USAGE)
         self.sync_bq_information_schema_table_dependent(SyncConstants.INFORMATION_SCHEMA_TABLE_OPTIONS)
+        self.Context.conf.set("spark.databricks.delta.schema.autoMerge.enabled", "false")
 
         self.create_proxy_views()
 
