@@ -865,7 +865,8 @@ class BQScheduleLoader(ConfigBase):
         schedule.UpdateRowCounts(src=0, insert=results[0], update=results[1])
         
         return schedule
-        
+
+
     def sync_bq_table(self, schedule:SyncSchedule, lock:Lock = None):
         """
         Sync the data for a table from BigQuery to the target Fabric Lakehouse based on configuration
@@ -906,7 +907,7 @@ class BQScheduleLoader(ConfigBase):
             part_filter = self.get_partition_range_predicate(schedule)
             df_bq = self.read_bq_partition_to_dataframe(schedule.BQTableName, part_filter, True)
         else:
-            if schedule.LoadStrategy == SyncConstants.WATERMARK and not schedule.InitialLoad:
+            if schedule.LoadStrategy == SyncConstants.WATERMARK and not schedule.InitialLoad and not schedule.MaxWatermark:
                 predicate = f"{schedule.WatermarkColumn} > '{schedule.MaxWatermark}'"
                 df_bq = self.read_bq_partition_to_dataframe(schedule.BQTableName, predicate, True)
             else:
@@ -1133,9 +1134,9 @@ class BQScheduleLoader(ConfigBase):
             
             try:
                 schedule = sync_function(schedule, lock)
-            except Exception:
+            except Exception as e:
                 schedule.Status = "FAILED"
-                schedule.SummaryLoadType = traceback.format_exc()
+                schedule.SummaryLoadType = f"ERROR: {e}"
             finally:
                 workQueue.task_done()
 
@@ -1208,6 +1209,8 @@ class BQSync(SyncBase):
         return self.Scheduler.build_schedule(schedule_type)
     
     def run_schedule(self, group_schedule_id:str, optimize_metadata:bool=True):
+        self.MetadataLoader.create_proxy_views()
+
         if self.UserConfig.Async.Enabled:
             self.Loader.run_async_schedule(group_schedule_id)
         else:
