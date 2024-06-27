@@ -907,7 +907,7 @@ class BQScheduleLoader(ConfigBase):
             part_filter = self.get_partition_range_predicate(schedule)
             df_bq = self.read_bq_partition_to_dataframe(schedule.BQTableName, part_filter, True)
         else:
-            if schedule.LoadStrategy == SyncConstants.WATERMARK and not schedule.InitialLoad and not schedule.MaxWatermark:
+            if schedule.LoadStrategy == SyncConstants.WATERMARK and not schedule.InitialLoad:
                 predicate = f"{schedule.WatermarkColumn} > '{schedule.MaxWatermark}'"
                 df_bq = self.read_bq_partition_to_dataframe(schedule.BQTableName, predicate, True)
             else:
@@ -938,7 +938,7 @@ class BQScheduleLoader(ConfigBase):
             if schedule.AllowSchemaEvolution and table_maint:
                 table_maint.evolve_schema(df_bq)
                 write_config["mergeSchema"] = SyncConstants.TRUE
-
+            
         if not schedule.LoadType == SyncConstants.MERGE or schedule.InitialLoad:
             if (schedule.IsTimePartitionedStrategy and schedule.PartitionId is not None) or schedule.IsRangePartitioned:
                 has_lock = False
