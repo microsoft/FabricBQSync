@@ -908,7 +908,11 @@ class BQScheduleLoader(ConfigBase):
             df_bq = self.read_bq_partition_to_dataframe(schedule.BQTableName, part_filter, True)
         else:
             if schedule.LoadStrategy == SyncConstants.WATERMARK and not schedule.InitialLoad:
-                predicate = f"{schedule.WatermarkColumn} > '{schedule.MaxWatermark}'"
+                if schedule.MaxWatermark.isdigit():
+                    predicate = f"{schedule.WatermarkColumn} > {schedule.MaxWatermark}"
+                else:
+                    predicate = f"{schedule.WatermarkColumn} > '{schedule.MaxWatermark}'"
+                    
                 df_bq = self.read_bq_partition_to_dataframe(schedule.BQTableName, predicate, True)
             else:
                 src = schedule.BQTableName     
