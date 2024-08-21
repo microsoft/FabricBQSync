@@ -1,7 +1,5 @@
 # BigQuery (BQ) Sync
 
-> This is a beta-release.
-
 This project is provided as an accelerator to help synchronize or migrate data from Google BigQuery to Fabric. The primary target use cases for this accelerator are:
  - BigQuery customers who wish to continue to leverage their existing data estate while optimizing their PowerBI experience and reducing overall analytics TCO
  - BigQuery customers who wish to migrate all or part of their data estate to Microsoft Fabric
