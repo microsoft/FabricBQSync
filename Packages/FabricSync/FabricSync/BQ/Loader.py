@@ -254,8 +254,7 @@ class ConfigMetadataLoader(ConfigBase):
                 tbl.table_name,
                 tbl.enabled,tbl.priority,tbl.source_query,
                 tbl.load_strategy,tbl.load_type,tbl.interval,
-                tbl.flatten_table,
-                tbl.flatten_inplace,
+                tbl.flatten_table,tbl.flatten_inplace, tbl.explode_arrays,
                 tbl.watermark.column as watermark_column,
                 tbl.partitioned.enabled as partition_enabled,
                 tbl.partitioned.type as partition_type,
@@ -386,6 +385,7 @@ class ConfigMetadataLoader(ConfigBase):
                 COALESCE(u.table_maintenance_interval, 'AUTO') AS table_maintenance_interval,
                 COALESCE(u.flatten_table, FALSE) AS flatten_table,
                 COALESCE(u.flatten_inplace, TRUE) AS flatten_inplace,
+                COALESCE(u.explode_arrays, FALSE) AS explode_arrays,
                 u.table_options,
                 CASE WHEN u.table_name IS NULL THEN FALSE ELSE TRUE END AS config_override,
                 'INIT' AS sync_state,
@@ -943,10 +943,13 @@ class BQScheduleLoader(ConfigBase):
         #Flattening complex types (structs & arrays)
         df_bq_flattened = None
         if schedule.FlattenTable:
+            if schedule.LoadType == SyncConstants.MERGE and schedule.ExplodeArrays:
+                raise Exception("Invalid load configuration: Merge is not supported when Explode Arrays is enabed")
+                
             if schedule.FlattenInPlace:
-                df_bq = self.flatten_df(df_bq)
+                df_bq = self.flatten_df(schedule.ExplodeArrays, df_bq)
             else:
-                df_bq_flattened = self.flatten_df(df_bq)
+                df_bq_flattened = self.flatten_df(schedule.ExplodeArrays, df_bq)
             
         #Schema Evolution
         if not schedule.InitialLoad:
@@ -1248,13 +1251,13 @@ class BQScheduleLoader(ConfigBase):
             
         return nested_df.select(columns)
 
-    def flatten_df(self, df:DataFrame) -> DataFrame:
+    def flatten_df(self, explode_arrays:bool, df:DataFrame) -> DataFrame:
         """
         Recurses through Dataframe and flattens complex types
         """ 
         array_cols = [c[0] for c in df.dtypes if c[1][:5] == "array"]
 
-        if len(array_cols) > 0:
+        if len(array_cols) > 0 and explode_arrays:
             while len(array_cols) > 0:        
                 for array_col in array_cols:            
                     cols_to_select = [x for x in df.columns if x != array_col ]            
@@ -1366,6 +1369,9 @@ class BQSync(SyncBase):
             "load_strategy":tbl["load_strategy"],
             "load_type":tbl["load_type"],
             "interval":tbl["interval"],
+            "flatten_table":tbl["flatten_table"],
+            "flatten_inplace":tbl["flatten_inplace"],
+            "explode_arrays":tbl["explode_arrays"],
             "table_maintenance":{
                 "enabled":tbl["table_maintenance_enabled"],
                 "interval":tbl["table_maintenance_interval"]

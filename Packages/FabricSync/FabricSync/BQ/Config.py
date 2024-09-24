@@ -86,6 +86,7 @@ class SyncConstants:
             "interval":"",
             "flatten_table":false,
             "flatten_inplace":true,
+            "explode_arrays": false,
             "table_maintenance":{
                 "enabled":true,
                 "interval":""
@@ -201,6 +202,7 @@ class SyncSchedule:
         self.TableMaintenanceInterval = row["table_maintenance_interval"]
         self.FlattenTable = row["flatten_table"]
         self.FlattenInPlace = row["flatten_inplace"]
+        self.ExplodeArrays = row["explode_arrays"]
     
     @property
     def TableOptions(self) -> dict[str, str]:
@@ -487,6 +489,8 @@ class ConfigBQTable (JSONConfigObj):
         self.AllowSchemaEvolution = super().get_json_conf_val(json_config, "allow_schema_evolution", False)
         self.FlattenTable = super().get_json_conf_val(json_config, "flatten_table", False)
         self.FlattenInPlace = super().get_json_conf_val(json_config, "flatten_inplace", True)
+        self.ExplodeArrays = super().get_json_conf_val(json_config, "explode_arrays", True)
+        
         self.TableOptions:dict[str, str] = {}
 
         if "lakehouse_target" in json_config:

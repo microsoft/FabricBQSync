@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS bq_sync_configuration
     table_maintenance_interval STRING,
     flatten_table BOOLEAN,
     flatten_inplace BOOLEAN,
+    explode_arrays BOOLEAN,
     table_options ARRAY<STRUCT<key:STRING,value:STRING>>,
     config_override BOOLEAN,
     sync_state STRING,
