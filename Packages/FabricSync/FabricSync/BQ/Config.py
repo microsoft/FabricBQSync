@@ -4,7 +4,6 @@ from delta.tables import *
 from pyspark.sql import DataFrame
 from datetime import datetime, timezone
 import json
-from json import JSONEncoder
 import base64 as b64
 from pathlib import Path
 import os
@@ -85,6 +84,8 @@ class SyncConstants:
             "load_strategy":"",
             "load_type":"",
             "interval":"",
+            "flatten_table":false,
+            "flatten_inplace":true,
             "table_maintenance":{
                 "enabled":true,
                 "interval":""
@@ -198,6 +199,8 @@ class SyncSchedule:
         self.AllowSchemaEvolution = row["allow_schema_evolution"]
         self.EnableTableMaintenance = row["table_maintenance_enabled"]
         self.TableMaintenanceInterval = row["table_maintenance_interval"]
+        self.FlattenTable = row["flatten_table"]
+        self.FlattenInPlace = row["flatten_inplace"]
     
     @property
     def TableOptions(self) -> dict[str, str]:
@@ -252,7 +255,7 @@ class SyncSchedule:
             return self.Row["primary_keys"][0]
         else:
             return None
-    
+
     @property
     def LakehouseTableName(self) -> str:
         """
@@ -482,6 +485,8 @@ class ConfigBQTable (JSONConfigObj):
         self.EnforcePartitionExpiration = super().get_json_conf_val(json_config, "enforce_partition_expiration", False)
         self.EnableDeletionVectors = super().get_json_conf_val(json_config, "enable_deletion_vectors", False)
         self.AllowSchemaEvolution = super().get_json_conf_val(json_config, "allow_schema_evolution", False)
+        self.FlattenTable = super().get_json_conf_val(json_config, "flatten_table", False)
+        self.FlattenInPlace = super().get_json_conf_val(json_config, "flatten_inplace", True)
         self.TableOptions:dict[str, str] = {}
 
         if "lakehouse_target" in json_config:
@@ -576,7 +581,8 @@ class ConfigBase():
         
         return df
 
-    def write_lakehouse_table(self, df:DataFrame, lakehouse:str, tbl_nm:str, mode:str=SyncConstants.OVERWRITE):
+    def write_lakehouse_table(self, df:DataFrame, lakehouse:str, tbl_nm:str, \
+        mode:str=SyncConstants.OVERWRITE, allow_schema_evolution:bool = False):
         """
         Write a DataFrame to the lakehouse using the Lakehouse.TableName notation
         """

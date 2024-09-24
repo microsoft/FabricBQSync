@@ -25,6 +25,8 @@
 		"load_strategy": "[FULL|WATERMARK}PARTITION]",
 		"load_type": "[OVERWRITE|APPEND|MERGE]",
 		"interval": "AUTO",
+		"flatten_table":true|false,
+        "flatten_inplace":true|true,
 		"table_options": [
 		{
 			"key": "delta.enableDeletionVectors",

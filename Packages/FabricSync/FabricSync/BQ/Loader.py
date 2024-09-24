@@ -7,7 +7,6 @@ from typing import Tuple
 from queue import PriorityQueue
 from threading import Thread, Lock
 import uuid
-import traceback
 
 from FabricSync.BQ.Config import *
 from FabricSync.DeltaTableUtility import *
@@ -169,7 +168,7 @@ class ConfigMetadataLoader(ConfigBase):
 
         if not self.UserConfig.LoadAllTables:
             filter_list = self.UserConfig.get_table_name_list(True)
-            df = df.filter(col("table_name").isin(filter_list))    
+            df = df.filter(col("table_name").isin(filter_list))   
 
         self.write_lakehouse_table(df, self.UserConfig.MetadataLakehouse, tbl_nm)
 
@@ -255,6 +254,8 @@ class ConfigMetadataLoader(ConfigBase):
                 tbl.table_name,
                 tbl.enabled,tbl.priority,tbl.source_query,
                 tbl.load_strategy,tbl.load_type,tbl.interval,
+                tbl.flatten_table,
+                tbl.flatten_inplace,
                 tbl.watermark.column as watermark_column,
                 tbl.partitioned.enabled as partition_enabled,
                 tbl.partitioned.type as partition_type,
@@ -383,6 +384,8 @@ class ConfigMetadataLoader(ConfigBase):
                 COALESCE(u.allow_schema_evolution, FALSE) AS allow_schema_evolution,
                 COALESCE(u.table_maintenance_enabled, FALSE) AS table_maintenance_enabled,
                 COALESCE(u.table_maintenance_interval, 'AUTO') AS table_maintenance_interval,
+                COALESCE(u.flatten_table, FALSE) AS flatten_table,
+                COALESCE(u.flatten_inplace, TRUE) AS flatten_inplace,
                 u.table_options,
                 CASE WHEN u.table_name IS NULL THEN FALSE ELSE TRUE END AS config_override,
                 'INIT' AS sync_state,
@@ -400,7 +403,7 @@ class ConfigMetadataLoader(ConfigBase):
             CROSS JOIN default_config d
         )
 
-        MERGE INTO {SyncConstants.SQL_TBL_SYNC_CONFIG} t
+        MERGE INTO bq_sync_configuration t
         USING source s
         ON t.project_id = s.project_id AND
             t.dataset = s.dataset AND
@@ -480,7 +483,7 @@ class Scheduler(ConfigBase):
         ),
         last_load AS (
             SELECT project_id, dataset, table_name, MAX(started) AS last_load_update
-            FROM {SyncConstants.SQL_TBL_SYNC_SCHEDULE}
+            FROM bq_sync_schedule
             WHERE status='COMPLETE'
             GROUP BY project_id, dataset, table_name
         ),
@@ -502,8 +505,8 @@ class Scheduler(ConfigBase):
                 NULL as failed_activities,
                 NULL as max_watermark,
                 c.priority                
-            FROM {SyncConstants.SQL_TBL_SYNC_CONFIG} c 
-            LEFT JOIN {SyncConstants.SQL_TBL_SYNC_SCHEDULE} s ON 
+            FROM bq_sync_configuration c 
+            LEFT JOIN bq_sync_schedule s ON 
                 c.project_id= s.project_id AND
                 c.dataset = s.dataset AND
                 c.table_name = s.table_name AND
@@ -522,7 +525,7 @@ class Scheduler(ConfigBase):
             AND c.enabled = TRUE
         )
 
-        INSERT INTO {SyncConstants.SQL_TBL_SYNC_SCHEDULE}
+        INSERT INTO bq_sync_schedule
         SELECT * FROM schedule s
         WHERE s.project_id = '{self.UserConfig.ProjectID}'
         AND s.dataset = '{self.UserConfig.Dataset}'
@@ -633,7 +636,7 @@ class BQScheduleLoader(ConfigBase):
             FROM (
                 SELECT schedule_id, project_id, dataset, table_name, started, max_watermark,
                 ROW_NUMBER() OVER(PARTITION BY project_id, dataset, table_name ORDER BY scheduled DESC) AS row_num
-                FROM {SyncConstants.SQL_TBL_SYNC_SCHEDULE}
+                FROM bq_sync_schedule
                 WHERE status='COMPLETE'
             )
             WHERE row_num = 1
@@ -642,7 +645,7 @@ class BQScheduleLoader(ConfigBase):
             SELECT
                 sp.table_catalog, sp.table_schema, sp.table_name, sp.partition_id
             FROM bq_information_schema_partitions sp
-            JOIN {SyncConstants.SQL_TBL_SYNC_CONFIG} c ON
+            JOIN bq_sync_configuration c ON
                 sp.table_catalog = c.project_id AND 
                 sp.table_schema = c.dataset AND
                 sp.table_name = c.table_name
@@ -665,8 +668,8 @@ class BQScheduleLoader(ConfigBase):
             h.max_watermark,
             h.last_schedule_dt,
             CASE WHEN (h.schedule_id IS NULL) THEN TRUE ELSE FALSE END AS initial_load
-        FROM {SyncConstants.SQL_TBL_SYNC_CONFIG} c
-        JOIN {SyncConstants.SQL_TBL_SYNC_SCHEDULE} s ON 
+        FROM bq_sync_configuration c
+        JOIN bq_sync_schedule s ON 
             c.project_id = s.project_id AND
             c.dataset = s.dataset AND
             c.table_name = s.table_name
@@ -678,7 +681,7 @@ class BQScheduleLoader(ConfigBase):
             p.table_catalog = c.project_id AND 
             p.table_schema = c.dataset AND
             p.table_name = c.table_name
-        LEFT JOIN {SyncConstants.SQL_TBL_SYNC_SCHEDULE_TELEMETRY} t ON
+        LEFT JOIN bq_sync_schedule_telemetry t ON
             s.schedule_id = t.schedule_id AND
             c.project_id = t.project_id AND
             c.dataset = t.dataset AND
@@ -824,7 +827,7 @@ class BQScheduleLoader(ConfigBase):
 
         return f"{schedule.PartitionColumn} >= {r[0][1]} AND {schedule.PartitionColumn} < {r[0][2]}"
 
-    def merge_table(self, schedule:SyncSchedule, src:DataFrame) -> SyncSchedule:
+    def merge_table(self, schedule:SyncSchedule, tableName:str, src:DataFrame) -> SyncSchedule:
         """
         Merge into Lakehouse Table based on User Configuration. Only supports Insert/Update All
         """
@@ -847,7 +850,7 @@ class BQScheduleLoader(ConfigBase):
         if (schedule.AllowSchemaEvolution):
             self.Context.conf.set("spark.databricks.delta.schema.autoMerge.enabled", "true")
 
-        dest = DeltaTable.forName(self.Context, tableOrViewName=schedule.LakehouseTableName)
+        dest = DeltaTable.forName(self.Context, tableOrViewName=tableName)
 
         dest.alias('d') \
         .merge( \
@@ -912,7 +915,7 @@ class BQScheduleLoader(ConfigBase):
                     predicate = f"{schedule.WatermarkColumn} > {schedule.MaxWatermark}"
                 else:
                     predicate = f"{schedule.WatermarkColumn} > '{schedule.MaxWatermark}'"
-                    
+
                 df_bq = self.read_bq_partition_to_dataframe(schedule.BQTableName, predicate, True)
             else:
                 src = schedule.BQTableName     
@@ -937,12 +940,20 @@ class BQScheduleLoader(ConfigBase):
 
         write_config = { **schedule.TableOptions }
 
+        #Flattening complex types (structs & arrays)
+        df_bq_flattened = None
+        if schedule.FlattenTable:
+            if schedule.FlattenInPlace:
+                df_bq = self.flatten_df(df_bq)
+            else:
+                df_bq_flattened = self.flatten_df(df_bq)
+            
         #Schema Evolution
         if not schedule.InitialLoad:
             if schedule.AllowSchemaEvolution and table_maint:
                 table_maint.evolve_schema(df_bq)
                 write_config["mergeSchema"] = SyncConstants.TRUE
-            
+
         if not schedule.LoadType == SyncConstants.MERGE or schedule.InitialLoad:
             if (schedule.IsTimePartitionedStrategy and schedule.PartitionId is not None) or schedule.IsRangePartitioned:
                 has_lock = False
@@ -959,6 +970,13 @@ class BQScheduleLoader(ConfigBase):
                         .mode(SyncConstants.OVERWRITE) \
                         .options(**write_config) \
                         .saveAsTable(schedule.LakehouseTableName)
+                    
+                    if df_bq_flattened:
+                       df_bq_flattened.write \
+                            .partitionBy(schedule.FabricPartitionColumns) \
+                            .mode(SyncConstants.OVERWRITE) \
+                            .options(**write_config) \
+                            .saveAsTable(f"{schedule.LakehouseTableName}_flattened") 
                 finally:
                     self.appendTableIndex(schedule.LakehouseTableName)
 
@@ -970,16 +988,33 @@ class BQScheduleLoader(ConfigBase):
                         .mode(schedule.Mode) \
                         .options( **write_config) \
                         .saveAsTable(schedule.LakehouseTableName)
+                    
+                    if df_bq_flattened:
+                        df_bq_flattened.write \
+                            .mode(schedule.Mode) \
+                            .options( **write_config) \
+                            .saveAsTable(f"{schedule.LakehouseTableName}_flattened")
                 else:
                     df_bq.write \
                         .partitionBy(schedule.FabricPartitionColumns) \
                         .mode(schedule.Mode) \
                         .options( **write_config) \
                         .saveAsTable(schedule.LakehouseTableName)
+                    
+                    if df_bq_flattened:
+                        df_bq_flattened.write \
+                            .partitionBy(schedule.FabricPartitionColumns) \
+                            .mode(schedule.Mode) \
+                            .options( **write_config) \
+                            .saveAsTable(f"{schedule.LakehouseTableName}_flattened")
                 
                 self.appendTableIndex(schedule.LakehouseTableName)
         else:
-            schedule = self.merge_table(schedule, df_bq)
+            schedule = self.merge_table(schedule, schedule.LakehouseTableName, df_bq)
+
+            if df_bq_flattened:
+                self.merge_table(schedule, f"{schedule.LakehouseTableName}_flattened", df_bq)
+
             self.appendTableIndex(schedule.LakehouseTableName)
 
         if not table_maint:
@@ -1188,6 +1223,50 @@ class BQScheduleLoader(ConfigBase):
             self.process_load_group_telemetry(group_schedule_id)
        
         print(f"Async schedule sync complete...")
+    
+    def flatten_structs(self, nested_df:DataFrame) -> DataFrame:
+        """
+        Recurses through Dataframe and flattens columns of with datatype struct
+        using '_' notation
+        """
+        stack = [((), nested_df)]
+        columns = []
+
+        while len(stack) > 0:        
+            parents, df = stack.pop()
+
+            flat_cols = [col(".".join(parents + (c[0],))).alias("_".join(parents + (c[0],))) \
+                    for c in df.dtypes if c[1][:6] != "struct"]
+                
+            nested_cols = [c[0] for c in df.dtypes if c[1][:6] == "struct"]
+            
+            columns.extend(flat_cols)
+
+            for nested_col in nested_cols:
+                projected_df = df.select(nested_col + ".*")
+                stack.append((parents + (nested_col,), projected_df))
+            
+        return nested_df.select(columns)
+
+    def flatten_df(self, df:DataFrame) -> DataFrame:
+        """
+        Recurses through Dataframe and flattens complex types
+        """ 
+        array_cols = [c[0] for c in df.dtypes if c[1][:5] == "array"]
+
+        if len(array_cols) > 0:
+            while len(array_cols) > 0:        
+                for array_col in array_cols:            
+                    cols_to_select = [x for x in df.columns if x != array_col ]            
+                    df = df.withColumn(array_col, explode(col(array_col)))
+                    
+                df = self.flatten_structs(df)
+                
+                array_cols = [c[0] for c in df.dtypes if c[1][:5] == "array"]
+        else:
+            df = self.flatten_structs(df)
+
+        return df
 
 class BQSync(SyncBase):
     def __init__(self, context:SparkSession, config_path:str):
