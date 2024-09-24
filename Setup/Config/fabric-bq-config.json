@@ -27,6 +27,7 @@
 		"interval": "AUTO",
 		"flatten_table":true|false,
         "flatten_inplace":true|true,
+		"explode_arrays":true|true,
 		"table_options": [
 		{
 			"key": "delta.enableDeletionVectors",
