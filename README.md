@@ -35,8 +35,6 @@ The goal of this accelerator is to simplify the process of synchronizing data fr
 
 To best understand the accelerator, we can break it down into three logical parts: Configuration, Scheduling & Synchronization
 
-> Before diving into the details, the scope for each instance of an accelerator is a single BigQuery dataset within a GCP Project. As we discuss configuration, scheduling, and synchronization, we are always constrained within a single BigQuery dataset. The accelerator can load multiple datasets but does not rationalize or recognize any dependencies beyond a dataset’s boundaries.
-
 ## Configuration
 
 The core of the accelerator is metadata, and this metadata drives the configuration and approach for the BQ Sync process end-to-end. Accelerator configuration happens first through auto-discovery using metadata from BigQuery and second through user-supplied configuration which allows for overriding of refining of the discovered configuration.
