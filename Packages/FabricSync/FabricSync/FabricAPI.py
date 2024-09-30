@@ -27,6 +27,9 @@ class FabricAPIUtil():
     def get_workspace_id(self) -> str:
         return fabric.get_workspace_id()
 
+    def get_workspace_name(self) -> str:
+        return  fabric.resolve_workspace_name()
+        
     def get_lakehouse_id(self, workspace_id, lakehouse_nm: str) -> str:
         lakehouse_id = None
         uri = f"v1/workspaces/{workspace_id}/lakehouses"
