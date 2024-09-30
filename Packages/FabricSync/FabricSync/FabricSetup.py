@@ -123,11 +123,13 @@ class SetupUtil():
         print("Starting BQ Sync Installer...")
 
         fabric_api = FabricAPIUtil()
-        base_path = "/lakehouse/default/Files/sync_setup"
+        working_path = "Files/BQ_Sync_Process"
+        #base_path = "/lakehouse/default/Files/sync_setup"
+        base_path = f"/lakehouse/default/{working_path}"
         local_path = f"{base_path}/sql"
         config_path = f"{base_path}/config"
         libs_path = f"{base_path}/libs"
-        working_path = "Files/BQ_Sync_Process"
+        
 
         if not os.path.isfile(data["gcp_credential_path"]):
             raise Exception("""GCP Credentials not found. 
@@ -141,6 +143,7 @@ class SetupUtil():
 
         #Create Lakehouses
         workspace_id = fabric_api.get_workspace_id()
+        workspace_name = fabric_api.get_workspace_name()
         metadata_lakehouse_id = fabric_api.get_or_create_lakehouse(workspace_id, data["metadata_lakehouse"])
         target_lakehouse_id = fabric_api.get_or_create_lakehouse(workspace_id, data["target_lakehouse"])
 
@@ -166,44 +169,53 @@ class SetupUtil():
 
         encoded_credential = fabric_api.encode_base64(credential_data)
 
-        #credential_file = f"{config_path}/{Path(data["gcp_credential_path"]).name}"
-        #shutil.copyfile(data["gcp_credential_path"], credential_file)
-
-        #credential_file_path = f"/lakehouse/default/{working_path}/libs/{Path(data["gcp_credential_path"]).name}"
-
         #Create default config file
         config_data = {
-            "load_all_tables": True,
-            "metadata_lakehouse": data["metadata_lakehouse"],
-            "target_lakehouse": data["target_lakehouse"],	
-            "gcp_credentials": {
-                "project_id": data["gcp_project_id"],
-                "dataset": data["gcp_dataset_id"],
-                "credential": encoded_credential
-            },	
-            "async": {
-                "enabled": True,
-                "parallelism": 5,
-                "cell_timeout": 36000,
-                "notebook_timeout": 72000
+            "id":data["loader_name"],
+            "load_all_tables":True,
+            "autodetect":True,
+            "fabric":{
+                "workspace_id":workspace_name,
+                "metadata_lakehouse":data["metadata_lakehouse"],
+                "target_lakehouse":data["target_lakehouse"]
+            },
+            "gcp_credentials":{
+                "projects": [
+                    {
+                        "project_id":data["gcp_project_id"],
+                        "datasets": [
+                            {"dataset":data["gcp_dataset_id"]}
+                        ]
+                    }
+                ],
+                "materialization_project_id":data["gcp_project_id"],
+                "materialization_dataset":data["gcp_dataset_id"],
+                "billing_project_id":data["gcp_project_id"],
+                "credential":encoded_credential
+            },        
+            "async":{
+                "enabled":True,
+                "parallelism":5,
+                "cell_timeout":0,
+                "notebook_timeout":0
             },
             "tables": [{
                 "table_name": "__BLANK__TEMPLATE__",
                 "enabled": False
             }]
-        }
+	    }
 
         cfg = f"{config_path}/fabric_bq_config.json"
         self.generate_base_config(cfg, config_data)
         user_config_file_path = f"/lakehouse/default/{working_path}/config/{Path(cfg).name}"
 
-        #Copy configs and libs to working path
-        mssparkutils.fs.cp(f"{base_path.replace('/lakehouse/default/', '')}/", \
-            f"abfss://{workspace_id}@onelake.dfs.fabric.microsoft.com/{metadata_lakehouse_id}/{working_path}",
-            recurse=True)
+        ##Copy configs and libs to working path
+        #mssparkutils.fs.cp(f"{base_path.replace('/lakehouse/default/', '')}/", \
+        #    f"abfss://{workspace_id}@onelake.dfs.fabric.microsoft.com/{metadata_lakehouse_id}/{working_path}",
+        #    recurse=True)
         
-        #Clean up installer files
-        shutil.rmtree(base_path)
+        ##Clean up installer files
+        #shutil.rmtree(base_path)
 
         #Get sync notebooks from Git, customize and install into the workspace
         git_notebooks = [ \

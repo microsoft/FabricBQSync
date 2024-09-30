@@ -8,11 +8,18 @@ import base64 as b64
 from pathlib import Path
 import os
 import hashlib
+from enum import Enum
+
+class BigQueryObjectType(Enum):
+    BASE_TABLE = "BASE_TABLE"
+    VIEW = "VIEW"
+    MATERIALIZED_VIEW = "MATERIALIZED_VIEW"
 
 class SyncConstants:
     '''
     Class representing various string constants used through-out
     '''
+    DEFAULT_ID = "BQ_SYNC_LOADER"
     OVERWRITE = "OVERWRITE"
     APPEND = "APPEND"
     FULL = "FULL"
@@ -37,12 +44,15 @@ class SyncConstants:
     AUTO = "AUTO"
 
     INITIAL_FULL_OVERWRITE = "INITIAL_FULL_OVERWRITE"
+
     INFORMATION_SCHEMA_TABLES = "INFORMATION_SCHEMA.TABLES"
     INFORMATION_SCHEMA_PARTITIONS = "INFORMATION_SCHEMA.PARTITIONS"
     INFORMATION_SCHEMA_COLUMNS = "INFORMATION_SCHEMA.COLUMNS"
     INFORMATION_SCHEMA_TABLE_CONSTRAINTS = "INFORMATION_SCHEMA.TABLE_CONSTRAINTS"
     INFORMATION_SCHEMA_TABLE_OPTIONS = "INFORMATION_SCHEMA.TABLE_OPTIONS"
     INFORMATION_SCHEMA_KEY_COLUMN_USAGE = "INFORMATION_SCHEMA.KEY_COLUMN_USAGE"
+    INFORMATION_SCHEMA_VIEWS = "INFORMATION_SCHEMA.VIEWS"
+    INFORMATION_SCHEMA_MATERIALIZED_VIEWS = "INFORMATION_SCHEMA.MATERIALIZED_VIEWS"
 
     SQL_TBL_SYNC_SCHEDULE = "bq_sync_schedule"
     SQL_TBL_SYNC_CONFIG = "bq_sync_configuration"
@@ -51,32 +61,48 @@ class SyncConstants:
 
     CONFIG_JSON_TEMPLATE = """
     {
+        "id":"",
         "load_all_tables":true,
+        "load_views":false,
+        "load_materialized_views":false,
         "autodetect":true,
-        "master_reset":false,
-        "metadata_lakehouse":"",
-        "target_lakehouse":"",
-        
-        "gcp_credentials":{
-            "project_id":"",
-            "dataset":"",
-            "credential_path":"",
-            "api_token":"",
-            "credential":""
+        "fabric":{
+            "workspace_id":"",
+            "metadata_lakehouse":"",
+            "target_lakehouse":"",
+            "target_schema":"",
+            "enable_schemas":false
         },
-        
+        "gcp_credentials":{
+            "projects": [
+                {
+                    "project_id":"",
+                    "datasets": [
+                        {
+                            "dataset":""
+                        }
+                    ]
+                }
+            ],
+            "credential_path":"",
+            "credential":"",
+            "materialization_project_id":"",
+            "materialization_dataset":"",
+            "billing_project_id":""
+        },        
         "async":{
             "enabled":true,
             "parallelism":5,
             "cell_timeout":0,
             "notebook_timeout":0
         },
-        
-        
         "tables":[
         {
             "priority":100,
+            "project_id":"",
+            "dataset":"",
             "table_name":"",
+            "object_type":"",
             "enabled":true,
             "source_query":"",
             "enforce_partition_expiration":true,
@@ -115,6 +141,7 @@ class SyncConstants:
             },
             "lakehouse_target":{
                 "lakehouse":"",
+                "schema":"",
                 "table_name":""
             }
         }
@@ -140,16 +167,12 @@ class SyncConstants:
             SyncConstants.INFORMATION_SCHEMA_COLUMNS, \
             SyncConstants.INFORMATION_SCHEMA_TABLE_CONSTRAINTS, \
             SyncConstants.INFORMATION_SCHEMA_KEY_COLUMN_USAGE, \
-            SyncConstants.INFORMATION_SCHEMA_TABLE_OPTIONS]
+            SyncConstants.INFORMATION_SCHEMA_TABLE_OPTIONS, \
+            SyncConstants.INFORMATION_SCHEMA_VIEWS, \
+            SyncConstants.INFORMATION_SCHEMA_MATERIALIZED_VIEWS]
 
     def get_sync_temp_views() -> List[str]:
-        return ["bq_information_schema_columns", \
-            "bq_information_schema_key_column_usage", \
-            "bq_information_schema_partitions", \
-            "bq_information_schema_table_constraints", \
-            "bq_information_schema_table_options", \
-            "bq_information_schema_tables", \
-            "bq_table_metadata_autodetect", \
+        return ["bq_table_metadata_autodetect", \
             "user_config_json", \
             "user_config_table_keys", \
             "user_config_tables"]
@@ -174,6 +197,7 @@ class SyncSchedule:
         """
         self.Row = row
         self.StartTime = datetime.now(timezone.utc)
+        self.SyncId = row["sync_id"]
         self.GroupScheduleId = row["group_schedule_id"]
         self.ScheduleId = row["schedule_id"]
         self.LoadStrategy = row["load_strategy"]
@@ -184,6 +208,7 @@ class SyncSchedule:
         self.ProjectId = row["project_id"]
         self.Dataset = row["dataset"]
         self.TableName = row["table_name"]
+        self.ObjectType = row["object_type"]
         self.SourceQuery = row["source_query"]
         self.MaxWatermark = row["max_watermark"]
         self.WatermarkColumn = row["watermark_column"]
@@ -195,7 +220,9 @@ class SyncSchedule:
         self.PartitionDataType = row["partition_data_type"]   
         self.PartitionRange = row["partition_range"]     
         self.Lakehouse = row["lakehouse"]
+        self.LakehouseSchema = row["lakehouse_schema"]
         self.DestinationTableName = row["lakehouse_table_name"]
+        self.UseLakehouseSchema = row["use_lakehouse_schema"]
         self.EnforcePartitionExpiration = row["enforce_partition_expiration"]
         self.AllowSchemaEvolution = row["allow_schema_evolution"]
         self.EnableTableMaintenance = row["table_maintenance_enabled"]
@@ -263,14 +290,27 @@ class SyncSchedule:
         """
         Returns the two-part Lakehouse table name
         """
-        return "{0}.{1}".format(self.Lakehouse, self.DestinationTableName)
-        
+        if self.UseLakehouseSchema:
+            table_nm = f"{self.Lakehouse}.{self.LakehouseSchema}.{self.DestinationTableName}"
+        else:
+            table_nm = f"{self.Lakehouse}.{self.DestinationTableName}"
+
+        return table_nm
+
+    @property
+    def BQObjectType(self) -> BigQueryObjectType:
+        """
+        Returns the type of BigQuery object (table, view, etc)
+        """
+        return BigQueryObjectType[self.BQObjectType.upper()]
+
     @property
     def BQTableName(self) -> str:
         """
         Returns the three-part BigQuery table name
         """
-        return "{0}.{1}.{2}".format(self.ProjectId, self.Dataset, self.TableName)
+        return f"{self.ProjectId}.{self.Dataset}.{self.TableName}"
+
 
     @property
     def IsTimeIngestionPartitioned(self) -> bool:
@@ -316,7 +356,7 @@ class JSONConfigObj:
         Extracts a value from the user config JSON doc by key. If it doesn't
         exist the default value is returned
         """
-        if config_key in json:
+        if json and config_key in json:
             return json[config_key]
         else:
             return default_val
@@ -330,31 +370,26 @@ class ConfigDataset(JSONConfigObj):
         Loads from use config JSON
         """
         super().__init__()
+        self.ID  = super().get_json_conf_val(json_config, "id", SyncConstants.DEFAULT_ID)
         self.LoadAllTables = super().get_json_conf_val(json_config, "load_all_tables", True)
+        self.LoadViews = super().get_json_conf_val(json_config, "load_views", False)
+        self.LoadMaterializedViews = super().get_json_conf_val(json_config, "load_materialized_views", False)
         self.Autodetect = super().get_json_conf_val(json_config, "autodetect", True)
-        self.MasterReset = super().get_json_conf_val(json_config, "master_reset", False)
-        self.MetadataLakehouse = super().get_json_conf_val(json_config, "metadata_lakehouse", None)
-        self.TargetLakehouse = super().get_json_conf_val(json_config, "target_lakehouse", None)
+
         self.Tables = []
 
-        if "gcp_credentials" in json_config:
-            self.GCPCredential = ConfigGCPCredential(
-                super().get_json_conf_val(json_config["gcp_credentials"], "project_id", None),
-                super().get_json_conf_val(json_config["gcp_credentials"], "dataset", None),
-                super().get_json_conf_val(json_config["gcp_credentials"], "credential_path", None),
-                super().get_json_conf_val(json_config["gcp_credentials"], "access_token", None),
-                super().get_json_conf_val(json_config["gcp_credentials"], "credential", None)
-            )
+        if "fabric" in json_config:
+            self.Fabric = ConfigFabric(json_config["fabric"])
         else:
-            self.GCPCredential = ConfigGCPCredential()
+            self.Fabric = ConfigFabric()
+        
+        if "gcp_credentials" in json_config:
+            self.GCPCredential = ConfigGCPCredential(json_config["gcp_credentials"])
+        else:
+            self.GCPCredential= ConfigGCPCredential()
 
         if "async" in json_config:
-            self.Async = ConfigAsync(
-                super().get_json_conf_val(json_config["async"], "enabled", False),
-                super().get_json_conf_val(json_config["async"], "parallelism", None),
-                super().get_json_conf_val(json_config["async"], "notebook_timeout", None),
-                super().get_json_conf_val(json_config["async"], "cell_timeout", None)
-            )
+            self.Async = ConfigAsync(json_config["async"])
         else:
             self.Async = ConfigAsync()
 
@@ -362,79 +397,109 @@ class ConfigDataset(JSONConfigObj):
             for t in json_config["tables"]:
                 self.Tables.append(ConfigBQTable(t))
     
-    @property
-    def ProjectID(self) -> str:
-        """
-        GCP Project ID
-        """
-        return self.GCPCredential.ProjectID
-    
-    @property
-    def Dataset(self) -> str:
-        """
-        GCP Dataset
-        """
-        return self.GCPCredential.Dataset
-    
-    def get_table_name_list(self, only_enabled:bool = False) -> list[str]:
+    def get_table_name_list(self, project:str, dataset:str, obj_type:BigQueryObjectType, only_enabled:bool = False) -> list[str]:
         """
         Returns a list of table names from the user configuration
         """
-        if not only_enabled:
-            tbls = [str(x.TableName) for x in self.Tables]
-        else:
-            tbls = [str(x.TableName) for x in self.Tables if x.Enabled == True]
+        tables = [t for t in self.Tables \
+            if t.ProjectID == project and t.Dataset == dataset and t.ObjectType == obj_type.name]
 
-        return tbls
+        if only_enabled:
+            tables = [t for t in tables if t.Enabled == True]
 
-    def get_bq_table_fullname(self, tbl_name:str) -> str:
-        """
-        Returns three-part BigQuery table name
-        """
-        return f"{self.ProjectID}.{self.Dataset}.{tbl_name}"
+        return [str(x.TableName) for x in tables]
 
-    def get_lakehouse_tablename(self, lakehouse:str, tbl_name:str) -> str:
+class ConfigFabric(JSONConfigObj):
+    """
+    Fabric model
+    """
+    def __init__(self, json_config:str = None):
         """
-        Reurns two-part Lakehouse table name
+        Loads from Fabric config JSON object
         """
-        return f"{lakehouse}.{tbl_name}"
+        super().__init__()
 
-    def flatten_3part_tablename(self, tbl_name:str) -> str:
+        self.WorkspaceID = super().get_json_conf_val(json_config, "workspace_id", None)
+        self.MetadataLakehouse = super().get_json_conf_val(json_config, "metadata_lakehouse", None)
+        self.TargetLakehouse = super().get_json_conf_val(json_config, "target_lakehouse", None)
+        self.TargetLakehouseSchema = super().get_json_conf_val(json_config, "target_schema", None)
+        self.EnableSchemas = super().get_json_conf_val(json_config, "enable_schemas", None)
+                
+class ConfigGCPProject(JSONConfigObj):
+    """
+    GCP Billing Project Model
+    """
+    def __init__(self, json_config:str):
         """
-        Replaces special characters in the GCP project name and returns three-part
-        name with underscores
+        Loads from GCP project id config JSON object
         """
-        clean_project_id = self.ProjectID.replace("-", "_")
-        return f"{clean_project_id}_{self.Dataset}_{tbl_name}"
+        super().__init__()
 
-class ConfigGCPCredential:
+        self.ProjectID = super().get_json_conf_val(json_config, "project_id", None)
+        self.Datasets = []
+
+        if json_config and "datasets" in json_config:
+            for d in json_config["datasets"]:
+                self.Datasets.append(ConfigGCPDataset(d))
+
+class ConfigGCPDataset(JSONConfigObj):
+    """
+    GCP Dataset model
+    """
+    def __init__(self, json_config:str = None):
+        """
+        Loads from GCP dataset config JSON object
+        """
+        super().__init__()
+        self.Dataset = super().get_json_conf_val(json_config, "dataset", None)
+
+class ConfigGCPCredential(JSONConfigObj):
     """
     GCP Credential model
     """
-    def __init__(self, project_id = None, dataset = None, path:str = None, token:str = None, credential:str = None):
-        self.ProjectID = project_id
-        self.Dataset = dataset
-        self.CredentialPath = path
-        self.AccessToken = token
-        self.Credential = credential
+    def __init__(self, json_config:str = None):
+        """
+        Loads from GCP credential config JSON object
+        """
+        super().__init__()
 
-class ConfigTableMaintenance:
+        self.CredentialPath = super().get_json_conf_val(json_config, "credential_path", None)
+        self.AccessToken = super().get_json_conf_val(json_config, "access_token", None)
+        self.Credential = super().get_json_conf_val(json_config, "credential", None)
+        self.MaterializationProjectID = super().get_json_conf_val(json_config, "materialization_project_id", None)
+        self.MaterializationDataset = super().get_json_conf_val(json_config, "materialization_dataset", None)
+        self.BillingProjectID = super().get_json_conf_val(json_config, "billing_project_id", None)
+        self.Projects = []
+
+        if json_config and "projects" in json_config:
+            for p in json_config["projects"]:
+                self.Projects.append(ConfigGCPProject(p))                
+
+class ConfigTableMaintenance(JSONConfigObj):
     """
     User Config class for table maintenance
     """
-    def __init__(self, enabled:bool = False, interval:str = None):
-        self.Enabled = enabled
-        self.Interval = interval
+    def __init__(self, json_config:str = None):
+        """
+        Loads from table maintenance config JSON object
+        """
+        self.Enabled = super().get_json_conf_val(json_config, "enabled", False)
+        self.Interval = super().get_json_conf_val(json_config, "interval", "MONTH")
+                
 
-class ConfigAsync:
+class ConfigAsync(JSONConfigObj):
     """
     User Config class for parallelized async loading configuration
     """
-    def __init__(self, enabled:bool = False, parallelism:int = 5, notebook_timeout:int = 1800, cell_timeout:int = 300):
-        self.Enabled = enabled
-        self.Parallelism = parallelism
-        self.NotebookTimeout = notebook_timeout
-        self.CellTimeout = cell_timeout
+    def __init__(self, json_config:str = None):
+        """
+        Loads from async config JSON object
+        """
+        super().__init__()
+        self.Enabled = super().get_json_conf_val(json_config, "enabled", False)
+        self.Parallelism = super().get_json_conf_val(json_config, "parallelism", 5)
+        self.NotebookTimeout = super().get_json_conf_val(json_config, "notebook_timeout", 1800)
+        self.CellTimeout = super().get_json_conf_val(json_config, "cell_timeout", 300)
 
 class ConfigTableColumn:
     """
@@ -443,26 +508,37 @@ class ConfigTableColumn:
     def __init__(self, col:str = ""):
         self.Column = col
 
-class ConfigLakehouseTarget:
+class ConfigLakehouseTarget(JSONConfigObj):
     """
     User Config class for Big Query Table Lakehouse target mapping configuration
     """
-    def __init__(self, lakehouse:str = "", table:str = ""):
-        self.Lakehouse = lakehouse
-        self.Table = table
+    def __init__(self, json_config:str = None):
+        """
+        Loads from lakehouse target config JSON object
+        """
+        super().__init__()
 
-class ConfigPartition:
+        self.Lakehouse = super().get_json_conf_val(json_config, "lakehouse", "")
+        self.Schema = super().get_json_conf_val(json_config, "schema", "")
+        self.Table = super().get_json_conf_val(json_config, "table_name", "")
+                
+
+class ConfigPartition(JSONConfigObj):
     """
     User Config class for Big Query Table partition configuration
     """
-    def __init__(   self, enabled:bool = False, partition_type:str = "", col:ConfigTableColumn = ConfigTableColumn(), \
-                    grain:str = "", partition_data_type:str = "", partition_range:str = ""):
-        self.Enabled = enabled
-        self.PartitionType = partition_type
-        self.PartitionColumn = col
-        self.Granularity = grain
-        self.PartitionDataType = partition_data_type
-        self.PartitionRange = partition_range
+    def __init__(self, json_config:str = None):
+        """
+        Loads from user config JSON object
+        """
+        super().__init__()
+
+        self.Enabled = super().get_json_conf_val(json_config, "enabled", False)
+        self.PartitionType = super().get_json_conf_val(json_config, "type", "")
+        self.PartitionColumn = super().get_json_conf_val(json_config, "column", "")
+        self.Granularity = super().get_json_conf_val(json_config, "partition_grain", "")
+        self.PartitionDataType = super().get_json_conf_val(json_config, "partition_data_type", "")
+        self.PartitionRange = super().get_json_conf_val(json_config, "partition_range", "")
 
 class ConfigBQTable (JSONConfigObj):
     """
@@ -471,13 +547,16 @@ class ConfigBQTable (JSONConfigObj):
     def __str__(self):
         return str(self.TableName)
 
-    def __init__(self, json_config:str):
+    def __init__(self, json_config:str = None):
         """
         Loads from user config JSON object
         """
         super().__init__()
 
+        self.ProjectID = super().get_json_conf_val(json_config, "project_id", "")
+        self.Dataset = super().get_json_conf_val(json_config, "dataset", "")
         self.TableName = super().get_json_conf_val(json_config, "table_name", "")
+        self.ObjectType  = super().get_json_conf_val(json_config, "object_type", "BASE_TABLE")
         self.Priority = super().get_json_conf_val(json_config, "priority", 100)
         self.SourceQuery = super().get_json_conf_val(json_config, "source_query", "")
         self.LoadStrategy = super().get_json_conf_val(json_config, "load_strategy" , SyncConstants.FULL)
@@ -494,26 +573,18 @@ class ConfigBQTable (JSONConfigObj):
         self.TableOptions:dict[str, str] = {}
 
         if "lakehouse_target" in json_config:
-            self.LakehouseTarget = ConfigLakehouseTarget( \
-                super().get_json_conf_val(json_config["lakehouse_target"], "lakehouse", ""), \
-                super().get_json_conf_val(json_config["lakehouse_target"], "table_name", ""))
+            self.LakehouseTarget = ConfigLakehouseTarget(json_config["lakehouse_target"])
         else:
             self.LakehouseTarget = ConfigLakehouseTarget()
         
         if "watermark" in json_config:
-            self.Watermark = ConfigTableColumn( \
+            self.Watermark = ConfigTableColumn(
                 super().get_json_conf_val(json_config["watermark"], "column", ""))
         else:
             self.Watermark = ConfigTableColumn()
 
         if "partitioned" in json_config:
-            self.Partitioned = ConfigPartition( \
-                super().get_json_conf_val(json_config["partitioned"], "enabled", False), \
-                super().get_json_conf_val(json_config["partitioned"], "type", ""), \
-                super().get_json_conf_val(json_config["partitioned"], "column", ""), \
-                super().get_json_conf_val(json_config["partitioned"], "partition_grain", ""), \
-                super().get_json_conf_val(json_config["partitioned"], "partition_data_type", ""), \
-                super().get_json_conf_val(json_config["partitioned"], "partition_range", ""))
+            self.Partitioned = ConfigPartition(json_config["partitioned"])
         else:
             self.Partitioned = ConfigPartition()
         
@@ -522,9 +593,7 @@ class ConfigBQTable (JSONConfigObj):
                 self.TableOptions[o["key"]] = o["value"]
 
         if "table_maintenance" in json_config:
-            self.TableMaintenance = ConfigTableMaintenance( \
-                super().get_json_conf_val(json_config["table_maintenance"], "enabled", False), \
-                super().get_json_conf_val(json_config["table_maintenance"], "interval", "MONTH"))
+            self.TableMaintenance = ConfigTableMaintenance(json_config["table_maintenance"])
         else:
             self.TableMaintenance = ConfigTableMaintenance()
 
@@ -532,7 +601,7 @@ class ConfigBQTable (JSONConfigObj):
 
         if "keys" in json_config:
             for c in json_config["keys"]:
-                self.Keys.append(ConfigTableColumn( \
+                self.Keys.append(ConfigTableColumn(
                     super().get_json_conf_val(c, "column", "")))
 
 class ConfigBase():
@@ -547,50 +616,61 @@ class ConfigBase():
         self.UserConfig = user_config
         self.GCPCredential = gcp_credential
     
+    def get_bq_reader_config(self, partition_filter:str = None):
+        """
+        Spark Reader options required for the BigQuery Spark Connector
+        --parentProject - billing project id for the API transaction costs, defaults to service account project id if not specified
+        --credentials - gcp service account credentials
+        --viewEnabled - required to be true when reading queries, views or information schema
+        --materializationProject - billing project id where the views will be materialized out to temp tables for storage api
+        --materializationDataset - dataset where views will be materialized out to temp tables for storage api
+        --filter - required for tables that have mandatory partition filters or when reading table partitions
+        """
+        cfg = {
+            "credentials" : self.GCPCredential,
+            "viewsEnabled" : "true"
+        }
+    
+        if self.UserConfig.GCPCredential.MaterializationProjectID:
+            cfg["materializationProject"] = self.UserConfig.GCPCredential.MaterializationProjectID
+        
+        if self.UserConfig.GCPCredential.MaterializationDataset:
+            cfg["materializationDataset"] = self.UserConfig.GCPCredential.MaterializationDataset
+
+        if self.UserConfig.GCPCredential.BillingProjectID:
+            cfg["parentProject"] = self.UserConfig.GCPCredential.BillingProjectID
+
+        if partition_filter:
+            cfg["filter"] = partition_filter
+        
+        return cfg
+        
     def read_bq_partition_to_dataframe(self, table:str, partition_filter:str, cache_results:bool=False) -> DataFrame:
         """
         Reads a specific partition using the BigQuery spark connector.
         BigQuery does not support table decorator so the table and partition info 
         is passed using options
-        """
-        df = self.Context.read \
-            .format("bigquery") \
-            .option("parentProject", self.UserConfig.ProjectID) \
-            .option("credentials", self.GCPCredential) \
-            .option("viewsEnabled", "true") \
-            .option("materializationDataset", self.UserConfig.Dataset) \
-            .option("table", table) \
-            .option("filter", partition_filter) \
-            .load()
-        
-        if cache_results:
-            df.cache()
-        
-        return df
+        """        
+        return self.read_bq_to_dataframe(query=table, partition_filter=partition_filter, cache_results=cache_results)
 
-    def read_bq_to_dataframe(self, query:str, cache_results:bool=False) -> DataFrame:
+    def read_bq_to_dataframe(self, query:str, partition_filter:str=None, cache_results:bool=False) -> DataFrame:
         """
         Reads a BigQuery table using the BigQuery spark connector
         """
-        df = self.Context.read \
-            .format("bigquery") \
-            .option("parentProject", self.UserConfig.ProjectID) \
-            .option("credentials", self.GCPCredential) \
-            .option("viewsEnabled", "true") \
-            .option("materializationDataset", self.UserConfig.Dataset) \
-            .load(query)
+        cfg = self.get_bq_reader_config(partition_filter=partition_filter)
+
+        df = self.Context.read.format("bigquery").options(**cfg).load(query)
         
         if cache_results:
             df.cache()
         
         return df
 
-    def write_lakehouse_table(self, df:DataFrame, lakehouse:str, tbl_nm:str, \
-        mode:str=SyncConstants.OVERWRITE, allow_schema_evolution:bool = False):
+    def write_lakehouse_table(self, df:DataFrame, lakehouse:str, tbl_nm:str, mode:str=SyncConstants.OVERWRITE):
         """
         Write a DataFrame to the lakehouse using the Lakehouse.TableName notation
         """
-        dest_table = self.UserConfig.get_lakehouse_tablename(lakehouse, tbl_nm)
+        dest_table = f"{lakehouse}.{tbl_nm}"
 
         df.write \
             .mode(mode) \
@@ -615,7 +695,7 @@ class SyncBase():
 
         self.UserConfig = self.ensure_user_config()
         self.GCPCredential = self.load_gcp_credential()
-        self.Context.sql(f"USE {self.UserConfig.MetadataLakehouse}")
+        self.Context.sql(f"USE {self.UserConfig.Fabric.MetadataLakehouse}")
     
     def ensure_user_config(self) -> ConfigDataset:
         """
@@ -624,7 +704,6 @@ class SyncBase():
         """
         if self.UserConfig is None and self.ConfigPath is not None:
             config = self.load_user_config(self.ConfigPath)
-
             cfg = ConfigDataset(config)
 
             self.validate_user_config(cfg)
@@ -709,37 +788,6 @@ class SyncBase():
         
         validation_errors = []
 
-        if not cfg.ProjectID:
-            validation_errors.append("GCP Project ID missing or empty")
-        
-        if not cfg.Dataset:
-            validation_errors.append("GCP Dataset missing or empty")
-
-        if not cfg.MetadataLakehouse:
-            validation_errors.append("Metadata Lakehouse missing or empty")
-        
-        if not cfg.TargetLakehouse:
-            validation_errors.append("Target Lakehouse missing or empty")
-
-        if not cfg.GCPCredential.CredentialPath and not cfg.GCPCredential.Credential:
-            validation_errors.append("GCP Credentials Path and GCP Credentials cannot both be empty")
-        
-        for t in cfg.Tables:
-            if not t.TableName:
-                validation_errors.append("Unknown table, table with missing or empty Table Name")
-                continue
-
-            if t.LoadStrategy and not t.LoadStrategy in SyncConstants.get_load_strategies():
-                validation_errors.append(f"Table {t.TableName} has a missing or invalid load strategy")
-
-            if t.LoadType and not t.LoadType in SyncConstants.get_load_types():
-                validation_errors.append(f"Table {t.TableName} has a missing or invalid load type")
-            
-            if t.LoadStrategy == SyncConstants.WATERMARK:
-                if t.Watermark is None or not t.Watermark.Column:
-                    validation_errors.append(f"Table {t.TableName} is configured for Watermark but is missing the Watermark column")
-
-    
         if not validation_errors and len(validation_errors) > 0:
             config_errors = "\r\n".join(validation_errors)
             raise ValueError(f"Errors in User Config JSON File:\r\n{config_errors}")
