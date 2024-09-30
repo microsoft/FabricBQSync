@@ -155,7 +155,7 @@ class SetupUtil():
         spark_jar_path = f"abfss://{workspace_id}@onelake.dfs.fabric.microsoft.com/{metadata_lakehouse_id}/{working_path}/libs/{spark_jar}"
 
         #Download the sync python package from Git
-        wheel_name = f"FabricSync-0.2.0-py3-none-any.whl"
+        wheel_name = f"FabricSync-1.0.0-py3-none-any.whl"
         wheel_url = f"https://github.com/microsoft/FabricBQSync/raw/main/Packages/FabricSync/dist/{wheel_name}"
 
         self.download_file(wheel_url, f"{libs_path}/{wheel_name}")

@@ -8,6 +8,7 @@ from queue import PriorityQueue
 from threading import Thread, Lock
 import uuid
 
+from FabricSync.BQ.Metastore import *
 from FabricSync.BQ.Config import *
 from FabricSync.DeltaTableUtility import *
 
@@ -24,128 +25,6 @@ class ConfigMetadataLoader(ConfigBase):
         Calls the parent init to load the user config JSON file
         """        
         super().__init__(context, user_config, gcp_credential)
-    
-    def create_autodetect_view(self):
-        """
-        Creates the autodetect temporary view that uses the BigQuery table metadata
-        to determine default sync configuration based on defined heuristics
-        """
-        sql = """
-        CREATE OR REPLACE TEMPORARY VIEW bq_table_metadata_autodetect
-        AS
-        WITH pkeys AS (    
-            SELECT
-                c.table_catalog, c.table_schema, c.table_name, 
-                k.column_name AS pk_col
-            FROM bq_information_schema_table_constraints c
-            JOIN bq_information_schema_key_column_usage k ON
-                k.table_catalog = c.table_catalog AND
-                k.table_schema = c.table_schema AND
-                k.table_name = c.table_name AND
-                k.constraint_name = c.constraint_name
-            JOIN bq_information_schema_columns n ON
-                n.table_catalog = k.table_catalog AND
-                n.table_schema = k.table_schema AND
-                n.table_name = k.table_name AND
-                n.column_name = k.column_name
-            JOIN bq_data_type_map m ON n.data_type = m.data_type
-            WHERE c.constraint_type = 'PRIMARY KEY'
-            AND m.is_watermark = 'YES'
-        ),
-        pkeys_cnt AS (
-            SELECT 
-                table_catalog, table_schema, table_name, 
-                COUNT(*) as pk_cnt
-            FROM pkeys
-            GROUP BY table_catalog, table_schema, table_name
-        ),
-        watermark_cols AS (
-            SELECT 
-                k.*
-            FROM pkeys k
-            JOIN pkeys_cnt c ON 
-                k.table_catalog = c.table_catalog AND
-                k.table_schema = c.table_schema AND
-                k.table_name = c.table_name
-            WHERE c.pk_cnt = 1
-        ),
-        partitions AS (
-            SELECT
-                table_catalog, table_schema, table_name, 
-                count(*) as partition_count,
-                avg(len(partition_id)) AS partition_id_len,
-                sum(case when partition_id is NULL then 1 else 0 end) as null_partition_count
-            FROM bq_information_schema_partitions
-            GROUP BY table_catalog, table_schema, table_name
-        ), 
-        partition_columns AS
-        (
-            SELECT
-                table_catalog, table_schema, table_name,
-                column_name, c.data_type,
-                m.partition_type AS partitioning_type
-            FROM bq_information_schema_columns c
-            JOIN bq_data_type_map m ON c.data_type=m.data_type
-            WHERE is_partitioning_column = 'YES'
-        ),
-        range_partitions AS 
-        (
-            SELECT 
-                table_catalog, table_schema, table_name,
-                SUBSTRING(gen, 16, LEN(gen) - 16) AS partition_range
-            FROM (
-                SELECT 
-                    table_catalog, table_schema, table_name,
-                    SUBSTRING(ddl,
-                        LOCATE('GENERATE_ARRAY', ddl),
-                        LOCATE(')', ddl, LOCATE('GENERATE_ARRAY', ddl)) - LOCATE('GENERATE_ARRAY', ddl) + 1) as gen   
-                FROM bq_information_schema_tables 
-                WHERE CONTAINS(ddl, 'GENERATE_ARRAY')
-            )
-        ),
-        partition_cfg AS
-        (
-            SELECT
-                p.*,
-                CASE WHEN p.partition_count = 1 AND p.null_partition_count = 1 THEN FALSE ELSE TRUE END AS is_partitioned,
-                c.column_name AS partition_col,
-                c.data_type AS partition_data_type,
-                c.partitioning_type,
-                CASE WHEN (c.partitioning_type = 'TIME')
-                    THEN 
-                        CASE WHEN (partition_id_len = 4) THEN 'YEAR'
-                            WHEN (partition_id_len = 6) THEN 'MONTH'
-                            WHEN (partition_id_len = 8) THEN 'DAY'
-                            WHEN (partition_id_len = 10) THEN 'HOUR'
-                            ELSE NULL END
-                    ELSE NULL END AS partitioning_strategy
-            FROM partitions p
-            LEFT JOIN partition_columns c ON 
-                p.table_catalog = c.table_catalog AND
-                p.table_schema = c.table_schema AND
-                p.table_name = c.table_name
-        )
-
-        SELECT 
-            t.table_catalog, t.table_schema, t.table_name, t.is_insertable_into,
-            p.is_partitioned, p.partition_col, p.partition_data_type, p.partitioning_type, p.partitioning_strategy,
-            w.pk_col, r.partition_range
-        FROM bq_information_schema_tables t
-        LEFT JOIN watermark_cols w ON 
-            t.table_catalog = w.table_catalog AND
-            t.table_schema = w.table_schema AND
-            t.table_name = w.table_name
-        LEFT JOIN partition_cfg p ON
-            t.table_catalog = p.table_catalog AND
-            t.table_schema = p.table_schema AND
-            t.table_name = p.table_name
-        LEFT JOIN range_partitions r ON 
-            t.table_catalog = r.table_catalog AND
-            t.table_schema = r.table_schema AND
-            t.table_name = r.table_name
-        """
-
-        self.Context.sql(sql)
 
     def sync_bq_information_schema_core(self, project:str, dataset:str, type:BigQueryObjectType = BigQueryObjectType.BASE_TABLE):
         """
@@ -291,197 +170,17 @@ class ConfigMetadataLoader(ConfigBase):
 
         self.create_proxy_views()
 
-    def create_userconfig_tables_proxy_view(self):
-        """
-        Explodes the User Config table configuration into a temporary view
-        """
-        sql = """
-            CREATE OR REPLACE TEMPORARY VIEW user_config_tables
-            AS
-            SELECT
-                sync_id,
-                tbl.project_id,tbl.dataset,tbl.table_name,tbl.object_type,
-                tbl.enabled,tbl.priority,tbl.source_query,
-                tbl.load_strategy,tbl.load_type,tbl.interval,
-                tbl.flatten_table,tbl.flatten_inplace, tbl.explode_arrays,
-                tbl.watermark.column as watermark_column,
-                tbl.partitioned.enabled as partition_enabled,
-                tbl.partitioned.type as partition_type,
-                tbl.partitioned.column as partition_column,
-                tbl.partitioned.partition_grain,
-                tbl.partitioned.partition_data_type,
-                tbl.partitioned.partition_range,
-                tbl.lakehouse_target.lakehouse,
-                tbl.lakehouse_target.schema AS lakehouse_schema,
-                tbl.lakehouse_target.table_name AS lakehouse_target_table,
-                tbl.keys,
-                tbl.enforce_partition_expiration AS enforce_partition_expiration,
-                tbl.allow_schema_evolution AS allow_schema_evolution,
-                tbl.table_maintenance.enabled AS table_maintenance_enabled,
-                tbl.table_maintenance.interval AS table_maintenance_interval,
-                tbl.table_options
-            FROM (
-                SELECT 
-                    id AS sync_id,
-                    EXPLODE(tables) AS tbl 
-                FROM user_config_json)
-        """
-        self.Context.sql (sql)
-
-    def create_userconfig_tables_cols_proxy_view(self):
-        """
-        Explodes the User Config table primary keys into a temporary view
-        """
-        sql = """
-            CREATE OR REPLACE TEMPORARY VIEW user_config_table_keys
-            AS
-            SELECT
-                id AS sync_id, project_id, dataset, table_name, pkeys.column
-            FROM (
-                SELECT
-                    id, tbl.project_id, tbl.dataset, tbl.table_name, EXPLODE(tbl.keys) AS pkeys
-                FROM (SELECT id, EXPLODE(tables) AS tbl FROM user_config_json)
-            )
-        """
-        self.Context.sql(sql)
-
     def create_proxy_views(self):
         """
         Create the user config and covering BQ information schema views
         """
-        self.create_userconfig_tables_proxy_view()        
-        self.create_userconfig_tables_cols_proxy_view()
+        self.Metastore.create_userconfig_tables_proxy_view()        
+        self.Metastore.create_userconfig_tables_cols_proxy_view()
 
-        self.create_autodetect_view()      
+        self.Metastore.create_autodetect_view()      
 
-    def enforce_load_all(self):
-        if not self.UserConfig.LoadAllTables:
-            sql = "UPDATE bq_sync_configuration SET enabled='FALSE'"
-            self.Context.sql(sql)
-
-    def auto_detect_table_profiles(self):
-        """
-        The autodetect provided the following capabilities:
-         
-        1. Uses the BigQuery metadata to determine a default config for each table
-        2. If a user-defined table configuration is supplied it overrides the default configuration
-        3. Write the configuration when the configuration is not locked
-            a. The load configuration doesn't support changes without a reload of the data.
-            b. The only changes that are support for locked configurations are:
-                - Enabling and Disabling the table sync
-                - Changing the table load Priority
-                - Updating the table load Interval
-        """
-        self.enforce_load_all()
-        
-        sql = f"""
-        WITH default_config AS (
-            SELECT id AS sync_id,
-            COALESCE(autodetect, TRUE) AS autodetect, 
-            load_all_tables, 
-            fabric.target_lakehouse AS target_lakehouse,
-            fabric.target_schema AS target_schema,
-            COALESCE(fabric.enable_schemas, FALSE) AS enable_schemas 
-            FROM user_config_json
-        ),
-        pk AS (
-            SELECT
-            a.table_catalog, a.table_schema, a.table_name, array_agg(COALESCE(a.pk_col, u.column)) as pk
-            FROM bq_table_metadata_autodetect a
-            LEFT JOIN user_config_table_keys u ON
-                a.table_catalog = u.project_id AND
-                a.table_schema = u.dataset AND
-                a.table_name = u.table_name
-            GROUP BY a.table_catalog, a.table_schema, a.table_name
-        ),
-        source AS (
-            SELECT
-                d.sync_id,
-                a.table_catalog as project_id,
-                a.table_schema as dataset,
-                a.table_name as table_name,
-                'BASE_TABLE' AS object_type,
-                CASE WHEN d.load_all_tables THEN
-                    COALESCE(u.enabled, TRUE) ELSE
-                    COALESCE(u.enabled, FALSE) END AS enabled,
-                COALESCE(u.lakehouse, d.target_lakehouse) AS lakehouse,
-                
-                CASE WHEN d.enable_schemas THEN
-                    COALESCE(u.lakehouse_schema, COALESCE(d.target_schema, a.table_schema))
-                    ELSE NULL END AS lakehouse_schema,
-
-                COALESCE(u.lakehouse_target_table, a.table_name) AS lakehouse_table_name,
-                COALESCE(u.source_query, '') AS source_query,
-                COALESCE(u.priority, '100') AS priority,
-                CASE WHEN (COALESCE(u.watermark_column, a.pk_col) IS NOT NULL AND
-                        COALESCE(u.watermark_column, a.pk_col) <> '') THEN 'WATERMARK' 
-                    WHEN (COALESCE(u.partition_enabled, a.is_partitioned) = TRUE) 
-                        AND COALESCE(u.partition_column, a.partition_col, '') NOT IN 
-                            ('_PARTITIONTIME', '_PARTITIONDATE') THEN 'PARTITION'
-                    WHEN (COALESCE(u.partition_enabled, a.is_partitioned) = TRUE) 
-                        AND COALESCE(u.partition_column, a.partition_col, '') IN 
-                            ('_PARTITIONTIME', '_PARTITIONDATE') THEN 'TIME_INGESTION'
-                    ELSE 'FULL' END AS load_strategy,
-                COALESCE(u.load_type, 
-                    CASE WHEN (COALESCE(u.watermark_column, a.pk_col) IS NOT NULL AND
-                        COALESCE(u.watermark_column, a.pk_col) <> '') THEN 'APPEND' ELSE
-                    'OVERWRITE' END) AS load_type,
-                COALESCE(u.interval, 'AUTO') AS interval,
-                p.pk AS primary_keys,
-                COALESCE(u.partition_enabled, a.is_partitioned) AS is_partitioned,
-                COALESCE(u.partition_column, a.partition_col, '') AS partition_column,
-                COALESCE(u.partition_type, a.partitioning_type, '') AS partition_type,
-                COALESCE(u.partition_grain, a.partitioning_strategy, '') AS partition_grain,
-                COALESCE(u.partition_data_type, a.partition_data_type, '') AS partition_data_type,
-                COALESCE(u.partition_range, a.partition_range, '') AS partition_range,
-                COALESCE(u.watermark_column, a.pk_col, '') AS watermark_column, 
-                d.autodetect,
-                d.enable_schemas AS use_lakehouse_schema,
-                COALESCE(u.enforce_partition_expiration, FALSE) AS enforce_partition_expiration,
-                COALESCE(u.allow_schema_evolution, FALSE) AS allow_schema_evolution,
-                COALESCE(u.table_maintenance_enabled, FALSE) AS table_maintenance_enabled,
-                COALESCE(u.table_maintenance_interval, 'AUTO') AS table_maintenance_interval,
-                COALESCE(u.flatten_table, FALSE) AS flatten_table,
-                COALESCE(u.flatten_inplace, TRUE) AS flatten_inplace,
-                COALESCE(u.explode_arrays, FALSE) AS explode_arrays,
-                u.table_options,
-                CASE WHEN u.table_name IS NULL THEN FALSE ELSE TRUE END AS config_override,
-                'INIT' AS sync_state,
-                CURRENT_TIMESTAMP() as created_dt,
-                NULL as last_updated_dt
-            FROM bq_table_metadata_autodetect a
-            JOIN pk p ON
-                a.table_catalog = p.table_catalog AND
-                a.table_schema = p.table_schema AND
-                a.table_name = p.table_name
-            LEFT JOIN user_config_tables u ON 
-                a.table_catalog = u.project_id AND
-                a.table_schema = u.dataset AND
-                a.table_name = u.table_name
-            CROSS JOIN default_config d
-        )
-
-        MERGE INTO bq_sync_configuration t
-        USING source s
-        ON t.sync_id = s.sync_id AND t.project_id = s.project_id AND t.dataset = s.dataset AND t.table_name = s.table_name
-        WHEN MATCHED AND t.sync_state <> 'INIT' THEN
-            UPDATE SET
-                t.enabled = s.enabled,
-                t.interval = s.interval,
-                t.priority = s.priority,
-                t.enforce_partition_expiration = s.enforce_partition_expiration,
-                t.allow_schema_evolution = s.allow_schema_evolution,
-                t.table_maintenance_enabled = s.table_maintenance_enabled,
-                t.table_maintenance_interval = s.table_maintenance_interval,
-                t.table_options = s.table_options,
-                t.last_updated_dt = CURRENT_TIMESTAMP()
-        WHEN MATCHED AND t.sync_state = 'INIT' THEN
-            UPDATE SET *
-        WHEN NOT MATCHED THEN
-            INSERT *
-        """
-
-        self.Context.sql(sql)
+    def auto_detect_bq_schema(self):
+        self.Metastore.auto_detect_table_profiles(self.UserConfig.LoadAllTables)
 
 class Scheduler(ConfigBase):
     """
@@ -496,100 +195,13 @@ class Scheduler(ConfigBase):
         """
         super().__init__(context, user_config, gcp_credential)
 
-    def get_current_schedule(self, schedule_type:str) -> str:
-        sql = f"""
-        SELECT group_schedule_id FROM bq_sync_schedule
-        WHERE sync_id = '{self.UserConfig.ID}'
-        AND schedule_type = '{schedule_type}'
-        AND status NOT IN ('{SyncConstants.COMPLETE}', '{SyncConstants.SKIPPED}')
-        """
-        df = self.Context.sql(sql)
-
-        schedule = [s["group_schedule_id"] for s in df.collect()]
-        schedule_id = None
-
-        if schedule:
-            schedule_id = schedule[0]
-    
-        return schedule_id
-    
     def build_schedule(self, schedule_type:str) -> str:
-        schedule_id = self.get_current_schedule(schedule_type)
+        schedule_id = self.Metastore.get_current_schedule(self.UserConfig.ID, schedule_type)
 
         if not schedule_id:
-            schedule_id = self.build_new_schedule(schedule_type)
+            schedule_id = self.Metastore.build_new_schedule(schedule_type, self.UserConfig.ID)
         
         return schedule_id
-
-    def build_new_schedule(self, schedule_type:str) -> str:
-        """
-        Process responsible for creating and saving the sync schedule
-        """
-        group_schedule_id = uuid.uuid4()
-
-        sql = f"""
-        WITH new_schedule AS ( 
-            SELECT '{group_schedule_id}' AS group_schedule_id, CURRENT_TIMESTAMP() as scheduled
-        ),
-        last_bq_tbl_updates AS (
-            SELECT table_catalog, table_schema, table_name, max(last_modified_time) as last_bq_tbl_update
-            FROM bq_information_schema_partitions
-            GROUP BY table_catalog, table_schema, table_name
-        ),
-        last_load AS (
-            SELECT sync_id, project_id, dataset, table_name, MAX(started) AS last_load_update
-            FROM bq_sync_schedule
-            WHERE status='COMPLETE'
-            GROUP BY sync_id, project_id, dataset, table_name
-        ),
-        schedule AS (
-            SELECT
-                n.group_schedule_id,
-                UUID() AS schedule_id,
-                c.sync_id,
-                c.project_id,
-                c.dataset,
-                c.table_name,
-                '{schedule_type}' as schedule_type,
-                n.scheduled,
-                CASE WHEN ((l.last_load_update IS NULL) OR
-                     (b.last_bq_tbl_update >= l.last_load_update))
-                    THEN 'SCHEDULED' ELSE 'SKIPPED' END as status,
-                NULL as started,
-                NULL as completed,   
-                NULL as completed_activities,
-                NULL as failed_activities,
-                NULL as max_watermark,
-                c.priority                
-            FROM bq_sync_configuration c 
-            LEFT JOIN bq_sync_schedule s ON 
-                c.sync_id=s.sync_id AND
-                c.project_id= s.project_id AND
-                c.dataset = s.dataset AND
-                c.table_name = s.table_name AND
-                s.schedule_type = '{schedule_type}' AND
-                s.status = 'SCHEDULED' 
-            LEFT JOIN last_bq_tbl_updates b ON
-                c.project_id= b.table_catalog AND
-                c.dataset = b.table_schema AND
-                c.table_name = b.table_name
-            LEFT JOIN last_load l ON 
-                c.sync_id=l.sync_id AND
-                c.project_id= l.project_id AND
-                c.dataset = l.dataset AND
-                c.table_name = l.table_name
-            CROSS JOIN new_schedule n
-            WHERE s.schedule_id IS NULL
-            AND c.enabled = TRUE
-        )
-
-        INSERT INTO bq_sync_schedule
-        SELECT * FROM schedule s
-        WHERE s.sync_id = '{self.UserConfig.ID}'
-        """
-        self.Context.sql(sql)
-
-        return group_schedule_id
 
 class BQScheduleLoader(ConfigBase):
     """
@@ -620,36 +232,6 @@ class BQScheduleLoader(ConfigBase):
             exists = (table in self._SyncTableIndex)
         
         return exists
-
-    def save_schedule_telemetry(self, schedule:SyncSchedule):
-        """
-        Write status and telemetry from sync schedule to Sync Schedule Telemetry Delta table
-        """
-        tbl = f"{SyncConstants.SQL_TBL_SYNC_SCHEDULE_TELEMETRY}"
-
-        schema = self.Context.table(tbl).schema
-
-        rdd = self.Context.sparkContext.parallelize([Row( \
-            schedule_id=schedule.ScheduleId, \
-            sync_id=schedule.SyncId, \
-            project_id=schedule.ProjectId, \
-            dataset=schedule.Dataset, \
-            table_name=schedule.TableName, \
-            partition_id=schedule.PartitionId, \
-            status=schedule.Status, \
-            started=schedule.StartTime, \
-            completed=schedule.EndTime, \
-            src_row_count=schedule.SourceRows, \
-            inserted_row_count=schedule.InsertedRows, \
-            updated_row_count=schedule.UpdatedRows, \
-            delta_version=schedule.DeltaVersion, \
-            spark_application_id=schedule.SparkAppId, \
-            max_watermark=schedule.MaxWatermark, \
-            summary_load=schedule.SummaryLoadType \
-        )])
-
-        df = self.Context.createDataFrame(rdd, schema)
-        df.write.mode(SyncConstants.APPEND).saveAsTable(tbl)
 
     def get_delta_merge_row_counts(self, schedule:SyncSchedule) -> Tuple[int, int, int]:
         """
@@ -683,66 +265,6 @@ class BQScheduleLoader(ConfigBase):
                 continue
 
         return (inserts, updates, deletes)
-    
-    def get_schedule(self, group_schedule_id:str):
-        """
-        Gets the schedule activities that need to be run based on the configuration and metadat
-        """
-        sql = f"""
-        WITH last_completed_schedule AS (
-            SELECT sync_id, schedule_id, project_id, dataset, table_name, max_watermark, started AS last_schedule_dt
-            FROM (
-                SELECT sync_id, schedule_id, project_id, dataset, table_name, started, max_watermark,
-                ROW_NUMBER() OVER(PARTITION BY sync_id, project_id, dataset, table_name ORDER BY scheduled DESC) AS row_num
-                FROM bq_sync_schedule
-                WHERE status='COMPLETE'
-            )
-            WHERE row_num = 1
-        ),
-        tbl_partitions AS (
-            SELECT
-                sp.table_catalog, sp.table_schema, sp.table_name, sp.partition_id
-            FROM bq_information_schema_partitions sp
-            JOIN bq_sync_configuration c ON
-                sp.table_catalog = c.project_id AND 
-                sp.table_schema = c.dataset AND
-                sp.table_name = c.table_name
-            LEFT JOIN last_completed_schedule s ON 
-                sp.table_catalog = s.project_id AND 
-                sp.table_schema = s.dataset AND
-                sp.table_name = s.table_name
-            WHERE sp.partition_id != '__NULL__'
-            AND ((sp.last_modified_time >= s.last_schedule_dt) OR (s.last_schedule_dt IS NULL))
-            AND 
-                ((c.load_strategy = 'PARTITION' AND s.last_schedule_dt IS NOT NULL) OR
-                    (c.load_strategy = 'PARTITION' AND c.partition_type = 'RANGE') OR
-                    c.load_strategy = 'TIME_INGESTION')
-        )
-
-        SELECT c.*, 
-            p.partition_id,
-            s.group_schedule_id,s.schedule_id,
-            h.max_watermark,h.last_schedule_dt,
-            CASE WHEN (h.schedule_id IS NULL) THEN TRUE ELSE FALSE END AS initial_load
-        FROM bq_sync_configuration c
-        JOIN bq_sync_schedule s ON c.sync_id = s.sync_id AND c.project_id = s.project_id 
-            AND c.dataset = s.dataset AND  c.table_name = s.table_name
-        LEFT JOIN last_completed_schedule h ON c.sync_id = h.sync_id AND c.project_id = h.project_id 
-            AND c.dataset = h.dataset AND c.table_name = h.table_name
-        LEFT JOIN tbl_partitions p ON p.table_catalog = c.project_id 
-            AND p.table_schema = c.dataset AND p.table_name = c.table_name
-        LEFT JOIN bq_sync_schedule_telemetry t ON s.sync_id = t.sync_id AND s.schedule_id = t.schedule_id 
-            AND c.project_id = t.project_id AND c.dataset = t.dataset AND c.table_name = t.table_name AND
-            COALESCE(p.partition_id, '0') = COALESCE(t.partition_id, '0') AND t.status = 'COMPLETE'
-        WHERE s.status = 'SCHEDULED' AND c.enabled = TRUE AND t.schedule_id IS NULL
-            AND s.group_schedule_id = '{group_schedule_id}'
-        ORDER BY c.priority
-        """
-        df = self.Context.sql(sql)
-        df.createOrReplaceTempView("LoaderQueue")
-        df.cache()
-
-        return df
 
     def get_max_watermark(self, schedule:SyncSchedule, df_bq:DataFrame) -> str:
         """
@@ -914,33 +436,7 @@ class BQScheduleLoader(ConfigBase):
         return schedule
 
 
-    def sync_bq_table(self, schedule:SyncSchedule, lock:Lock = None):
-        """
-        Sync the data for a table from BigQuery to the target Fabric Lakehouse based on configuration
-
-        1. Determines how to retrieve the data from BigQuery
-            a. PARTITION & TIME_INGESTION
-                - Data is loaded by partition using the partition filter option of the spark connector
-            b. FULL & WATERMARK
-                - Loaded using the table name or source query and any relevant predicates
-        2. Resolve BigQuery to Fabric partition mapping
-            a. BigQuery supports TIME and RANGE based partitioning
-                - TIME based partitioning support YEAR, MONTH, DAY & HOUR grains
-                    - When the grain doesn't exist or a psuedo column is used, a proxy column is added
-                        on the Fabric Lakehouse side
-                - RANGE partitioning is a backlog feature
-        3. Write data to the Fabric Lakehouse
-            a. PARTITION write use replaceWhere to overwrite the specific Delta partition
-            b. All other writes respect the configure MODE against the write destination
-        4. Collect and save telemetry
-        """
-        print(f"{schedule.SummaryLoadType} {schedule.ProjectId}.{schedule.Dataset}.{schedule.TableName}...")
-
-        if not schedule.InitialLoad and self.Context.catalog.tableExists(schedule.LakehouseTableName):
-            table_maint = DeltaTableMaintenance(self.Context, schedule.LakehouseTableName)
-        else:
-            table_maint = None
-
+    def get_bq_table(self, schedule:SyncSchedule) -> (SyncSchedule, DataFrame):
         if schedule.IsTimePartitionedStrategy and schedule.PartitionId is not None:
             part_format = self.get_bq_partition_id_format(schedule.PartitionGrain)
 
@@ -964,7 +460,7 @@ class BQScheduleLoader(ConfigBase):
             else:
                 src = schedule.BQTableName     
 
-                if schedule.SourceQuery != SyncConstants.EMPTY_STRING:
+                if schedule.SourceQuery:
                     src = schedule.SourceQuery
 
                 df_bq = self.read_bq_to_dataframe(src, True)
@@ -981,8 +477,12 @@ class BQScheduleLoader(ConfigBase):
             else:
                 schedule.FabricPartitionColumns = [f"__{schedule.PartitionColumn}_Range"]
                 df_bq = self.create_fabric_range_partition(df_bq, schedule)
+        
+        return (schedule, df_bq)
 
+    def save_bq_dataframe(self, schedule:SyncSchedule, df_bq:DataFrame, lock:Lock) -> SyncSchedule:
         write_config = { **schedule.TableOptions }
+        table_maint = None
 
         #Flattening complex types (structs & arrays)
         df_bq_flattened = None
@@ -997,9 +497,10 @@ class BQScheduleLoader(ConfigBase):
             
         #Schema Evolution
         if not schedule.InitialLoad:
-            if schedule.AllowSchemaEvolution and table_maint:
+            if schedule.AllowSchemaEvolution:
+                table_maint = DeltaTableMaintenance(self.Context, schedule.LakehouseTableName)
                 table_maint.evolve_schema(df_bq)
-                write_config["mergeSchema"] = SyncConstants.TRUE
+                write_config["mergeSchema"] = True
 
         if not schedule.LoadType == SyncConstants.MERGE or schedule.InitialLoad:
             if (schedule.IsTimePartitionedStrategy and schedule.PartitionId is not None) or schedule.IsRangePartitioned:
@@ -1009,7 +510,7 @@ class BQScheduleLoader(ConfigBase):
                     has_lock = True
                     lock.acquire()
                 else:
-                    write_config["partitionOverwriteMode"] = SyncConstants.DYNAMIC
+                    write_config["partitionOverwriteMode"] = "dynamic"
                 
                 try:
                     df_bq.write \
@@ -1081,94 +582,74 @@ class BQScheduleLoader(ConfigBase):
 
         return schedule
 
-    def process_load_group_telemetry(self, group_schedule_id:str):
+    def sync_bq_table(self, schedule:SyncSchedule, lock:Lock = None):
         """
-        When a load group is complete, summarizes the telemetry to close out the schedule
-        """
-        sql = f"""
-        WITH schedule_telemetry AS (
-            SELECT
-                sync_id,schedule_id,project_id,dataset,table_name,
-                SUM(CASE WHEN status='COMPLETE' THEN 1 ELSE 0 END) AS completed_activities,
-                SUM(CASE WHEN status='FAILED' THEN 1 ELSE 0 END) AS failed_activities,
-                MIN(started) as started,MAX(completed) as completed
-            FROM bq_sync_schedule_telemetry
-            GROUP BY sync_id,schedule_id,project_id,dataset,table_name
-        ),
-        schedule_watermarks AS (
-            SELECT
-                sync_id, schedule_id, project_id,dataset, table_name,max_watermark,
-                ROW_NUMBER() OVER(PARTITION BY schedule_id,project_id,dataset,table_name 
-                    ORDER BY completed DESC) AS row_num
-            FROM bq_sync_schedule_telemetry
-            WHERE max_watermark IS NOT NULL
-        ),
-        schedule_results AS (
-            SELECT
-                s.sync_id, s.group_schedule_id,s.schedule_id,s.project_id,s.dataset,s.table_name,s.status,
-                CASE WHEN t.failed_activities = 0 THEN 'COMPLETE' ELSE 'FAILED' END AS result_status,
-                t.started,t.completed,t.completed_activities,t.failed_activities,
-                w.max_watermark,s.priority 
-                FROM bq_sync_schedule s
-                JOIN schedule_telemetry t ON s.sync_id=t.sync_id AND s.schedule_id=t.schedule_id AND
-                    s.project_id=t.project_id AND s.dataset=t.dataset AND s.table_name=t.table_name
-                LEFT JOIN schedule_watermarks w ON s.sync_id=w.sync_id AND s.schedule_id=w.schedule_id 
-                    AND s.project_id=w.project_id AND s.dataset=w.dataset AND s.table_name=w.table_name
-        )  
+        Sync the data for a table from BigQuery to the target Fabric Lakehouse based on configuration
 
-        MERGE INTO bq_sync_schedule s
-        USING ( 
-            SELECT * FROM schedule_results r
-            WHERE r.status='SCHEDULED' AND r.group_schedule_id = '{group_schedule_id}'
-        ) r
-        ON s.sync_id=r.sync_id AND s.schedule_id=r.schedule_id AND
-            s.project_id=r.project_id AND s.dataset=r.dataset AND s.table_name=r.table_name
-        WHEN MATCHED THEN
-            UPDATE SET
-                s.status = r.result_status,
-                s.started = r.started,
-                s.completed = r.completed,
-                s.completed_activities = r.completed_activities,
-                s.failed_activities = r.failed_activities,
-                s.max_watermark = r.max_watermark
+        1. Determines how to retrieve the data from BigQuery
+            a. PARTITION & TIME_INGESTION
+                - Data is loaded by partition using the partition filter option of the spark connector
+            b. FULL & WATERMARK
+                - Loaded using the table name or source query and any relevant predicates
+        2. Resolve BigQuery to Fabric partition mapping
+            a. BigQuery supports TIME and RANGE based partitioning
+                - TIME based partitioning support YEAR, MONTH, DAY & HOUR grains
+                    - When the grain doesn't exist or a psuedo column is used, a proxy column is added
+                        on the Fabric Lakehouse side
+                - RANGE partitioning is a backlog feature
+        3. Write data to the Fabric Lakehouse
+            a. PARTITION write use replaceWhere to overwrite the specific Delta partition
+            b. All other writes respect the configure MODE against the write destination
+        4. Collect and save telemetry
+        """
+        print(f"{schedule.SummaryLoadType} {schedule.ProjectId}.{schedule.Dataset}.{schedule.TableName}...")
 
-        """
-        self.Context.sql(sql)
+        #Get BQ table using sync config
+        schedule, df_bq = self.get_bq_table(schedule)
 
-    def commit_table_configuration(self, group_schedule_id:str):
-        """
-        After an initial load, locks the table configuration so no changes can occur when reprocessing metadata
-        """
-        sql = f"""
-        WITH committed AS (
-            SELECT sync_id, project_id, dataset, table_name, MAX(started) as started
-            FROM bq_sync_schedule
-            WHERE status='COMPLETE' AND group_schedule_id = '{group_schedule_id}'
-            GROUP BY sync_id, project_id, dataset, table_name
-        )
+        #Save BQ table to Lakehouse
+        schedule = self.save_bq_dataframe(schedule, df_bq, lock)
 
-        MERGE INTO bq_sync_configuration t
-        USING committed c
-        ON t.sync_id=c.sync_id AND t.project_id=c.project_id AND t.dataset=c.dataset AND t.table_name=c.table_name
-        WHEN MATCHED AND t.sync_state='INIT' THEN
-            UPDATE SET
-                t.sync_state='COMMIT'
+        return schedule
+
+    def save_schedule_telemetry(self, schedule:SyncSchedule):
         """
-        self.Context.sql(sql)
+        Write status and telemetry from sync schedule to Sync Schedule Telemetry Delta table
+        """
+        rdd = self.Context.sparkContext.parallelize([Row( \
+            schedule_id=schedule.ScheduleId, \
+            sync_id=schedule.SyncId, \
+            project_id=schedule.ProjectId, \
+            dataset=schedule.Dataset, \
+            table_name=schedule.TableName, \
+            partition_id=schedule.PartitionId, \
+            status=schedule.Status, \
+            started=schedule.StartTime, \
+            completed=schedule.EndTime, \
+            src_row_count=schedule.SourceRows, \
+            inserted_row_count=schedule.InsertedRows, \
+            updated_row_count=schedule.UpdatedRows, \
+            delta_version=schedule.DeltaVersion, \
+            spark_application_id=schedule.SparkAppId, \
+            max_watermark=schedule.MaxWatermark, \
+            summary_load=schedule.SummaryLoadType \
+        )])
+
+        self.Metastore.save_schedule_telemetry(rdd)
 
     def run_sequential_schedule(self, group_schedule_id:str):
         """
         Run the schedule activities sequentially based on priority order
         """
         print(f"Sequential schedule sync starting...")
-        df_schedule = self.get_schedule(group_schedule_id)
+        df_schedule = self.Metastore.get_schedule(group_schedule_id)
 
         for row in df_schedule.collect():
             schedule = SyncSchedule(row)
             self.sync_bq_table(schedule)
             self.save_schedule_telemetry(schedule)  
 
-        self.process_load_group_telemetry(group_schedule_id)
+        self.Metastore.process_load_group_telemetry(group_schedule_id)
         print(f"Sequential schedule sync complete...")
     
     def schedule_sync(self, schedule:SyncSchedule, lock:Lock) -> SyncSchedule:
@@ -1209,7 +690,7 @@ class BQScheduleLoader(ConfigBase):
         print(f"Async schedule started with parallelism of {self.UserConfig.Async.Parallelism}...")
         workQueue = PriorityQueue()
 
-        schedule = self.get_schedule(group_schedule_id)
+        schedule = self.Metastore.get_schedule(group_schedule_id)
 
         load_grps = [i["priority"] for i in schedule.select("priority").distinct().orderBy("priority").collect()]
 
@@ -1231,11 +712,14 @@ class BQScheduleLoader(ConfigBase):
                     print(f"### Processing {grp_nm}...")
                     self.process_queue(workQueue, self.task_runner, self.schedule_sync)
 
-            self.process_load_group_telemetry(group_schedule_id)
+            self.Metastore.process_load_group_telemetry(group_schedule_id)
        
         print(f"Async schedule sync complete...")
     
-    def flatten_structs(self, nested_df:DataFrame) -> DataFrame:
+
+class SyncUtil():
+    @staticmethod
+    def flatten_structs(nested_df:DataFrame) -> DataFrame:
         """
         Recurses through Dataframe and flattens columns of with datatype struct
         using '_' notation
@@ -1259,7 +743,8 @@ class BQScheduleLoader(ConfigBase):
             
         return nested_df.select(columns)
 
-    def flatten_df(self, explode_arrays:bool, df:DataFrame) -> DataFrame:
+    @staticmethod
+    def flatten_df(explode_arrays:bool, df:DataFrame) -> DataFrame:
         """
         Recurses through Dataframe and flattens complex types
         """ 
@@ -1271,19 +756,17 @@ class BQScheduleLoader(ConfigBase):
                     cols_to_select = [x for x in df.columns if x != array_col ]            
                     df = df.withColumn(array_col, explode(col(array_col)))
                     
-                df = self.flatten_structs(df)
+                df = SyncUtil.flatten_structs(df)
                 
                 array_cols = [c[0] for c in df.dtypes if c[1][:5] == "array"]
         else:
-            df = self.flatten_structs(df)
+            df = SyncUtil.flatten_structs(df)
 
         return df
 
 class BQSync(SyncBase):
     def __init__(self, context:SparkSession, config_path:str):
-        self.Context = context
-        self.cleanup_session()
-        super().__init__(context, config_path)
+        super().__init__(context, config_path, clean_session=True)
 
         self.MetadataLoader = ConfigMetadataLoader(context, self.UserConfig, self.GCPCredential)
         self.Scheduler = Scheduler(context, self.UserConfig, self.GCPCredential)
@@ -1293,7 +776,7 @@ class BQSync(SyncBase):
         self.MetadataLoader.sync_bq_metadata()
 
         if self.UserConfig.Autodetect:
-            self.MetadataLoader.auto_detect_table_profiles()
+            self.MetadataLoader.auto_detect_bq_schema()
     
     def build_schedule(self, sync_metadata:bool = True, schedule_type:str = SyncConstants.AUTO) -> str:
         if sync_metadata:
@@ -1302,139 +785,19 @@ class BQSync(SyncBase):
             self.MetadataLoader.create_proxy_views()
 
         return self.Scheduler.build_schedule(schedule_type)
-    
-    def ensure_schemas(self):
-        if self.UserConfig.Fabric.EnableSchemas:
-            df = spark.read.table("bq_sync_configuration")
-            df = df.filter((col("sync_id")=="bq_sync_test1") & 
-                (col("enabled")==True) & (col("use_lakehouse_schema")==True))
-            df = df.select(col("lakehouse"), coalesce(col("lakehouse_schema"), col("dataset")).alias("schema"))
-
-            schemas = [f"{r['lakehouse']}.{r['schema']}" for r in df.collect()]
-
-            for schema in schemas:
-                spark.sql(f"CREATE SCHEMA IF NOT EXISTS {self.UserConfig.Fabric.WorkspaceId}.{schema}")
 
     def run_schedule(self, group_schedule_id:str, optimize_metadata:bool=True):
         self.MetadataLoader.create_proxy_views()
-        self.ensure_schemas()
+
+        if self.UserConfig.Fabric.EnableSchemas:
+            self.Metastore.ensure_schemas(self.UserConfig.Fabric.WorkspaceId, self.UserConfig.ID)
 
         if self.UserConfig.Async.Enabled:
             self.Loader.run_async_schedule(group_schedule_id)
         else:
             self.Loader.run_sequential_schedule(group_schedule_id)
         
-        self.Loader.commit_table_configuration(group_schedule_id)
+        self.Metastore.commit_table_configuration(group_schedule_id)
 
         if optimize_metadata:
-            self.optimize_metadata_tbls()
-    
-    def cleanup_session(self):
-        temp_views = SyncConstants.get_sync_temp_views()
-        list(map(lambda x: self.Context.sql(f"DROP TABLE IF EXISTS {x}"), temp_views))
-
-    def optimize_metadata_tbls(self):
-        tbls = ["bq_sync_configuration", "bq_sync_schedule", "bq_sync_schedule_telemetry"]
-
-        for tbl in tbls:
-            table_maint = DeltaTableMaintenance(self.Context, tbl)
-            table_maint.optimize_and_vacuum()
-    
-    def generate_user_config_json_from_metadata(self, path:str):
-        bq_tables = self.Context.table(SyncConstants.SQL_TBL_SYNC_CONFIG)
-        bq_tables = bq_tables.filter(col("sync_id") == self.UserConfig.ID)
-
-        user_cfg = self.build_user_config_json(bq_tables.collect())
-
-        with open(path, 'w', encoding='utf-8') as f:
-            json.dump(user_cfg, f, ensure_ascii=False, indent=4)
-
-    def build_user_config_json(self, tbls:list) -> str:
-        tables = list(map(lambda x: self.get_table_config_json(x), tbls))
-        projects = list(map(lambda x: self.get_gcp_project_config_json(x), self.UserConfig.GCPCredential.Projects))
-
-        return {
-            "id":"",
-            "load_all_tables":self.UserConfig.LoadAllTables,
-            "load_views":self.UserConfig.LoadViews,
-            "load_materialized_views":self.UserConfig.LoadMaterializedViews,
-            "autodetect":self.UserConfig.Autodetect,
-            "fabric":{
-                "workspace_id":self.UserConfig.Fabric.WorkspaceID,
-                "metadata_lakehouse":self.UserConfig.Fabric.MetadataLakehouse,
-                "target_lakehouse":self.UserConfig.Fabric.TargetLakehouse,
-                "target_schema":self.UserConfig.Fabric.TargetLakehouseSchema,
-                "enable_schemas":self.UserConfig.Fabric.EnableSchemas,
-            },            
-            "gcp_credentials":{
-                "projects": projects,
-                "credential":self.UserConfig.GCPCredential.Credential,
-                "materialization_project_id":self.UserConfig.GCPCredential.MaterializationProjectId,
-                "materialization_dataset":self.UserConfig.GCPCredential.MaterializationDataset,
-                "billing_project_id":self.UserConfig.GCPCredential.BillingProjectID
-            },            
-            "async":{
-                "enabled":self.UserConfig.Async.Enabled,
-                "parallelism":self.UserConfig.Async.Parallelism,
-                "cell_timeout":self.UserConfig.Async.CellTimeout,
-                "notebook_timeout":self.UserConfig.Async.NotebookTimeout
-            }, 
-            "tables": tables
-        }
-
-    def get_gcp_dataset_config_json(self, ds:list):
-        return [{"dataset": d.Dataset} for d in ds]
-
-    def get_gcp_project_config_json(self, proj) -> str:
-        datasets = self.get_gcp_dataset_config_json(proj.Datasets)
-
-        return {
-            "project_id":proj.ProjectID,
-            "datasets":datasets
-        }
-
-
-    def get_table_keys_config_json(self, pk:list):
-        return [{"column": k} for k in pk]
-
-    def get_table_config_json(self, tbl:Row) -> str:
-        keys = self.get_table_keys_config_json(tbl["primary_keys"])
-
-        return {
-            "priority":tbl["priority"],
-            "project_id":tbl["project_id"],
-            "dataset":tbl["dataset"],
-            "table_name":tbl["table_name"],
-            "object_type":tbl["object_type"],
-            "enabled":tbl["enabled"],
-            "source_query":tbl["source_query"],
-            "enforce_partition_expiration":tbl["enforce_partition_expiration"],
-            "allow_schema_evolution":tbl["allow_schema_evolution"],
-            "load_strategy":tbl["load_strategy"],
-            "load_type":tbl["load_type"],
-            "interval":tbl["interval"],
-            "flatten_table":tbl["flatten_table"],
-            "flatten_inplace":tbl["flatten_inplace"],
-            "explode_arrays":tbl["explode_arrays"],
-            "table_maintenance":{
-                "enabled":tbl["table_maintenance_enabled"],
-                "interval":tbl["table_maintenance_interval"]
-            },
-            "keys":keys,
-            "partitioned":{
-                "enabled":tbl["is_partitioned"],
-                "type":tbl["partition_type"],
-                "column":tbl["partition_column"],
-                "partition_grain":tbl["partition_grain"],
-                "partition_data_type":tbl["partition_data_type"],
-                "partition_range":tbl["partition_range"]
-            },
-            "watermark":{
-                "column":tbl["watermark_column"]
-            },
-            "lakehouse_target":{
-                "lakehouse":tbl["lakehouse"],
-                "schema":tbl["lakehouse_schema"],
-                "table_name":tbl["lakehouse_table_name"]
-            }
-        }
+            self.Metastore.optimize_metadata_tbls()

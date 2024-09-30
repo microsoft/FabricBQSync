@@ -10,10 +10,35 @@ import os
 import hashlib
 from enum import Enum
 
+from FabricSync.BQ.Metastore import *
+
 class BigQueryObjectType(Enum):
     BASE_TABLE = "BASE_TABLE"
     VIEW = "VIEW"
     MATERIALIZED_VIEW = "MATERIALIZED_VIEW"
+
+class LoadStrategy(Enum):
+    FULL = "FULL"
+    PARTITION = "PARTITION"
+    WATERMARK = "WATERMARK"
+    TIME_INGESTION = "TIME_INGESTION"
+
+class PartitionType(Enum):
+    TIME = "TIME"
+    RANGE = "RANGE"
+    TIME_INGESTION = "TIME_INGESTION"
+
+class BQDataType(Enum):
+    TIMESTAMP = "TIMESTAMP"
+
+class LoadType(Enum):
+    OVERWRITE = "OVERWRITE"
+    APPEND = "APPEND"
+    MERGE = "MERGE"
+
+class SyncStatus(Enum):
+    COMPLETE = "COMPLETE"
+    SKIPPED = "SKIPPED"
 
 class SyncConstants:
     '''
@@ -22,26 +47,23 @@ class SyncConstants:
     DEFAULT_ID = "BQ_SYNC_LOADER"
     OVERWRITE = "OVERWRITE"
     APPEND = "APPEND"
+    MERGE = "MERGE"
+
     FULL = "FULL"
     PARTITION = "PARTITION"
     WATERMARK = "WATERMARK"
     TIME_INGESTION = "TIME_INGESTION"
-    MERGE = "MERGE"
+    TIMESTAMP = "TIMESTAMP"
+    RANGE = "RANGE"
+    
     AUTO = "AUTO"
     TIME = "TIME"    
     YEAR = "YEAR"
     MONTH = "MONTH"
     DAY = "DAY"
     HOUR = "HOUR"
-    TIMESTAMP = "TIMESTAMP"
-    RANGE = "RANGE"
-    EMPTY_STRING = ""
+
     COMPLETE = "COMPLETE"
-    SKIPPED = "SKIPPED"
-    TRUE = "true"
-    FALSE = "false"
-    DYNAMIC = "dynamic"
-    AUTO = "AUTO"
 
     INITIAL_FULL_OVERWRITE = "INITIAL_FULL_OVERWRITE"
 
@@ -53,11 +75,6 @@ class SyncConstants:
     INFORMATION_SCHEMA_KEY_COLUMN_USAGE = "INFORMATION_SCHEMA.KEY_COLUMN_USAGE"
     INFORMATION_SCHEMA_VIEWS = "INFORMATION_SCHEMA.VIEWS"
     INFORMATION_SCHEMA_MATERIALIZED_VIEWS = "INFORMATION_SCHEMA.MATERIALIZED_VIEWS"
-
-    SQL_TBL_SYNC_SCHEDULE = "bq_sync_schedule"
-    SQL_TBL_SYNC_CONFIG = "bq_sync_configuration"
-    SQL_TBL_DATA_TYPE_MAP = "bq_data_type_map"
-    SQL_TBL_SYNC_SCHEDULE_TELEMETRY = "bq_sync_schedule_telemetry"
 
     CONFIG_JSON_TEMPLATE = """
     {
@@ -171,12 +188,6 @@ class SyncConstants:
             SyncConstants.INFORMATION_SCHEMA_VIEWS, \
             SyncConstants.INFORMATION_SCHEMA_MATERIALIZED_VIEWS]
 
-    def get_sync_temp_views() -> List[str]:
-        return ["bq_table_metadata_autodetect", \
-            "user_config_json", \
-            "user_config_table_keys", \
-            "user_config_tables"]
-
 class SyncSchedule:
     """
     Scheduled configuration object that also is used to track and store telemetry from load process
@@ -243,7 +254,6 @@ class SyncSchedule:
                 opts[r["key"]] = r["value"]
                 
         return opts
-
 
     @property
     def SummaryLoadType(self) -> str:
@@ -615,6 +625,7 @@ class ConfigBase():
         self.Context = context
         self.UserConfig = user_config
         self.GCPCredential = gcp_credential
+        self.Metastore = FabricMetastore(context)
     
     def get_bq_reader_config(self, partition_filter:str = None):
         """
@@ -666,7 +677,7 @@ class ConfigBase():
         
         return df
 
-    def write_lakehouse_table(self, df:DataFrame, lakehouse:str, tbl_nm:str, mode:str=SyncConstants.OVERWRITE):
+    def write_lakehouse_table(self, df:DataFrame, lakehouse:str, tbl_nm:str, mode:str="OVERWRITE"):
         """
         Write a DataFrame to the lakehouse using the Lakehouse.TableName notation
         """
@@ -680,7 +691,7 @@ class SyncBase():
     '''
     Base class for sync objects that require access to user-supplied configuration
     '''
-    def __init__(self, context:SparkSession, config_path:str):
+    def __init__(self, context:SparkSession, config_path:str, clean_session:bool = False):
         """
         Init method loads the user JSON config from the supplied path.
         """
@@ -693,6 +704,11 @@ class SyncBase():
         self.GCPCredential = None
         self.ConfigMD5Hash = None
 
+        self.Metastore = FabricMetastore(context)
+
+        if clean_session:
+            self.Metastore.cleanup_session()
+            
         self.UserConfig = self.ensure_user_config()
         self.GCPCredential = self.load_gcp_credential()
         self.Context.sql(f"USE {self.UserConfig.Fabric.MetadataLakehouse}")
