@@ -9,11 +9,14 @@ CREATE TABLE IF NOT EXISTS bq_data_type_map
 DROP TABLE IF EXISTS bq_sync_configuration;
 CREATE TABLE IF NOT EXISTS bq_sync_configuration
 (
+    sync_id STRING,
     project_id STRING,
     dataset STRING,
     table_name STRING,
+    object_type STRING,
     enabled BOOLEAN,
     lakehouse STRING,
+    lakehouse_schema STRING,
     lakehouse_table_name STRING,
     source_query STRING,
     priority INTEGER,
@@ -29,6 +32,7 @@ CREATE TABLE IF NOT EXISTS bq_sync_configuration
     partition_range STRING,
     watermark_column STRING,
     autodetect BOOLEAN,
+    use_lakehouse_schema BOOLEAN,
     enforce_partition_expiration BOOLEAN,
     allow_schema_evolution BOOLEAN,
     table_maintenance_enabled BOOLEAN,
@@ -48,6 +52,7 @@ CREATE TABLE IF NOT EXISTS bq_sync_schedule
 (
     group_schedule_id STRING,
     schedule_id STRING,
+    sync_id STRING,
     project_id STRING,
     dataset STRING,
     table_name STRING,
@@ -66,6 +71,7 @@ DROP TABLE IF EXISTS bq_sync_schedule_telemetry;
 CREATE TABLE IF NOT EXISTS bq_sync_schedule_telemetry 
 (
     schedule_id STRING,
+    sync_id STRING,
     project_id STRING,
     dataset STRING,
     table_name STRING,

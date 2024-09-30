@@ -147,49 +147,58 @@ class ConfigMetadataLoader(ConfigBase):
 
         self.Context.sql(sql)
 
-    def sync_bq_information_schema_tables(self):
+    def sync_bq_information_schema_core(self, project:str, dataset:str, type:BigQueryObjectType = BigQueryObjectType.BASE_TABLE):
         """
-        Reads the INFORMATION_SCHEMA.TABLES from BigQuery for the configuration project_id 
-        and dataset returning only BASE TABLEs. Writes the results to the configured 
-        Metadata Lakehouse using a unique name based on project_id and dataset to allow 
-        for multiple datasets to be tracked independently.
+        Reads the INFORMATION_SCHEMA.TABLES|VIEWS|MATERIALIZED_VIEWS from BigQuery for the configuration project_id 
+        and dataset. For TABLES it returns only BASE TABLEs. Writes the results to the configured Metadata Lakehouse
         """
-        bq_table = self.UserConfig.get_bq_table_fullname(SyncConstants.INFORMATION_SCHEMA_TABLES)
-        tbl_nm = self.UserConfig.flatten_3part_tablename(SyncConstants.INFORMATION_SCHEMA_TABLES.replace(".", "_"))
 
-        bql = f"""
-        SELECT *
-        FROM {bq_table}
-        WHERE table_type='BASE TABLE'
-        AND table_name NOT LIKE '_bqc_%'
-        """
+        match type:
+            case BigQueryObjectType.VIEW:
+                view = SyncConstants.INFORMATION_SCHEMA_VIEWS
+            case BigQueryObjectType.MATERIALIZED_VIEW:
+                view = SyncConstants.INFORMATION_SCHEMA_MATERIALIZED_VIEWS
+            case _:
+                view = SyncConstants.INFORMATION_SCHEMA_TABLES
+        
+        bq_table = f"{project}.{dataset}.{view}"
+        tbl_nm = f"BQ_{view}".replace(".", "_")
+
+        if type == BigQueryObjectType.BASE_TABLE:
+            bql = f"""
+            SELECT *
+            FROM {bq_table}
+            WHERE table_type='BASE TABLE'
+            AND table_name NOT LIKE '_bqc_%'
+            """
+        else:
+            bql = f"""
+            SELECT *
+            FROM {bq_table}
+            """
 
         df = self.read_bq_to_dataframe(bql)
 
         if not self.UserConfig.LoadAllTables:
-            filter_list = self.UserConfig.get_table_name_list(True)
+            filter_list = self.UserConfig.get_table_name_list(project, dataset, BigQueryObjectType.BASE_TABLE, True)
             df = df.filter(col("table_name").isin(filter_list))   
 
-        self.write_lakehouse_table(df, self.UserConfig.MetadataLakehouse, tbl_nm)
+        self.write_lakehouse_table(df, self.UserConfig.Fabric.MetadataLakehouse, tbl_nm, SyncConstants.APPEND)
 
-    def sync_bq_information_schema_table_dependent(self, dependent_tbl:str):
+    def sync_bq_information_schema_table_dependent(self, project:str, dataset:str, dependent_tbl:str):
         """
         Reads a child INFORMATION_SCHEMA table from BigQuery for the configuration project_id 
         and dataset. The child table is joined to the TABLES table to filter for BASE TABLEs.
-        Writes the results to the configured Fabric Metadata Lakehouse using a unique 
-        name based on project_id and dataset to allow for multiple datasets to be tracked independently.
+        Writes the results to the configured Fabric Metadata Lakehouse.
         """
-        bq_table = self.UserConfig.get_bq_table_fullname(SyncConstants.INFORMATION_SCHEMA_TABLES)
-        bq_dependent_tbl = self.UserConfig.get_bq_table_fullname(dependent_tbl)
-        tbl_nm = self.UserConfig.flatten_3part_tablename(dependent_tbl.replace(".", "_"))
+        bq_table = f"{project}.{dataset}.{SyncConstants.INFORMATION_SCHEMA_TABLES}"
+        bq_dependent_tbl = f"{project}.{dataset}.{dependent_tbl}"
+        tbl_nm = f"BQ_{dependent_tbl}".replace(".", "_")
 
         bql = f"""
         SELECT c.*
         FROM {bq_dependent_tbl} c
-        JOIN {bq_table} t ON 
-        t.table_catalog=c.table_catalog AND
-        t.table_schema=c.table_schema AND
-        t.table_name=c.table_name
+        JOIN {bq_table} t ON t.table_catalog=c.table_catalog AND t.table_schema=c.table_schema AND t.table_name=c.table_name
         WHERE t.table_type='BASE TABLE'
         AND t.table_name NOT LIKE '_bqc_%'
         """
@@ -197,10 +206,68 @@ class ConfigMetadataLoader(ConfigBase):
         df = self.read_bq_to_dataframe(bql)
 
         if not self.UserConfig.LoadAllTables:
-            filter_list = self.UserConfig.get_table_name_list(True)
+            filter_list = self.UserConfig.get_table_name_list(project, dataset, BigQueryObjectType.BASE_TABLE, True)
             df = df.filter(col("table_name").isin(filter_list)) 
 
-        self.write_lakehouse_table(df, self.UserConfig.MetadataLakehouse, tbl_nm)
+        self.write_lakehouse_table(df, self.UserConfig.Fabric.MetadataLakehouse, tbl_nm, SyncConstants.APPEND)
+
+    def cleanup_metadata_cache(self):
+        metadata_views = SyncConstants.get_information_schema_views()
+        list(map(lambda x: self.Context.sql(f"DROP TABLE IF EXISTS BQ_{x.replace('.', '_')}"), metadata_views))
+
+    def task_runner(self, sync_function, workQueue:PriorityQueue):
+        while not workQueue.empty():
+            value = workQueue.get()
+
+            try:
+                sync_function(value)
+            except Exception as e:
+                print(f"ERROR {view}: {e}")
+            finally:
+                workQueue.task_done()
+
+    def process_queue(self, workQueue:PriorityQueue, task_function, sync_function):
+        for i in range(self.UserConfig.Async.Parallelism):
+            t=Thread(target=task_function, args=(sync_function, workQueue))
+            t.daemon = True
+            t.start() 
+            
+        workQueue.join()
+        
+    def async_bq_metadata(self):
+        print(f"Async metadata update with parallelism of {self.UserConfig.Async.Parallelism}...")
+        workQueue = PriorityQueue()
+
+        for view in SyncConstants.get_information_schema_views():
+            match view:
+                case SyncConstants.INFORMATION_SCHEMA_VIEWS:
+                    if self.UserConfig.LoadViews:
+                        workQueue.put(view)
+                case SyncConstants.INFORMATION_SCHEMA_MATERIALIZED_VIEWS:
+                    if self.UserConfig.LoadMaterializedViews:
+                        workQueue.put(view)
+                case _:
+                    workQueue.put(view)
+
+        self.process_queue(workQueue, self.task_runner, self.metadata_sync)
+                    
+        print(f"Async metadata update complete...")
+
+    def metadata_sync(self, view:str):
+        print(f"Syncing metadata for {view}...")
+        for p in self.UserConfig.GCPCredential.Projects:
+            for d in p.Datasets:
+                match view:
+                    case SyncConstants.INFORMATION_SCHEMA_TABLES:
+                        self.sync_bq_information_schema_core(project=p.ProjectID, dataset=d.Dataset, type=BigQueryObjectType.BASE_TABLE)
+                    case SyncConstants.INFORMATION_SCHEMA_VIEWS:
+                        if self.UserConfig.LoadViews:
+                            self.sync_bq_information_schema_core(project=p.ProjectID, dataset=d.Dataset, type=BigQueryObjectType.VIEW)
+                    case SyncConstants.INFORMATION_SCHEMA_MATERIALIZED_VIEWS:
+                        if self.UserConfig.LoadMaterializedViews:
+                            self.sync_bq_information_schema_core(project=p.ProjectID, dataset=d.Dataset, type=BigQueryObjectType.MATERIALIZED_VIEW)
+                    case _:
+                        self.sync_bq_information_schema_table_dependent(project=p.ProjectID, dataset=d.Dataset, dependent_tbl=view)
 
     def sync_bq_metadata(self):
         """
@@ -211,35 +278,18 @@ class ConfigMetadataLoader(ConfigBase):
         3. COLUMNS
         4. TABLE_CONSTRAINTS
         5. KEY_COLUMN_USAGE
-        5. TABLE_OPTIONS
+        6. TABLE_OPTIONS
+        7. VIEWS
+        8. MATERIALIZED VIEWS
         """
+
+        self.cleanup_metadata_cache()
+
         self.Context.conf.set("spark.databricks.delta.schema.autoMerge.enabled", "true")
-        self.sync_bq_information_schema_tables()
-        self.sync_bq_information_schema_table_dependent(SyncConstants.INFORMATION_SCHEMA_PARTITIONS)
-        self.sync_bq_information_schema_table_dependent(SyncConstants.INFORMATION_SCHEMA_COLUMNS)
-        self.sync_bq_information_schema_table_dependent(SyncConstants.INFORMATION_SCHEMA_TABLE_CONSTRAINTS)
-        self.sync_bq_information_schema_table_dependent(SyncConstants.INFORMATION_SCHEMA_KEY_COLUMN_USAGE)
-        self.sync_bq_information_schema_table_dependent(SyncConstants.INFORMATION_SCHEMA_TABLE_OPTIONS)
+        self.async_bq_metadata()
         self.Context.conf.set("spark.databricks.delta.schema.autoMerge.enabled", "false")
 
         self.create_proxy_views()
-
-    def create_infosys_proxy_view(self, trgt:str):
-        """
-        Creates a covering temporary view over top of the Big Query metadata tables
-        """
-        clean_nm = trgt.replace(".", "_")
-        vw_nm = f"BQ_{clean_nm}"
-
-        tbl = self.UserConfig.flatten_3part_tablename(clean_nm)
-        lakehouse_tbl = self.UserConfig.get_lakehouse_tablename(self.UserConfig.MetadataLakehouse, tbl)
-
-        sql = f"""
-        CREATE OR REPLACE TEMPORARY VIEW {vw_nm}
-        AS
-        SELECT * FROM {lakehouse_tbl}
-        """
-        self.Context.sql(sql)
 
     def create_userconfig_tables_proxy_view(self):
         """
@@ -249,9 +299,8 @@ class ConfigMetadataLoader(ConfigBase):
             CREATE OR REPLACE TEMPORARY VIEW user_config_tables
             AS
             SELECT
-                project_id, 
-                dataset, 
-                tbl.table_name,
+                sync_id,
+                tbl.project_id,tbl.dataset,tbl.table_name,tbl.object_type,
                 tbl.enabled,tbl.priority,tbl.source_query,
                 tbl.load_strategy,tbl.load_type,tbl.interval,
                 tbl.flatten_table,tbl.flatten_inplace, tbl.explode_arrays,
@@ -263,6 +312,7 @@ class ConfigMetadataLoader(ConfigBase):
                 tbl.partitioned.partition_data_type,
                 tbl.partitioned.partition_range,
                 tbl.lakehouse_target.lakehouse,
+                tbl.lakehouse_target.schema AS lakehouse_schema,
                 tbl.lakehouse_target.table_name AS lakehouse_target_table,
                 tbl.keys,
                 tbl.enforce_partition_expiration AS enforce_partition_expiration,
@@ -272,8 +322,7 @@ class ConfigMetadataLoader(ConfigBase):
                 tbl.table_options
             FROM (
                 SELECT 
-                    gcp_credentials.project_id as project_id,
-                    gcp_credentials.dataset as dataset, 
+                    id AS sync_id,
                     EXPLODE(tables) AS tbl 
                 FROM user_config_json)
         """
@@ -287,13 +336,11 @@ class ConfigMetadataLoader(ConfigBase):
             CREATE OR REPLACE TEMPORARY VIEW user_config_table_keys
             AS
             SELECT
-                project_id, dataset, table_name, pkeys.column
+                id AS sync_id, project_id, dataset, table_name, pkeys.column
             FROM (
                 SELECT
-                    project_id, dataset, tbl.table_name, EXPLODE(tbl.keys) AS pkeys
-                FROM (SELECT gcp_credentials.project_id as project_id,
-                    gcp_credentials.dataset as dataset, 
-                    EXPLODE(tables) AS tbl FROM user_config_json)
+                    id, tbl.project_id, tbl.dataset, tbl.table_name, EXPLODE(tbl.keys) AS pkeys
+                FROM (SELECT id, EXPLODE(tables) AS tbl FROM user_config_json)
             )
         """
         self.Context.sql(sql)
@@ -304,9 +351,6 @@ class ConfigMetadataLoader(ConfigBase):
         """
         self.create_userconfig_tables_proxy_view()        
         self.create_userconfig_tables_cols_proxy_view()
-
-        for vw in SyncConstants.get_information_schema_views():
-            self.create_infosys_proxy_view(vw)  
 
         self.create_autodetect_view()      
 
@@ -332,7 +376,13 @@ class ConfigMetadataLoader(ConfigBase):
         
         sql = f"""
         WITH default_config AS (
-            SELECT COALESCE(autodetect, TRUE) AS autodetect, load_all_tables, target_lakehouse FROM user_config_json
+            SELECT id AS sync_id,
+            COALESCE(autodetect, TRUE) AS autodetect, 
+            load_all_tables, 
+            fabric.target_lakehouse AS target_lakehouse,
+            fabric.target_schema AS target_schema,
+            COALESCE(fabric.enable_schemas, FALSE) AS enable_schemas 
+            FROM user_config_json
         ),
         pk AS (
             SELECT
@@ -346,13 +396,20 @@ class ConfigMetadataLoader(ConfigBase):
         ),
         source AS (
             SELECT
+                d.sync_id,
                 a.table_catalog as project_id,
                 a.table_schema as dataset,
                 a.table_name as table_name,
+                'BASE_TABLE' AS object_type,
                 CASE WHEN d.load_all_tables THEN
                     COALESCE(u.enabled, TRUE) ELSE
                     COALESCE(u.enabled, FALSE) END AS enabled,
                 COALESCE(u.lakehouse, d.target_lakehouse) AS lakehouse,
+                
+                CASE WHEN d.enable_schemas THEN
+                    COALESCE(u.lakehouse_schema, COALESCE(d.target_schema, a.table_schema))
+                    ELSE NULL END AS lakehouse_schema,
+
                 COALESCE(u.lakehouse_target_table, a.table_name) AS lakehouse_table_name,
                 COALESCE(u.source_query, '') AS source_query,
                 COALESCE(u.priority, '100') AS priority,
@@ -379,6 +436,7 @@ class ConfigMetadataLoader(ConfigBase):
                 COALESCE(u.partition_range, a.partition_range, '') AS partition_range,
                 COALESCE(u.watermark_column, a.pk_col, '') AS watermark_column, 
                 d.autodetect,
+                d.enable_schemas AS use_lakehouse_schema,
                 COALESCE(u.enforce_partition_expiration, FALSE) AS enforce_partition_expiration,
                 COALESCE(u.allow_schema_evolution, FALSE) AS allow_schema_evolution,
                 COALESCE(u.table_maintenance_enabled, FALSE) AS table_maintenance_enabled,
@@ -405,9 +463,7 @@ class ConfigMetadataLoader(ConfigBase):
 
         MERGE INTO bq_sync_configuration t
         USING source s
-        ON t.project_id = s.project_id AND
-            t.dataset = s.dataset AND
-            t.table_name = s.table_name
+        ON t.sync_id = s.sync_id AND t.project_id = s.project_id AND t.dataset = s.dataset AND t.table_name = s.table_name
         WHEN MATCHED AND t.sync_state <> 'INIT' THEN
             UPDATE SET
                 t.enabled = s.enabled,
@@ -443,8 +499,7 @@ class Scheduler(ConfigBase):
     def get_current_schedule(self, schedule_type:str) -> str:
         sql = f"""
         SELECT group_schedule_id FROM bq_sync_schedule
-        WHERE project_id = '{self.UserConfig.ProjectID}'
-        AND dataset = '{self.UserConfig.Dataset}'
+        WHERE sync_id = '{self.UserConfig.ID}'
         AND schedule_type = '{schedule_type}'
         AND status NOT IN ('{SyncConstants.COMPLETE}', '{SyncConstants.SKIPPED}')
         """
@@ -482,15 +537,16 @@ class Scheduler(ConfigBase):
             GROUP BY table_catalog, table_schema, table_name
         ),
         last_load AS (
-            SELECT project_id, dataset, table_name, MAX(started) AS last_load_update
+            SELECT sync_id, project_id, dataset, table_name, MAX(started) AS last_load_update
             FROM bq_sync_schedule
             WHERE status='COMPLETE'
-            GROUP BY project_id, dataset, table_name
+            GROUP BY sync_id, project_id, dataset, table_name
         ),
         schedule AS (
             SELECT
                 n.group_schedule_id,
                 UUID() AS schedule_id,
+                c.sync_id,
                 c.project_id,
                 c.dataset,
                 c.table_name,
@@ -507,6 +563,7 @@ class Scheduler(ConfigBase):
                 c.priority                
             FROM bq_sync_configuration c 
             LEFT JOIN bq_sync_schedule s ON 
+                c.sync_id=s.sync_id AND
                 c.project_id= s.project_id AND
                 c.dataset = s.dataset AND
                 c.table_name = s.table_name AND
@@ -517,6 +574,7 @@ class Scheduler(ConfigBase):
                 c.dataset = b.table_schema AND
                 c.table_name = b.table_name
             LEFT JOIN last_load l ON 
+                c.sync_id=l.sync_id AND
                 c.project_id= l.project_id AND
                 c.dataset = l.dataset AND
                 c.table_name = l.table_name
@@ -527,8 +585,7 @@ class Scheduler(ConfigBase):
 
         INSERT INTO bq_sync_schedule
         SELECT * FROM schedule s
-        WHERE s.project_id = '{self.UserConfig.ProjectID}'
-        AND s.dataset = '{self.UserConfig.Dataset}'
+        WHERE s.sync_id = '{self.UserConfig.ID}'
         """
         self.Context.sql(sql)
 
@@ -574,6 +631,7 @@ class BQScheduleLoader(ConfigBase):
 
         rdd = self.Context.sparkContext.parallelize([Row( \
             schedule_id=schedule.ScheduleId, \
+            sync_id=schedule.SyncId, \
             project_id=schedule.ProjectId, \
             dataset=schedule.Dataset, \
             table_name=schedule.TableName, \
@@ -632,10 +690,10 @@ class BQScheduleLoader(ConfigBase):
         """
         sql = f"""
         WITH last_completed_schedule AS (
-            SELECT schedule_id, project_id, dataset, table_name, max_watermark, started AS last_schedule_dt
+            SELECT sync_id, schedule_id, project_id, dataset, table_name, max_watermark, started AS last_schedule_dt
             FROM (
-                SELECT schedule_id, project_id, dataset, table_name, started, max_watermark,
-                ROW_NUMBER() OVER(PARTITION BY project_id, dataset, table_name ORDER BY scheduled DESC) AS row_num
+                SELECT sync_id, schedule_id, project_id, dataset, table_name, started, max_watermark,
+                ROW_NUMBER() OVER(PARTITION BY sync_id, project_id, dataset, table_name ORDER BY scheduled DESC) AS row_num
                 FROM bq_sync_schedule
                 WHERE status='COMPLETE'
             )
@@ -663,34 +721,20 @@ class BQScheduleLoader(ConfigBase):
 
         SELECT c.*, 
             p.partition_id,
-            s.group_schedule_id,
-            s.schedule_id,
-            h.max_watermark,
-            h.last_schedule_dt,
+            s.group_schedule_id,s.schedule_id,
+            h.max_watermark,h.last_schedule_dt,
             CASE WHEN (h.schedule_id IS NULL) THEN TRUE ELSE FALSE END AS initial_load
         FROM bq_sync_configuration c
-        JOIN bq_sync_schedule s ON 
-            c.project_id = s.project_id AND
-            c.dataset = s.dataset AND
-            c.table_name = s.table_name
-        LEFT JOIN last_completed_schedule h ON
-            c.project_id = h.project_id AND
-            c.dataset = h.dataset AND
-            c.table_name = h.table_name
-        LEFT JOIN tbl_partitions p ON
-            p.table_catalog = c.project_id AND 
-            p.table_schema = c.dataset AND
-            p.table_name = c.table_name
-        LEFT JOIN bq_sync_schedule_telemetry t ON
-            s.schedule_id = t.schedule_id AND
-            c.project_id = t.project_id AND
-            c.dataset = t.dataset AND
-            c.table_name = t.table_name AND
-            COALESCE(p.partition_id, '0') = COALESCE(t.partition_id, '0') AND
-            t.status = 'COMPLETE'
-        WHERE s.status = 'SCHEDULED'
-            AND c.enabled = TRUE
-            AND t.schedule_id IS NULL
+        JOIN bq_sync_schedule s ON c.sync_id = s.sync_id AND c.project_id = s.project_id 
+            AND c.dataset = s.dataset AND  c.table_name = s.table_name
+        LEFT JOIN last_completed_schedule h ON c.sync_id = h.sync_id AND c.project_id = h.project_id 
+            AND c.dataset = h.dataset AND c.table_name = h.table_name
+        LEFT JOIN tbl_partitions p ON p.table_catalog = c.project_id 
+            AND p.table_schema = c.dataset AND p.table_name = c.table_name
+        LEFT JOIN bq_sync_schedule_telemetry t ON s.sync_id = t.sync_id AND s.schedule_id = t.schedule_id 
+            AND c.project_id = t.project_id AND c.dataset = t.dataset AND c.table_name = t.table_name AND
+            COALESCE(p.partition_id, '0') = COALESCE(t.partition_id, '0') AND t.status = 'COMPLETE'
+        WHERE s.status = 'SCHEDULED' AND c.enabled = TRUE AND t.schedule_id IS NULL
             AND s.group_schedule_id = '{group_schedule_id}'
         ORDER BY c.priority
         """
@@ -890,7 +934,7 @@ class BQScheduleLoader(ConfigBase):
             b. All other writes respect the configure MODE against the write destination
         4. Collect and save telemetry
         """
-        print("{0} {1}...".format(schedule.SummaryLoadType, schedule.TableName))
+        print(f"{schedule.SummaryLoadType} {schedule.ProjectId}.{schedule.Dataset}.{schedule.TableName}...")
 
         if not schedule.InitialLoad and self.Context.catalog.tableExists(schedule.LakehouseTableName):
             table_maint = DeltaTableMaintenance(self.Context, schedule.LakehouseTableName)
@@ -1043,83 +1087,50 @@ class BQScheduleLoader(ConfigBase):
         """
         sql = f"""
         WITH schedule_telemetry AS (
-                SELECT
-                        schedule_id,
-                        project_id,
-                        dataset,
-                        table_name,
-                        SUM(CASE WHEN status='COMPLETE' THEN 1 ELSE 0 END) AS completed_activities,
-                        SUM(CASE WHEN status='FAILED' THEN 1 ELSE 0 END) AS failed_activities,
-                        MIN(started) as started,
-                        MAX(completed) as completed
-                FROM bq_sync_schedule_telemetry
-                GROUP BY
-                schedule_id,
-                project_id,
-                dataset,
-                table_name
+            SELECT
+                sync_id,schedule_id,project_id,dataset,table_name,
+                SUM(CASE WHEN status='COMPLETE' THEN 1 ELSE 0 END) AS completed_activities,
+                SUM(CASE WHEN status='FAILED' THEN 1 ELSE 0 END) AS failed_activities,
+                MIN(started) as started,MAX(completed) as completed
+            FROM bq_sync_schedule_telemetry
+            GROUP BY sync_id,schedule_id,project_id,dataset,table_name
         ),
         schedule_watermarks AS (
-                SELECT
-                        schedule_id,
-                        project_id,
-                        dataset,
-                        table_name,
-                        max_watermark,
-                        ROW_NUMBER() OVER(PARTITION BY schedule_id,
-                                project_id,
-                                dataset,
-                                table_name ORDER BY completed DESC) AS row_num
-                FROM bq_sync_schedule_telemetry
-                WHERE max_watermark IS NOT NULL
+            SELECT
+                sync_id, schedule_id, project_id,dataset, table_name,max_watermark,
+                ROW_NUMBER() OVER(PARTITION BY schedule_id,project_id,dataset,table_name 
+                    ORDER BY completed DESC) AS row_num
+            FROM bq_sync_schedule_telemetry
+            WHERE max_watermark IS NOT NULL
         ),
         schedule_results AS (
-                SELECT
-                    s.group_schedule_id,
-                    s.schedule_id,
-                    s.project_id,
-                    s.dataset,
-                    s.table_name,
-                    s.status,
-                    CASE WHEN t.failed_activities = 0 THEN 'COMPLETE' ELSE 'FAILED' END AS result_status,
-                    t.started,
-                    t.completed,
-                    t.completed_activities,
-                    t.failed_activities,
-                    w.max_watermark,
-                    s.priority 
+            SELECT
+                s.sync_id, s.group_schedule_id,s.schedule_id,s.project_id,s.dataset,s.table_name,s.status,
+                CASE WHEN t.failed_activities = 0 THEN 'COMPLETE' ELSE 'FAILED' END AS result_status,
+                t.started,t.completed,t.completed_activities,t.failed_activities,
+                w.max_watermark,s.priority 
                 FROM bq_sync_schedule s
-                JOIN schedule_telemetry t ON 
-                    s.schedule_id = t.schedule_id AND
-                    s.project_id = t.project_id AND
-                    s.dataset = t.dataset AND
-                    s.table_name = t.table_name
-                LEFT JOIN schedule_watermarks w ON
-                    s.schedule_id = w.schedule_id AND
-                    s.project_id = w.project_id AND
-                    s.dataset = w.dataset AND
-                    s.table_name = w.table_name
+                JOIN schedule_telemetry t ON s.sync_id=t.sync_id AND s.schedule_id=t.schedule_id AND
+                    s.project_id=t.project_id AND s.dataset=t.dataset AND s.table_name=t.table_name
+                LEFT JOIN schedule_watermarks w ON s.sync_id=w.sync_id AND s.schedule_id=w.schedule_id 
+                    AND s.project_id=w.project_id AND s.dataset=w.dataset AND s.table_name=w.table_name
         )  
 
         MERGE INTO bq_sync_schedule s
         USING ( 
-                SELECT *
-                FROM schedule_results r
-                WHERE r.status='SCHEDULED'
-                AND r.group_schedule_id = '{group_schedule_id}'
+            SELECT * FROM schedule_results r
+            WHERE r.status='SCHEDULED' AND r.group_schedule_id = '{group_schedule_id}'
         ) r
-        ON s.schedule_id = r.schedule_id AND
-                s.project_id = r.project_id AND
-                s.dataset = r.dataset AND
-                s.table_name = r.table_name
+        ON s.sync_id=r.sync_id AND s.schedule_id=r.schedule_id AND
+            s.project_id=r.project_id AND s.dataset=r.dataset AND s.table_name=r.table_name
         WHEN MATCHED THEN
-                UPDATE SET
-                        s.status = r.result_status,
-                        s.started = r.started,
-                        s.completed = r.completed,
-                        s.completed_activities = r.completed_activities,
-                        s.failed_activities = r.failed_activities,
-                        s.max_watermark = r.max_watermark
+            UPDATE SET
+                s.status = r.result_status,
+                s.started = r.started,
+                s.completed = r.completed,
+                s.completed_activities = r.completed_activities,
+                s.failed_activities = r.failed_activities,
+                s.max_watermark = r.max_watermark
 
         """
         self.Context.sql(sql)
@@ -1130,18 +1141,15 @@ class BQScheduleLoader(ConfigBase):
         """
         sql = f"""
         WITH committed AS (
-            SELECT project_id, dataset, table_name, MAX(started) as started
+            SELECT sync_id, project_id, dataset, table_name, MAX(started) as started
             FROM bq_sync_schedule
-            WHERE status='COMPLETE'
-            AND group_schedule_id = '{group_schedule_id}'
-            GROUP BY project_id, dataset, table_name
+            WHERE status='COMPLETE' AND group_schedule_id = '{group_schedule_id}'
+            GROUP BY sync_id, project_id, dataset, table_name
         )
 
         MERGE INTO bq_sync_configuration t
         USING committed c
-        ON t.project_id=c.project_id
-        AND t.dataset=c.dataset
-        AND t.table_name=c.table_name
+        ON t.sync_id=c.sync_id AND t.project_id=c.project_id AND t.dataset=c.dataset AND t.table_name=c.table_name
         WHEN MATCHED AND t.sync_state='INIT' THEN
             UPDATE SET
                 t.sync_state='COMMIT'
@@ -1273,7 +1281,8 @@ class BQScheduleLoader(ConfigBase):
 
 class BQSync(SyncBase):
     def __init__(self, context:SparkSession, config_path:str):
-        self.cleanup_session(context)
+        self.Context = context
+        self.cleanup_session()
         super().__init__(context, config_path)
 
         self.MetadataLoader = ConfigMetadataLoader(context, self.UserConfig, self.GCPCredential)
@@ -1294,8 +1303,21 @@ class BQSync(SyncBase):
 
         return self.Scheduler.build_schedule(schedule_type)
     
+    def ensure_schemas(self):
+        if self.UserConfig.Fabric.EnableSchemas:
+            df = spark.read.table("bq_sync_configuration")
+            df = df.filter((col("sync_id")=="bq_sync_test1") & 
+                (col("enabled")==True) & (col("use_lakehouse_schema")==True))
+            df = df.select(col("lakehouse"), coalesce(col("lakehouse_schema"), col("dataset")).alias("schema"))
+
+            schemas = [f"{r['lakehouse']}.{r['schema']}" for r in df.collect()]
+
+            for schema in schemas:
+                spark.sql(f"CREATE SCHEMA IF NOT EXISTS {self.UserConfig.Fabric.WorkspaceId}.{schema}")
+
     def run_schedule(self, group_schedule_id:str, optimize_metadata:bool=True):
         self.MetadataLoader.create_proxy_views()
+        self.ensure_schemas()
 
         if self.UserConfig.Async.Enabled:
             self.Loader.run_async_schedule(group_schedule_id)
@@ -1307,9 +1329,9 @@ class BQSync(SyncBase):
         if optimize_metadata:
             self.optimize_metadata_tbls()
     
-    def cleanup_session(self, context:SparkSession):
+    def cleanup_session(self):
         temp_views = SyncConstants.get_sync_temp_views()
-        list(map(lambda x: context.sql(f"DROP TABLE IF EXISTS {x}"), temp_views))
+        list(map(lambda x: self.Context.sql(f"DROP TABLE IF EXISTS {x}"), temp_views))
 
     def optimize_metadata_tbls(self):
         tbls = ["bq_sync_configuration", "bq_sync_schedule", "bq_sync_schedule_telemetry"]
@@ -1320,8 +1342,7 @@ class BQSync(SyncBase):
     
     def generate_user_config_json_from_metadata(self, path:str):
         bq_tables = self.Context.table(SyncConstants.SQL_TBL_SYNC_CONFIG)
-        bq_tables = bq_tables.filter(col("project_id") == self.UserConfig.ProjectID)
-        bq_tables = bq_tables.filter(col("dataset") == self.UserConfig.Dataset)
+        bq_tables = bq_tables.filter(col("sync_id") == self.UserConfig.ID)
 
         user_cfg = self.build_user_config_json(bq_tables.collect())
 
@@ -1330,28 +1351,48 @@ class BQSync(SyncBase):
 
     def build_user_config_json(self, tbls:list) -> str:
         tables = list(map(lambda x: self.get_table_config_json(x), tbls))
+        projects = list(map(lambda x: self.get_gcp_project_config_json(x), self.UserConfig.GCPCredential.Projects))
 
         return {
+            "id":"",
             "load_all_tables":self.UserConfig.LoadAllTables,
+            "load_views":self.UserConfig.LoadViews,
+            "load_materialized_views":self.UserConfig.LoadMaterializedViews,
             "autodetect":self.UserConfig.Autodetect,
-            "metadata_lakehouse":self.UserConfig.MetadataLakehouse,
-            "target_lakehouse":self.UserConfig.TargetLakehouse,
-            
+            "fabric":{
+                "workspace_id":self.UserConfig.Fabric.WorkspaceID,
+                "metadata_lakehouse":self.UserConfig.Fabric.MetadataLakehouse,
+                "target_lakehouse":self.UserConfig.Fabric.TargetLakehouse,
+                "target_schema":self.UserConfig.Fabric.TargetLakehouseSchema,
+                "enable_schemas":self.UserConfig.Fabric.EnableSchemas,
+            },            
             "gcp_credentials":{
-                "project_id":self.UserConfig.GCPCredential.ProjectID,
-                "dataset":self.UserConfig.GCPCredential.Dataset,
-                "credential":self.UserConfig.GCPCredential.Credential
-            },
-            
+                "projects": projects,
+                "credential":self.UserConfig.GCPCredential.Credential,
+                "materialization_project_id":self.UserConfig.GCPCredential.MaterializationProjectId,
+                "materialization_dataset":self.UserConfig.GCPCredential.MaterializationDataset,
+                "billing_project_id":self.UserConfig.GCPCredential.BillingProjectID
+            },            
             "async":{
                 "enabled":self.UserConfig.Async.Enabled,
                 "parallelism":self.UserConfig.Async.Parallelism,
                 "cell_timeout":self.UserConfig.Async.CellTimeout,
                 "notebook_timeout":self.UserConfig.Async.NotebookTimeout
-            },        
-            
+            }, 
             "tables": tables
         }
+
+    def get_gcp_dataset_config_json(self, ds:list):
+        return [{"dataset": d.Dataset} for d in ds]
+
+    def get_gcp_project_config_json(self, proj) -> str:
+        datasets = self.get_gcp_dataset_config_json(proj.Datasets)
+
+        return {
+            "project_id":proj.ProjectID,
+            "datasets":datasets
+        }
+
 
     def get_table_keys_config_json(self, pk:list):
         return [{"column": k} for k in pk]
@@ -1361,7 +1402,10 @@ class BQSync(SyncBase):
 
         return {
             "priority":tbl["priority"],
+            "project_id":tbl["project_id"],
+            "dataset":tbl["dataset"],
             "table_name":tbl["table_name"],
+            "object_type":tbl["object_type"],
             "enabled":tbl["enabled"],
             "source_query":tbl["source_query"],
             "enforce_partition_expiration":tbl["enforce_partition_expiration"],
@@ -1390,6 +1434,7 @@ class BQSync(SyncBase):
             },
             "lakehouse_target":{
                 "lakehouse":tbl["lakehouse"],
+                "schema":tbl["lakehouse_schema"],
                 "table_name":tbl["lakehouse_table_name"]
             }
         }

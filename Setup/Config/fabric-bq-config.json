@@ -1,12 +1,27 @@
 {
 	"load_all_tables": true|false,
-	"metadata_lakehouse": "[FABRIC_METADATA_LAKEHOUSE]",
-	"target_lakehouse": "[FABRIC_DEFAULT_TARGET_LAKEHOUSE]",
-	
+	"fabric":{
+        "workspace_id":"[FABRIC_WORKSPACE_ID]",
+        "metadata_lakehouse":"[FABRIC_METADATA_LAKEHOUSE]",
+        "target_lakehouse":"[FABRIC_DEFAULT_TARGET_LAKEHOUSE]",
+		"target_schema":"",
+        "enable_schemas":false
+    },
 	"gcp_credentials": {
-		"project_id": "[GCP_PROHJECT_ID]",
-		"dataset": "[DATASET_ID]",
-		"credential_path": "/env/config/[GCP_SERVICE_ACCOUNT_CREDENTIAL_FILE_NAME].json"
+		"projects": [
+            	{
+                    "project_id":"[GCP_PROJECT_ID]",
+                    "datasets": [
+                        {
+                            "dataset":"[DATASET_ID]"
+                        }
+                    ]
+                }
+            ],
+		"credential_path": "/env/config/[GCP_SERVICE_ACCOUNT_CREDENTIAL_FILE_NAME].json",
+		"materialization_project_id":"[GCP_PROJECT_ID]",
+        "materialization_dataset":"[DATASET_ID]",
+        "billing_project_id":"[GCP_PROJECT_ID]"
 	},
 	
 	"async": {
@@ -18,7 +33,9 @@
 	"tables": [
 	{
 		"load_priority": 100,
-		"table_name": "[BIGQUERY_TABLE_NAME]",
+		"project_id": "[BQ_TABLE_PROJECT_ID]",
+		"dataset":"[BQ_TABLE_DATASET]",
+		"table_name": "[BQ_TABLE_NAME]",
 		"enabled": true|false,
 		"enforce_partition_expiration": true|false,
 		"allow_schema_evoluton": true|false,
