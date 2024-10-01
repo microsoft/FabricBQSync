@@ -6,11 +6,11 @@ from datetime import datetime, date, timezone
 from typing import Tuple
 from queue import PriorityQueue
 from threading import Thread, Lock
-import uuid
 
 from FabricSync.BQ.Metastore import *
 from FabricSync.BQ.Config import *
 from FabricSync.DeltaTableUtility import *
+from FabricSync.BQ.Enum import *
 
 class ConfigMetadataLoader(ConfigBase):
     """
@@ -180,7 +180,9 @@ class ConfigMetadataLoader(ConfigBase):
         self.Metastore.create_autodetect_view()      
 
     def auto_detect_bq_schema(self):
+        print("Starting auto-detect schema/configuration...")
         self.Metastore.auto_detect_table_profiles(self.UserConfig.LoadAllTables)
+        print("Finished auto-detect schema/configuration...")
 
 class Scheduler(ConfigBase):
     """
@@ -202,6 +204,200 @@ class Scheduler(ConfigBase):
             schedule_id = self.Metastore.build_new_schedule(schedule_type, self.UserConfig.ID)
         
         return schedule_id
+
+class BQDataRetention(ConfigBase):
+    """
+    Class responsible for BQ Table and Partition Expiration
+    """
+    def __init__(self, context:SparkSession, user_config, gcp_credential:str):
+        """
+        Calls parent init to load User Config from JSON file
+        """
+        super().__init__(context, user_config, gcp_credential)
+        self.Metastore.ensure_retention_metastore_table()
+    
+    def execute(self):
+        self._enforce_retention_policy()
+        self.Metastore.sync_retention_config(self.UserConfig.ID)
+
+    def _enforce_retention_policy(self, sync_id:str):
+        df = self.Metastore.get_bq_retention_policy(self.UserConfig.ID)
+
+        for d in df.collect():
+            if d["use_lakehouse_schema"]:
+                table_name = f"{d['lakehouse']}.{d['lakehouse_schema']}.{d['lakehouse_table_name']}"
+            else:
+                table_name = f"{d['lakehouse']}.{d['lakehouse_table_name']}"
+
+            table_maint = DeltaTableMaintenance(self.context, table_name)
+
+            if d["partition_id"]:
+                print(f"Expiring Table: {table_name} Partition")
+            else:
+                print(f"Expiring Table: {table_name}")
+                table_maint.drop_table()  
+
+class SyncUtil():
+    @staticmethod
+    def flatten_structs(nested_df:DataFrame) -> DataFrame:
+        """
+        Recurses through Dataframe and flattens columns of with datatype struct
+        using '_' notation
+        """
+        stack = [((), nested_df)]
+        columns = []
+
+        while len(stack) > 0:        
+            parents, df = stack.pop()
+
+            flat_cols = [col(".".join(parents + (c[0],))).alias("_".join(parents + (c[0],))) \
+                    for c in df.dtypes if c[1][:6] != "struct"]
+                
+            nested_cols = [c[0] for c in df.dtypes if c[1][:6] == "struct"]
+            
+            columns.extend(flat_cols)
+
+            for nested_col in nested_cols:
+                projected_df = df.select(nested_col + ".*")
+                stack.append((parents + (nested_col,), projected_df))
+            
+        return nested_df.select(columns)
+
+    @staticmethod
+    def flatten_df(explode_arrays:bool, df:DataFrame) -> DataFrame:
+        """
+        Recurses through Dataframe and flattens complex types
+        """ 
+        array_cols = [c[0] for c in df.dtypes if c[1][:5] == "array"]
+
+        if len(array_cols) > 0 and explode_arrays:
+            while len(array_cols) > 0:        
+                for array_col in array_cols:            
+                    cols_to_select = [x for x in df.columns if x != array_col ]            
+                    df = df.withColumn(array_col, explode(col(array_col)))
+                    
+                df = SyncUtil.flatten_structs(df)
+                
+                array_cols = [c[0] for c in df.dtypes if c[1][:5] == "array"]
+        else:
+            df = SyncUtil.flatten_structs(df)
+
+        return df
+
+    @staticmethod
+    def get_fabric_partition_proxy_cols(partition_grain:str) -> list[str]:
+        proxy_cols = ["YEAR", "MONTH", "DAY", "HOUR"]
+
+        match partition_grain:
+            case "DAY":
+                proxy_cols.remove("HOUR")
+            case "MONTH":
+                proxy_cols.remove("HOUR")
+                proxy_cols.remove("DAY")
+            case "YEAR":
+                proxy_cols.remove("HOUR")
+                proxy_cols.remove("DAY")
+                proxy_cols.remove("MONTH")
+
+        return proxy_cols
+    
+    @staticmethod
+    def get_bq_partition_id_format(partition_grain:str) -> str:
+        pattern = None
+
+        match partition_grain:
+            case "DAY":
+                pattern = "%Y%m%d"
+            case "MONTH":
+                pattern = "%Y%m"
+            case "YEAR":
+                pattern = "%Y"
+            case "HOUR":
+                pattern = "%Y%m%d%H"
+        
+        return pattern
+
+    @staticmethod
+    def get_derived_date_from_part_id(partition_grain:str, partition_id:str) -> datetime:
+        dt_format = SyncUtil.get_bq_partition_id_format(partition_grain)
+        return datetime.strptime(partition_id, dt_format)
+    
+    @staticmethod
+    def create_fabric_partition_proxy_cols(df:DataFrame, partition:str, partition_grain:str, proxy_cols:list[str]) -> DataFrame:  
+        for c in proxy_cols:
+            match c:
+                case "HOUR":
+                    df = df.withColumn(f"__{partition}_HOUR", \
+                        date_format(col(partition), "HH"))
+                case "DAY":
+                    df = df.withColumn(f"__{partition}_DAY", \
+                        date_format(col(partition), "dd"))
+                case "MONTH":
+                    df = df.withColumn(f"__{partition}_MONTH", \
+                        date_format(col(partition), "MM"))
+                case "YEAR":
+                    df = df.withColumn(f"__{partition}_YEAR", \
+                        date_format(col(partition), "yyyy"))
+                case _:
+                    next
+        
+        return df
+
+    @staticmethod
+    def get_fabric_partition_cols(partition:str, proxy_cols:list[str]):
+        return [f"__{partition}_{c}" for c in proxy_cols]
+
+    @staticmethod
+    def get_fabric_partition_predicate(partition_dt:datetime, partition:str, proxy_cols:list[str]) -> str:
+        partition_predicate = []
+
+        for c in proxy_cols:
+            match c:
+                case "HOUR":
+                    part_id = partition_dt.strftime("%H")
+                case "DAY":
+                    part_id = partition_dt.strftime("%d")
+                case "MONTH":
+                    part_id = partition_dt.strftime("%m")
+                case "YEAR":
+                    part_id = partition_dt.strftime("%Y")
+                case _:
+                    next
+            
+            partition_predicate.append(f"__{partition}_{c} = '{part_id}'")
+
+        return " AND ".join(partition_predicate)
+    
+    @staticmethod
+    def get_bq_range_map(tbl_ranges:str) -> DataFrame:
+        bq_range = [int(r.strip()) for r in tbl_ranges.split(",")]
+        partition_range = [(f"{r}-{r + bq_range[2]}", r, r + bq_range[2]) for r in range(bq_range[0], bq_range[1], bq_range[2])]
+        return partition_range
+    
+    @staticmethod
+    def create_fabric_range_partition(df_bq:DataFrame, schedule:SyncSchedule) -> DataFrame:
+        partition_range = SyncUtil.get_bq_range_map(schedule.PartitionRange)
+        
+        df = self.Context.createDataFrame(partition_range, ["range_name", "range_low", "range_high"]) \
+            .alias("rng")
+
+        df_bq = df_bq.alias("bq")
+        df_bq = df_bq.join(df, (col(f"bq.{schedule.PartitionColumn}") >= col("rng.range_low")) & \
+            (col(f"bq.{schedule.PartitionColumn}") < col("rng.range_high"))) \
+            .select("bq.*", col("rng.range_name").alias(schedule.FabricPartitionColumns[0]))
+        
+        return df_bq
+
+    @staticmethod
+    def get_partition_range_predicate(schedule:SyncSchedule) -> str:
+        partition_range = SyncUtil.get_bq_range_map(schedule.PartitionRange)
+        r = [x for x in partition_range if str(x[1]) == schedule.PartitionId]
+
+        if not r:
+            raise Exception(f"Unable to match range partition id {schedule.PartitionId} to range map.")
+
+        return f"{schedule.PartitionColumn} >= {r[0][1]} AND {schedule.PartitionColumn} < {r[0][2]}"
+
 
 class BQScheduleLoader(ConfigBase):
     """
@@ -288,111 +484,6 @@ class BQScheduleLoader(ConfigBase):
 
         return val
 
-    def get_fabric_partition_proxy_cols(self, partition_grain:str) -> list[str]:
-        proxy_cols = ["YEAR", "MONTH", "DAY", "HOUR"]
-
-        match partition_grain:
-            case "DAY":
-                proxy_cols.remove("HOUR")
-            case "MONTH":
-                proxy_cols.remove("HOUR")
-                proxy_cols.remove("DAY")
-            case "YEAR":
-                proxy_cols.remove("HOUR")
-                proxy_cols.remove("DAY")
-                proxy_cols.remove("MONTH")
-
-        return proxy_cols
-
-    def get_bq_partition_id_format(self, partition_grain:str) -> str:
-        pattern = None
-
-        match partition_grain:
-            case "DAY":
-                pattern = "%Y%m%d"
-            case "MONTH":
-                pattern = "%Y%m"
-            case "YEAR":
-                pattern = "%Y"
-            case "HOUR":
-                pattern = "%Y%m%d%H"
-        
-        return pattern
-
-    def get_derived_date_from_part_id(self, partition_grain:str, partition_id:str) -> datetime:
-        dt_format = self.get_bq_partition_id_format(partition_grain)
-        return datetime.strptime(partition_id, dt_format)
-
-    def create_fabric_partition_proxy_cols(self, df:DataFrame, partition:str, partition_grain:str, proxy_cols:list[str]) -> DataFrame:  
-        for c in proxy_cols:
-            match c:
-                case "HOUR":
-                    df = df.withColumn(f"__{partition}_HOUR", \
-                        date_format(col(partition), "HH"))
-                case "DAY":
-                    df = df.withColumn(f"__{partition}_DAY", \
-                        date_format(col(partition), "dd"))
-                case "MONTH":
-                    df = df.withColumn(f"__{partition}_MONTH", \
-                        date_format(col(partition), "MM"))
-                case "YEAR":
-                    df = df.withColumn(f"__{partition}_YEAR", \
-                        date_format(col(partition), "yyyy"))
-                case _:
-                    next
-        
-        return df
-
-    def get_fabric_partition_cols(self, partition:str, proxy_cols:list[str]):
-        return [f"__{partition}_{c}" for c in proxy_cols]
-
-    def get_fabric_partition_predicate(self, partition_dt:datetime, partition:str, proxy_cols:list[str]) -> str:
-        partition_predicate = []
-
-        for c in proxy_cols:
-            match c:
-                case "HOUR":
-                    part_id = partition_dt.strftime("%H")
-                case "DAY":
-                    part_id = partition_dt.strftime("%d")
-                case "MONTH":
-                    part_id = partition_dt.strftime("%m")
-                case "YEAR":
-                    part_id = partition_dt.strftime("%Y")
-                case _:
-                    next
-            
-            partition_predicate.append(f"__{partition}_{c} = '{part_id}'")
-
-        return " AND ".join(partition_predicate)
-    
-    def get_bq_range_map(self, tbl_ranges:str) -> DataFrame:
-        bq_range = [int(r.strip()) for r in tbl_ranges.split(",")]
-        partition_range = [(f"{r}-{r + bq_range[2]}", r, r + bq_range[2]) for r in range(bq_range[0], bq_range[1], bq_range[2])]
-        return partition_range
-        
-    def create_fabric_range_partition(self, df_bq:DataFrame, schedule:SyncSchedule) -> DataFrame:
-        partition_range = self.get_bq_range_map(schedule.PartitionRange)
-        
-        df = self.Context.createDataFrame(partition_range, ["range_name", "range_low", "range_high"]) \
-            .alias("rng")
-
-        df_bq = df_bq.alias("bq")
-        df_bq = df_bq.join(df, (col(f"bq.{schedule.PartitionColumn}") >= col("rng.range_low")) & \
-            (col(f"bq.{schedule.PartitionColumn}") < col("rng.range_high"))) \
-            .select("bq.*", col("rng.range_name").alias(schedule.FabricPartitionColumns[0]))
-        
-        return df_bq
-
-    def get_partition_range_predicate(self, schedule:SyncSchedule) -> str:
-        partition_range = self.get_bq_range_map(schedule.PartitionRange)
-        r = [x for x in partition_range if str(x[1]) == schedule.PartitionId]
-
-        if not r:
-            raise Exception(f"Unable to match range partition id {schedule.PartitionId} to range map.")
-
-        return f"{schedule.PartitionColumn} >= {r[0][1]} AND {schedule.PartitionColumn} < {r[0][2]}"
-
     def merge_table(self, schedule:SyncSchedule, tableName:str, src:DataFrame) -> SyncSchedule:
         """
         Merge into Lakehouse Table based on User Configuration. Only supports Insert/Update All
@@ -435,10 +526,9 @@ class BQScheduleLoader(ConfigBase):
         
         return schedule
 
-
     def get_bq_table(self, schedule:SyncSchedule) -> (SyncSchedule, DataFrame):
         if schedule.IsTimePartitionedStrategy and schedule.PartitionId is not None:
-            part_format = self.get_bq_partition_id_format(schedule.PartitionGrain)
+            part_format = SyncUtil.get_bq_partition_id_format(schedule.PartitionGrain)
 
             if schedule.PartitionDataType == SyncConstants.TIMESTAMP:                  
                 part_filter = f"timestamp_trunc({schedule.PartitionColumn}, {schedule.PartitionGrain}) = PARSE_TIMESTAMP('{part_format}', '{schedule.PartitionId}')"
@@ -447,7 +537,7 @@ class BQScheduleLoader(ConfigBase):
 
             df_bq = self.read_bq_partition_to_dataframe(schedule.BQTableName, part_filter, True)
         elif schedule.IsRangePartitioned:
-            part_filter = self.get_partition_range_predicate(schedule)
+            part_filter = SyncUtil.get_partition_range_predicate(schedule)
             df_bq = self.read_bq_partition_to_dataframe(schedule.BQTableName, part_filter, True)
         else:
             if schedule.LoadStrategy == SyncConstants.WATERMARK and not schedule.InitialLoad:
@@ -467,16 +557,16 @@ class BQScheduleLoader(ConfigBase):
 
         if schedule.IsPartitioned:
             if schedule.PartitionType == SyncConstants.TIME:
-                proxy_cols = self.get_fabric_partition_proxy_cols(schedule.PartitionGrain)
-                schedule.FabricPartitionColumns = self.get_fabric_partition_cols(schedule.PartitionColumn, proxy_cols)
+                proxy_cols = SyncUtil.get_fabric_partition_proxy_cols(schedule.PartitionGrain)
+                schedule.FabricPartitionColumns = SyncUtil.get_fabric_partition_cols(schedule.PartitionColumn, proxy_cols)
 
                 if schedule.IsTimeIngestionPartitioned:
                     df_bq = df_bq.withColumn(schedule.PartitionColumn, lit(schedule.PartitionId))               
 
-                df_bq = self.create_fabric_partition_proxy_cols(df_bq, schedule.PartitionColumn, schedule.PartitionGrain, proxy_cols)
+                df_bq = SyncUtil.create_fabric_partition_proxy_cols(df_bq, schedule.PartitionColumn, schedule.PartitionGrain, proxy_cols)
             else:
                 schedule.FabricPartitionColumns = [f"__{schedule.PartitionColumn}_Range"]
-                df_bq = self.create_fabric_range_partition(df_bq, schedule)
+                df_bq = SyncUtil.create_fabric_range_partition(df_bq, schedule)
         
         return (schedule, df_bq)
 
@@ -602,7 +692,8 @@ class BQScheduleLoader(ConfigBase):
             b. All other writes respect the configure MODE against the write destination
         4. Collect and save telemetry
         """
-        print(f"{schedule.SummaryLoadType} {schedule.ProjectId}.{schedule.Dataset}.{schedule.TableName}...")
+        schedule.SummaryLoadType = schedule.DefaultSummaryLoadType
+        self.show_sync_status(schedule)
 
         #Get BQ table using sync config
         schedule, df_bq = self.get_bq_table(schedule)
@@ -611,6 +702,14 @@ class BQScheduleLoader(ConfigBase):
         schedule = self.save_bq_dataframe(schedule, df_bq, lock)
 
         return schedule
+
+    def show_sync_status(self, schedule:SyncSchedule):
+        show_status = f"{schedule.SummaryLoadType} {schedule.ProjectId}.{schedule.Dataset}.{schedule.TableName}"
+
+        if schedule.PartitionId:
+            show_status = f"{show_status}${schedule.PartitionId}"
+
+        print(f"{show_status}...")
 
     def save_schedule_telemetry(self, schedule:SyncSchedule):
         """
@@ -715,54 +814,6 @@ class BQScheduleLoader(ConfigBase):
             self.Metastore.process_load_group_telemetry(group_schedule_id)
        
         print(f"Async schedule sync complete...")
-    
-
-class SyncUtil():
-    @staticmethod
-    def flatten_structs(nested_df:DataFrame) -> DataFrame:
-        """
-        Recurses through Dataframe and flattens columns of with datatype struct
-        using '_' notation
-        """
-        stack = [((), nested_df)]
-        columns = []
-
-        while len(stack) > 0:        
-            parents, df = stack.pop()
-
-            flat_cols = [col(".".join(parents + (c[0],))).alias("_".join(parents + (c[0],))) \
-                    for c in df.dtypes if c[1][:6] != "struct"]
-                
-            nested_cols = [c[0] for c in df.dtypes if c[1][:6] == "struct"]
-            
-            columns.extend(flat_cols)
-
-            for nested_col in nested_cols:
-                projected_df = df.select(nested_col + ".*")
-                stack.append((parents + (nested_col,), projected_df))
-            
-        return nested_df.select(columns)
-
-    @staticmethod
-    def flatten_df(explode_arrays:bool, df:DataFrame) -> DataFrame:
-        """
-        Recurses through Dataframe and flattens complex types
-        """ 
-        array_cols = [c[0] for c in df.dtypes if c[1][:5] == "array"]
-
-        if len(array_cols) > 0 and explode_arrays:
-            while len(array_cols) > 0:        
-                for array_col in array_cols:            
-                    cols_to_select = [x for x in df.columns if x != array_col ]            
-                    df = df.withColumn(array_col, explode(col(array_col)))
-                    
-                df = SyncUtil.flatten_structs(df)
-                
-                array_cols = [c[0] for c in df.dtypes if c[1][:5] == "array"]
-        else:
-            df = SyncUtil.flatten_structs(df)
-
-        return df
 
 class BQSync(SyncBase):
     def __init__(self, context:SparkSession, config_path:str):
