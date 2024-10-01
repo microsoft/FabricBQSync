@@ -200,6 +200,8 @@ class SetupUtil():
                 "notebook_timeout":0
             },
             "tables": [{
+                "project_id":data["gcp_project_id"],
+		        "dataset":data["gcp_dataset_id"],
                 "table_name": "__BLANK__TEMPLATE__",
                 "enabled": False
             }]

@@ -8,38 +8,9 @@ import base64 as b64
 from pathlib import Path
 import os
 import hashlib
-from enum import Enum
 
 from FabricSync.BQ.Metastore import *
-
-class BigQueryObjectType(Enum):
-    BASE_TABLE = "BASE_TABLE"
-    VIEW = "VIEW"
-    MATERIALIZED_VIEW = "MATERIALIZED_VIEW"
-
-class LoadStrategy(Enum):
-    FULL = "FULL"
-    PARTITION = "PARTITION"
-    WATERMARK = "WATERMARK"
-    TIME_INGESTION = "TIME_INGESTION"
-
-class PartitionType(Enum):
-    TIME = "TIME"
-    RANGE = "RANGE"
-    TIME_INGESTION = "TIME_INGESTION"
-
-class BQDataType(Enum):
-    TIMESTAMP = "TIMESTAMP"
-
-class LoadType(Enum):
-    OVERWRITE = "OVERWRITE"
-    APPEND = "APPEND"
-    MERGE = "MERGE"
-
-class SyncStatus(Enum):
-    COMPLETE = "COMPLETE"
-    SKIPPED = "SKIPPED"
-
+from FabricSync.BQ.Enum import *
 class SyncConstants:
     '''
     Class representing various string constants used through-out
@@ -229,7 +200,8 @@ class SyncSchedule:
         self.PartitionGrain = row["partition_grain"]
         self.PartitionId = row["partition_id"]     
         self.PartitionDataType = row["partition_data_type"]   
-        self.PartitionRange = row["partition_range"]     
+        self.PartitionRange = row["partition_range"]
+        self.RequirePartitionFilter = row["require_partition_filter"]
         self.Lakehouse = row["lakehouse"]
         self.LakehouseSchema = row["lakehouse_schema"]
         self.DestinationTableName = row["lakehouse_table_name"]
@@ -241,6 +213,7 @@ class SyncSchedule:
         self.FlattenTable = row["flatten_table"]
         self.FlattenInPlace = row["flatten_inplace"]
         self.ExplodeArrays = row["explode_arrays"]
+        self.SummaryLoadType = None
     
     @property
     def TableOptions(self) -> dict[str, str]:
@@ -256,14 +229,15 @@ class SyncSchedule:
         return opts
 
     @property
-    def SummaryLoadType(self) -> str:
+    def DefaultSummaryLoadType(self) -> str:
         """
         Summarized the load strategy based on context
         """
-        if self.InitialLoad and not self.IsTimeIngestionPartitioned and not self.IsRangePartitioned:
+        if self.InitialLoad and not self.IsTimeIngestionPartitioned and \
+            not self.IsRangePartitioned and not (self.IsPartitioned and self.RequirePartitionFilter):
             return SyncConstants.INITIAL_FULL_OVERWRITE
         else:
-            return "{0}_{1}".format(self.LoadStrategy, self.LoadType)
+            return f"{self.LoadStrategy}_{self.LoadType}"
     
     @property
     def Mode(self) -> str:
