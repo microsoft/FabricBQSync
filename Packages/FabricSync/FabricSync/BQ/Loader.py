@@ -26,7 +26,7 @@ class ConfigMetadataLoader(ConfigBase):
         """        
         super().__init__(context, user_config, gcp_credential)
 
-    def sync_bq_information_schema_core(self, project:str, dataset:str, type:BigQueryObjectType = BigQueryObjectType.BASE_TABLE):
+    def sync_bq_information_schema_core(self, project:str, dataset:str, type:BigQueryObjectType):
         """
         Reads the INFORMATION_SCHEMA.TABLES|VIEWS|MATERIALIZED_VIEWS from BigQuery for the configuration project_id 
         and dataset. For TABLES it returns only BASE TABLEs. Writes the results to the configured Metadata Lakehouse
@@ -34,11 +34,11 @@ class ConfigMetadataLoader(ConfigBase):
 
         match type:
             case BigQueryObjectType.VIEW:
-                view = SyncConstants.INFORMATION_SCHEMA_VIEWS
+                view = SchemaView.INFORMATION_SCHEMA_VIEWS
             case BigQueryObjectType.MATERIALIZED_VIEW:
-                view = SyncConstants.INFORMATION_SCHEMA_MATERIALIZED_VIEWS
-            case _:
-                view = SyncConstants.INFORMATION_SCHEMA_TABLES
+                view = SchemaView.INFORMATION_SCHEMA_MATERIALIZED_VIEWS
+            case BigQueryObjectType.BASE_TABLE:
+                view = SchemaView.INFORMATION_SCHEMA_TABLES
         
         bq_table = f"{project}.{dataset}.{view}"
         tbl_nm = f"BQ_{view}".replace(".", "_")
@@ -62,15 +62,15 @@ class ConfigMetadataLoader(ConfigBase):
             filter_list = self.UserConfig.get_table_name_list(project, dataset, BigQueryObjectType.BASE_TABLE, True)
             df = df.filter(col("table_name").isin(filter_list))   
 
-        self.write_lakehouse_table(df, self.UserConfig.Fabric.MetadataLakehouse, tbl_nm, SyncConstants.APPEND)
+        self.write_lakehouse_table(df, self.UserConfig.Fabric.MetadataLakehouse, tbl_nm, LoadType.APPEND)
 
-    def sync_bq_information_schema_table_dependent(self, project:str, dataset:str, dependent_tbl:str):
+    def sync_bq_information_schema_table_dependent(self, project:str, dataset:str, dependent_tbl:SchemaView):
         """
         Reads a child INFORMATION_SCHEMA table from BigQuery for the configuration project_id 
         and dataset. The child table is joined to the TABLES table to filter for BASE TABLEs.
         Writes the results to the configured Fabric Metadata Lakehouse.
         """
-        bq_table = f"{project}.{dataset}.{SyncConstants.INFORMATION_SCHEMA_TABLES}"
+        bq_table = f"{project}.{dataset}.{SchemaView.INFORMATION_SCHEMA_TABLES}"
         bq_dependent_tbl = f"{project}.{dataset}.{dependent_tbl}"
         tbl_nm = f"BQ_{dependent_tbl}".replace(".", "_")
 
@@ -88,7 +88,7 @@ class ConfigMetadataLoader(ConfigBase):
             filter_list = self.UserConfig.get_table_name_list(project, dataset, BigQueryObjectType.BASE_TABLE, True)
             df = df.filter(col("table_name").isin(filter_list)) 
 
-        self.write_lakehouse_table(df, self.UserConfig.Fabric.MetadataLakehouse, tbl_nm, SyncConstants.APPEND)
+        self.write_lakehouse_table(df, self.UserConfig.Fabric.MetadataLakehouse, tbl_nm, LoadType.APPEND)
 
     def cleanup_metadata_cache(self):
         metadata_views = SyncConstants.get_information_schema_views()
@@ -96,12 +96,12 @@ class ConfigMetadataLoader(ConfigBase):
 
     def task_runner(self, sync_function, workQueue:PriorityQueue):
         while not workQueue.empty():
-            value = workQueue.get()
+            value = SchemaView[workQueue.get()]
 
             try:
                 sync_function(value)
             except Exception as e:
-                print(f"ERROR {view}: {e}")
+                print(f"ERROR {value}: {e}")
             finally:
                 workQueue.task_done()
 
@@ -118,11 +118,12 @@ class ConfigMetadataLoader(ConfigBase):
         workQueue = PriorityQueue()
 
         for view in SyncConstants.get_information_schema_views():
-            match view:
-                case SyncConstants.INFORMATION_SCHEMA_VIEWS:
+            vw = SchemaView[view]
+            match vw:
+                case SchemaView.INFORMATION_SCHEMA_VIEWS:
                     if self.UserConfig.LoadViews:
                         workQueue.put(view)
-                case SyncConstants.INFORMATION_SCHEMA_MATERIALIZED_VIEWS:
+                case SchemaView.INFORMATION_SCHEMA_MATERIALIZED_VIEWS:
                     if self.UserConfig.LoadMaterializedViews:
                         workQueue.put(view)
                 case _:
@@ -132,17 +133,17 @@ class ConfigMetadataLoader(ConfigBase):
                     
         print(f"Async metadata update complete...")
 
-    def metadata_sync(self, view:str):
+    def metadata_sync(self, view:SchemaView):
         print(f"Syncing metadata for {view}...")
         for p in self.UserConfig.GCPCredential.Projects:
             for d in p.Datasets:
                 match view:
-                    case SyncConstants.INFORMATION_SCHEMA_TABLES:
+                    case SchemaView.INFORMATION_SCHEMA_TABLES:
                         self.sync_bq_information_schema_core(project=p.ProjectID, dataset=d.Dataset, type=BigQueryObjectType.BASE_TABLE)
-                    case SyncConstants.INFORMATION_SCHEMA_VIEWS:
+                    case SchemaView.INFORMATION_SCHEMA_VIEWS:
                         if self.UserConfig.LoadViews:
                             self.sync_bq_information_schema_core(project=p.ProjectID, dataset=d.Dataset, type=BigQueryObjectType.VIEW)
-                    case SyncConstants.INFORMATION_SCHEMA_MATERIALIZED_VIEWS:
+                    case SchemaView.INFORMATION_SCHEMA_MATERIALIZED_VIEWS:
                         if self.UserConfig.LoadMaterializedViews:
                             self.sync_bq_information_schema_core(project=p.ProjectID, dataset=d.Dataset, type=BigQueryObjectType.MATERIALIZED_VIEW)
                     case _:
@@ -180,9 +181,8 @@ class ConfigMetadataLoader(ConfigBase):
         self.Metastore.create_autodetect_view()      
 
     def auto_detect_bq_schema(self):
-        print("Starting auto-detect schema/configuration...")
+        print("Auto-detect schema/configuration...")
         self.Metastore.auto_detect_table_profiles(self.UserConfig.LoadAllTables)
-        print("Finished auto-detect schema/configuration...")
 
 class Scheduler(ConfigBase):
     """
@@ -197,7 +197,8 @@ class Scheduler(ConfigBase):
         """
         super().__init__(context, user_config, gcp_credential)
 
-    def build_schedule(self, schedule_type:str) -> str:
+    def build_schedule(self, schedule_type:ScheduleType) -> str:
+        print(f"Building Sync Schedule for {schedule_type} Schedule...")
         schedule_id = self.Metastore.get_current_schedule(self.UserConfig.ID, schedule_type)
 
         if not schedule_id:
@@ -214,13 +215,17 @@ class BQDataRetention(ConfigBase):
         Calls parent init to load User Config from JSON file
         """
         super().__init__(context, user_config, gcp_credential)
-        self.Metastore.ensure_retention_metastore_table()
+        
+        if self.UserConfig.EnableDataExpiration:
+            self.Metastore.ensure_retention_metastore_table()
     
-    def execute(self):
+    def execute(self):        
+        print ("Enforcing Data Expiration/Retention Policy...")
         self._enforce_retention_policy()
+        print ("Updating Data Expiration/Retention Policy...")
         self.Metastore.sync_retention_config(self.UserConfig.ID)
 
-    def _enforce_retention_policy(self, sync_id:str):
+    def _enforce_retention_policy(self):
         df = self.Metastore.get_bq_retention_policy(self.UserConfig.ID)
 
         for d in df.collect():
@@ -229,10 +234,13 @@ class BQDataRetention(ConfigBase):
             else:
                 table_name = f"{d['lakehouse']}.{d['lakehouse_table_name']}"
 
-            table_maint = DeltaTableMaintenance(self.context, table_name)
+            table_maint = DeltaTableMaintenance(self.Context, table_name)
 
             if d["partition_id"]:
-                print(f"Expiring Table: {table_name} Partition")
+                print(f"Expiring Partition: {table_name}${d['partition_id']}")
+                predicate = SyncUtil.resolve_fabric_partition_predicate(d["partition_type"], d["partition_column"], 
+                    d["partition_grain"], d["partition_id"])
+                table_maint.drop_partition(predicate)
             else:
                 print(f"Expiring Table: {table_name}")
                 table_maint.drop_table()  
@@ -285,34 +293,46 @@ class SyncUtil():
         return df
 
     @staticmethod
+    def resolve_fabric_partition_predicate(partition_type:str, partition_column:str, partition_grain:str, partition_id:str):
+        if PartitionType[partition_type] == PartitionType.TIME:
+            partition_dt=SyncUtil.get_derived_date_from_part_id(partition_grain, partition_id)
+            proxy_cols = SyncUtil.get_fabric_partition_proxy_cols(partition_grain)
+
+            predicate = SyncUtil.get_fabric_partition_predicate(partition_dt, partition_column, proxy_cols) 
+        else:
+            predicate = f"__{partition_column}_Range='{partition_id}'"
+        
+        return predicate
+
+    @staticmethod
     def get_fabric_partition_proxy_cols(partition_grain:str) -> list[str]:
-        proxy_cols = ["YEAR", "MONTH", "DAY", "HOUR"]
+        proxy_cols = list(CalendarInterval)
 
-        match partition_grain:
-            case "DAY":
-                proxy_cols.remove("HOUR")
-            case "MONTH":
-                proxy_cols.remove("HOUR")
-                proxy_cols.remove("DAY")
-            case "YEAR":
-                proxy_cols.remove("HOUR")
-                proxy_cols.remove("DAY")
-                proxy_cols.remove("MONTH")
+        match CalendarInterval[partition_grain]:
+            case CalendarInterval.DAY:
+                proxy_cols.remove(CalendarInterval.HOUR)
+            case CalendarInterval.MONTH:
+                proxy_cols.remove(CalendarInterval.HOUR)
+                proxy_cols.remove(CalendarInterval.DAY)
+            case CalendarInterval.YEAR:
+                proxy_cols.remove(CalendarInterval.HOUR)
+                proxy_cols.remove(CalendarInterval.DAY)
+                proxy_cols.remove(CalendarInterval.MONTH)
 
-        return proxy_cols
+        return [x.value for x in proxy_cols]
     
     @staticmethod
     def get_bq_partition_id_format(partition_grain:str) -> str:
         pattern = None
 
-        match partition_grain:
-            case "DAY":
+        match CalendarInterval[partition_grain]:
+            case CalendarInterval.DAY:
                 pattern = "%Y%m%d"
-            case "MONTH":
+            case CalendarInterval.MONTH:
                 pattern = "%Y%m"
-            case "YEAR":
+            case CalendarInterval.YEAR:
                 pattern = "%Y"
-            case "HOUR":
+            case CalendarInterval.HOUR:
                 pattern = "%Y%m%d%H"
         
         return pattern
@@ -325,21 +345,19 @@ class SyncUtil():
     @staticmethod
     def create_fabric_partition_proxy_cols(df:DataFrame, partition:str, partition_grain:str, proxy_cols:list[str]) -> DataFrame:  
         for c in proxy_cols:
-            match c:
-                case "HOUR":
+            match CalendarInterval[c]:
+                case CalendarInterval.HOUR:
                     df = df.withColumn(f"__{partition}_HOUR", \
                         date_format(col(partition), "HH"))
-                case "DAY":
+                case CalendarInterval.DAY:
                     df = df.withColumn(f"__{partition}_DAY", \
                         date_format(col(partition), "dd"))
-                case "MONTH":
+                case CalendarInterval.MONTH:
                     df = df.withColumn(f"__{partition}_MONTH", \
                         date_format(col(partition), "MM"))
-                case "YEAR":
+                case CalendarInterval.YEAR:
                     df = df.withColumn(f"__{partition}_YEAR", \
                         date_format(col(partition), "yyyy"))
-                case _:
-                    next
         
         return df
 
@@ -352,18 +370,16 @@ class SyncUtil():
         partition_predicate = []
 
         for c in proxy_cols:
-            match c:
-                case "HOUR":
+            match CalendarInterval[c]:
+                case CalendarInterval.HOUR:
                     part_id = partition_dt.strftime("%H")
-                case "DAY":
+                case CalendarInterval.DAY:
                     part_id = partition_dt.strftime("%d")
-                case "MONTH":
+                case CalendarInterval.MONTH:
                     part_id = partition_dt.strftime("%m")
-                case "YEAR":
+                case CalendarInterval.YEAR:
                     part_id = partition_dt.strftime("%Y")
-                case _:
-                    next
-            
+
             partition_predicate.append(f"__{partition}_{c} = '{part_id}'")
 
         return " AND ".join(partition_predicate)
@@ -530,7 +546,7 @@ class BQScheduleLoader(ConfigBase):
         if schedule.IsTimePartitionedStrategy and schedule.PartitionId is not None:
             part_format = SyncUtil.get_bq_partition_id_format(schedule.PartitionGrain)
 
-            if schedule.PartitionDataType == SyncConstants.TIMESTAMP:                  
+            if schedule.PartitionDataType == BQDataType.TIMESTAMP:                  
                 part_filter = f"timestamp_trunc({schedule.PartitionColumn}, {schedule.PartitionGrain}) = PARSE_TIMESTAMP('{part_format}', '{schedule.PartitionId}')"
             else:
                 part_filter = f"date_trunc({schedule.PartitionColumn}, {schedule.PartitionGrain}) = PARSE_DATETIME('{part_format}', '{schedule.PartitionId}')"
@@ -540,7 +556,7 @@ class BQScheduleLoader(ConfigBase):
             part_filter = SyncUtil.get_partition_range_predicate(schedule)
             df_bq = self.read_bq_partition_to_dataframe(schedule.BQTableName, part_filter, True)
         else:
-            if schedule.LoadStrategy == SyncConstants.WATERMARK and not schedule.InitialLoad:
+            if schedule.LoadStrategy == LoadStrategy.WATERMARK and not schedule.InitialLoad:
                 if schedule.MaxWatermark.isdigit():
                     predicate = f"{schedule.WatermarkColumn} > {schedule.MaxWatermark}"
                 else:
@@ -556,7 +572,7 @@ class BQScheduleLoader(ConfigBase):
                 df_bq = self.read_bq_to_dataframe(src, True)
 
         if schedule.IsPartitioned:
-            if schedule.PartitionType == SyncConstants.TIME:
+            if schedule.PartitionType == PartitionType.TIME:
                 proxy_cols = SyncUtil.get_fabric_partition_proxy_cols(schedule.PartitionGrain)
                 schedule.FabricPartitionColumns = SyncUtil.get_fabric_partition_cols(schedule.PartitionColumn, proxy_cols)
 
@@ -577,7 +593,7 @@ class BQScheduleLoader(ConfigBase):
         #Flattening complex types (structs & arrays)
         df_bq_flattened = None
         if schedule.FlattenTable:
-            if schedule.LoadType == SyncConstants.MERGE and schedule.ExplodeArrays:
+            if schedule.LoadType == LoadType.MERGE and schedule.ExplodeArrays:
                 raise Exception("Invalid load configuration: Merge is not supported when Explode Arrays is enabed")
                 
             if schedule.FlattenInPlace:
@@ -592,7 +608,7 @@ class BQScheduleLoader(ConfigBase):
                 table_maint.evolve_schema(df_bq)
                 write_config["mergeSchema"] = True
 
-        if not schedule.LoadType == SyncConstants.MERGE or schedule.InitialLoad:
+        if not schedule.LoadType == LoadType.MERGE or schedule.InitialLoad:
             if (schedule.IsTimePartitionedStrategy and schedule.PartitionId is not None) or schedule.IsRangePartitioned:
                 has_lock = False
 
@@ -605,14 +621,14 @@ class BQScheduleLoader(ConfigBase):
                 try:
                     df_bq.write \
                         .partitionBy(schedule.FabricPartitionColumns) \
-                        .mode(SyncConstants.OVERWRITE) \
+                        .mode(str(LoadType.OVERWRITE)) \
                         .options(**write_config) \
                         .saveAsTable(schedule.LakehouseTableName)
                     
                     if df_bq_flattened:
                        df_bq_flattened.write \
                             .partitionBy(schedule.FabricPartitionColumns) \
-                            .mode(SyncConstants.OVERWRITE) \
+                            .mode(str(LoadType.OVERWRITE)) \
                             .options(**write_config) \
                             .saveAsTable(f"{schedule.LakehouseTableName}_flattened") 
                 finally:
@@ -658,7 +674,7 @@ class BQScheduleLoader(ConfigBase):
         if not table_maint:
             table_maint = DeltaTableMaintenance(self.Context, schedule.LakehouseTableName)
 
-        if schedule.LoadStrategy == SyncConstants.WATERMARK:
+        if schedule.LoadStrategy == LoadStrategy.WATERMARK:
             schedule.MaxWatermark = self.get_max_watermark(schedule, df_bq)
 
         src_cnt = df_bq.count()
@@ -666,7 +682,7 @@ class BQScheduleLoader(ConfigBase):
         schedule.SparkAppId = self.Context.sparkContext.applicationId
         schedule.DeltaVersion = table_maint.CurrentTableVersion
         schedule.EndTime = datetime.now(timezone.utc)
-        schedule.Status = SyncConstants.COMPLETE
+        schedule.Status = SyncStatus.COMPLETE
         
         df_bq.unpersist()
 
@@ -722,7 +738,7 @@ class BQScheduleLoader(ConfigBase):
             dataset=schedule.Dataset, \
             table_name=schedule.TableName, \
             partition_id=schedule.PartitionId, \
-            status=schedule.Status, \
+            status=str(schedule.Status), \
             started=schedule.StartTime, \
             completed=schedule.EndTime, \
             src_row_count=schedule.SourceRows, \
@@ -763,10 +779,12 @@ class BQScheduleLoader(ConfigBase):
             schedule = value[2]
             
             try:
-                schedule = sync_function(schedule, lock)
+                sync_function(schedule, lock)
             except Exception as e:
-                schedule.Status = "FAILED"
+                print(f"ERROR with {schedule.ProjectId}.{schedule.Dataset}.{schedule.TableName}: {e}")
+                schedule.Status = SyncStatus.FAILED
                 schedule.SummaryLoadType = f"ERROR: {e}"
+                self.save_schedule_telemetry(schedule) 
             finally:
                 workQueue.task_done()
 
@@ -822,6 +840,7 @@ class BQSync(SyncBase):
         self.MetadataLoader = ConfigMetadataLoader(context, self.UserConfig, self.GCPCredential)
         self.Scheduler = Scheduler(context, self.UserConfig, self.GCPCredential)
         self.Loader = BQScheduleLoader(context, self.UserConfig, self.GCPCredential)
+        self.DataRetention = BQDataRetention(context, self.UserConfig, self.GCPCredential)
 
     def sync_metadata(self):
         self.MetadataLoader.sync_bq_metadata()
@@ -829,13 +848,13 @@ class BQSync(SyncBase):
         if self.UserConfig.Autodetect:
             self.MetadataLoader.auto_detect_bq_schema()
     
-    def build_schedule(self, sync_metadata:bool = True, schedule_type:str = SyncConstants.AUTO) -> str:
+    def build_schedule(self, sync_metadata:bool = True, schedule_type:str = str(ScheduleType.AUTO)) -> str:
         if sync_metadata:
             self.sync_metadata()
         else:
             self.MetadataLoader.create_proxy_views()
 
-        return self.Scheduler.build_schedule(schedule_type)
+        return self.Scheduler.build_schedule(schedule_type=ScheduleType[schedule_type])
 
     def run_schedule(self, group_schedule_id:str, optimize_metadata:bool=True):
         self.MetadataLoader.create_proxy_views()
@@ -852,3 +871,109 @@ class BQSync(SyncBase):
 
         if optimize_metadata:
             self.Metastore.optimize_metadata_tbls()
+        
+        if self.UserConfig.EnableDataExpiration:
+            self.DataRetention.execute()
+
+class SyncConfigurationHelper(SyncBase):
+    def __init__(self, context:SparkSession, config_path:str):
+        super().__init__(context, config_path, clean_session=True)
+    
+    def generate_user_config_json_from_metadata(self, path:str):
+        bq_tables = self.Context.table(SyncConstants.SQL_TBL_SYNC_CONFIG)
+        bq_tables = bq_tables.filter(col("sync_id") == self.UserConfig.ID)
+
+        user_cfg = self.build_user_config_json(bq_tables.collect())
+
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(user_cfg, f, ensure_ascii=False, indent=4)
+
+    def build_user_config_json(self, tbls:list) -> str:
+        tables = list(map(lambda x: self.get_table_config_json(x), tbls))
+        projects = list(map(lambda x: self.get_gcp_project_config_json(x), self.UserConfig.GCPCredential.Projects))
+
+        return {
+            "id":"",
+            "load_all_tables":self.UserConfig.LoadAllTables,
+            "load_views":self.UserConfig.LoadViews,
+            "load_materialized_views":self.UserConfig.LoadMaterializedViews,
+            "enable_data_expiration":self.UserConfig.EnableDataExpiration,
+            "autodetect":self.UserConfig.Autodetect,
+            "fabric":{
+                "workspace_id":self.UserConfig.Fabric.WorkspaceID,
+                "metadata_lakehouse":self.UserConfig.Fabric.MetadataLakehouse,
+                "target_lakehouse":self.UserConfig.Fabric.TargetLakehouse,
+                "target_schema":self.UserConfig.Fabric.TargetLakehouseSchema,
+                "enable_schemas":self.UserConfig.Fabric.EnableSchemas,
+            },            
+            "gcp_credentials":{
+                "projects": projects,
+                "credential":self.UserConfig.GCPCredential.Credential,
+                "materialization_project_id":self.UserConfig.GCPCredential.MaterializationProjectId,
+                "materialization_dataset":self.UserConfig.GCPCredential.MaterializationDataset,
+                "billing_project_id":self.UserConfig.GCPCredential.BillingProjectID
+            },            
+            "async":{
+                "enabled":self.UserConfig.Async.Enabled,
+                "parallelism":self.UserConfig.Async.Parallelism,
+                "cell_timeout":self.UserConfig.Async.CellTimeout,
+                "notebook_timeout":self.UserConfig.Async.NotebookTimeout
+            }, 
+            "tables": tables
+        }
+
+    def get_gcp_dataset_config_json(self, ds:list):
+        return [{"dataset": d.Dataset} for d in ds]
+
+    def get_gcp_project_config_json(self, proj) -> str:
+        datasets = self.get_gcp_dataset_config_json(proj.Datasets)
+
+        return {
+            "project_id":proj.ProjectID,
+            "datasets":datasets
+        }
+
+    def get_table_keys_config_json(self, pk:list):
+        return [{"column": k} for k in pk]
+
+    def get_table_config_json(self, tbl:Row) -> str:
+        keys = self.get_table_keys_config_json(tbl["primary_keys"])
+
+        return {
+            "priority":tbl["priority"],
+            "project_id":tbl["project_id"],
+            "dataset":tbl["dataset"],
+            "table_name":tbl["table_name"],
+            "object_type":tbl["object_type"],
+            "enabled":tbl["enabled"],
+            "source_query":tbl["source_query"],
+            "enforce_expiration":tbl["enforce_partition_expiration"],
+            "allow_schema_evolution":tbl["allow_schema_evolution"],
+            "load_strategy":tbl["load_strategy"],
+            "load_type":tbl["load_type"],
+            "interval":tbl["interval"],
+            "flatten_table":tbl["flatten_table"],
+            "flatten_inplace":tbl["flatten_inplace"],
+            "explode_arrays":tbl["explode_arrays"],
+            "table_maintenance":{
+                "enabled":tbl["table_maintenance_enabled"],
+                "interval":tbl["table_maintenance_interval"]
+            },
+            "keys":keys,
+            "partitioned":{
+                "enabled":tbl["is_partitioned"],
+                "type":tbl["partition_type"],
+                "column":tbl["partition_column"],
+                "partition_grain":tbl["partition_grain"],
+                "partition_data_type":tbl["partition_data_type"],
+                "partition_range":tbl["partition_range"]
+            },
+            "watermark":{
+                "column":tbl["watermark_column"]
+            },
+            "lakehouse_target":{
+                "lakehouse":tbl["lakehouse"],
+                "schema":tbl["lakehouse_schema"],
+                "table_name":tbl["lakehouse_table_name"]
+            }
+        }

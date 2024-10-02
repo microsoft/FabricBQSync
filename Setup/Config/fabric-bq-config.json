@@ -1,5 +1,8 @@
 {
 	"load_all_tables": true|false,
+	"load_views":true|false,
+    "load_materialized_views":true|false,
+	"enable_data_expiration": true|false,
 	"fabric":{
         "workspace_id":"[FABRIC_WORKSPACE_ID]",
         "metadata_lakehouse":"[FABRIC_METADATA_LAKEHOUSE]",
@@ -37,7 +40,7 @@
 		"dataset":"[BQ_TABLE_DATASET]",
 		"table_name": "[BQ_TABLE_NAME]",
 		"enabled": true|false,
-		"enforce_partition_expiration": true|false,
+		"enforce_expiration": true|false,
 		"allow_schema_evoluton": true|false,
 		"load_strategy": "[FULL|WATERMARK}PARTITION]",
 		"load_type": "[OVERWRITE|APPEND|MERGE]",

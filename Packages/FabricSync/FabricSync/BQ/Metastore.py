@@ -4,15 +4,16 @@ from delta.tables import *
 import uuid
 
 from FabricSync.DeltaTableUtility import *
+from FabricSync.BQ.Enum import *
 
 class FabricMetastore():
     def __init__(self, context:SparkSession):
         self.Context = context
     
-    def get_current_schedule(self, sync_id:str, schedule_type:str) -> str:
+    def get_current_schedule(self, sync_id:str, schedule_type:ScheduleType) -> str:
         sql = f"""
-        SELECT group_schedule_id FROM bq_sync_schedule
-        WHERE sync_id = 'sync_id'
+        SELECT DISTINCT group_schedule_id FROM bq_sync_schedule
+        WHERE sync_id = '{sync_id}'
         AND schedule_type = '{schedule_type}'
         AND status NOT IN ('COMPLETE', 'SKIPPED')
         """
@@ -26,7 +27,7 @@ class FabricMetastore():
     
         return schedule_id
 
-    def build_new_schedule(self, schedule_type:str, sync_id:str) -> str:
+    def build_new_schedule(self, schedule_type:ScheduleType, sync_id:str) -> str:
         """
         Process responsible for creating and saving the sync schedule
         """
@@ -224,6 +225,7 @@ class FabricMetastore():
                 s.max_watermark = r.max_watermark
 
         """
+        print("Processing Sync Telemetry...")
         self.Context.sql(sql)
 
     def commit_table_configuration(self, group_schedule_id:str):
@@ -245,6 +247,8 @@ class FabricMetastore():
             UPDATE SET
                 t.sync_state='COMMIT'
         """
+
+        print("Committing Sync Table Configuration...")
         self.Context.sql(sql)
     
     def create_userconfig_tables_proxy_view(self):
@@ -271,7 +275,7 @@ class FabricMetastore():
                 tbl.lakehouse_target.schema AS lakehouse_schema,
                 tbl.lakehouse_target.table_name AS lakehouse_target_table,
                 tbl.keys,
-                tbl.enforce_partition_expiration AS enforce_partition_expiration,
+                tbl.enforce_expiration AS enforce_partition_expiration,
                 tbl.allow_schema_evolution AS allow_schema_evolution,
                 tbl.table_maintenance.enabled AS table_maintenance_enabled,
                 tbl.table_maintenance.interval AS table_maintenance_interval,
@@ -447,7 +451,8 @@ class FabricMetastore():
         WITH default_config AS (
             SELECT id AS sync_id,
             COALESCE(autodetect, TRUE) AS autodetect, 
-            load_all_tables, 
+            load_all_tables,
+            enable_data_expiration,
             fabric.target_lakehouse AS target_lakehouse,
             fabric.target_schema AS target_schema,
             COALESCE(fabric.enable_schemas, FALSE) AS enable_schemas 
@@ -506,7 +511,9 @@ class FabricMetastore():
                 COALESCE(u.watermark_column, a.pk_col, '') AS watermark_column, 
                 d.autodetect,
                 d.enable_schemas AS use_lakehouse_schema,
-                COALESCE(u.enforce_partition_expiration, FALSE) AS enforce_partition_expiration,
+                CASE WHEN (d.enable_data_expiration) THEN
+                    COALESCE(u.enforce_partition_expiration, FALSE) ELSE
+                    FALSE END AS enforce_partition_expiration,
                 COALESCE(u.allow_schema_evolution, FALSE) AS allow_schema_evolution,
                 COALESCE(u.table_maintenance_enabled, FALSE) AS table_maintenance_enabled,
                 COALESCE(u.table_maintenance_interval, 'AUTO') AS table_maintenance_interval,
@@ -564,6 +571,7 @@ class FabricMetastore():
             self.Context.sql(f"CREATE SCHEMA IF NOT EXISTS {workspace}.{schema}")
     
     def optimize_metadata_tbls(self):
+        print("Optimizing Sync Metadata Metastore...")
         tbls = ["bq_sync_configuration", "bq_sync_schedule", "bq_sync_schedule_telemetry"]
 
         for tbl in tbls:
@@ -646,11 +654,12 @@ class FabricMetastore():
     
     def get_bq_retention_policy(self, sync_id:str) -> DataFrame:
         sql = f"""
-            SELECT c.lakehouse, c.lakehouse_schema, c.lakehouse_table_name, c.use_lakehouse_schema,
+            SELECT c.lakehouse,c.lakehouse_schema,c.lakehouse_table_name,c.use_lakehouse_schema,
+                c.is_partitioned,c.partition_column,c.partition_type,c.partition_grain,
                 e.partition_id
             FROM bq_sync_data_expiration e
             JOIN bq_sync_configuration c ON e.sync_id=c.sync_id AND e.table_catalog=c.project_id
-                AND e.table_schema=c.dataset AND e.table_name=c.table_name
+                AND e.table_schema=c.dataset AND e.table_name=c.table_name AND c.enforce_partition_expiration=TRUE
             WHERE e.expiration < current_timestamp()
             AND e.sync_id='{sync_id}'
         """

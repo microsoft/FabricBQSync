@@ -1,3 +1,13 @@
+DROP TABLE IF NOT EXISTS bq_sync_data_expiration;
+CREATE TABLE IF NOT EXISTS bq_sync_data_expiration (
+    sync_id STRING, 
+    table_catalog STRING, 
+    table_schema STRING, 
+    table_name STRING, 
+    partition_id STRING, 
+    expiration TIMESTAMP
+);
+
 DROP TABLE IF EXISTS bq_data_type_map;
 CREATE TABLE IF NOT EXISTS bq_data_type_map
 (

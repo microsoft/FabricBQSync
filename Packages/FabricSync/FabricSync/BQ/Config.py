@@ -11,48 +11,18 @@ import hashlib
 
 from FabricSync.BQ.Metastore import *
 from FabricSync.BQ.Enum import *
+
 class SyncConstants:
     '''
     Class representing various string constants used through-out
     '''
-    DEFAULT_ID = "BQ_SYNC_LOADER"
-    OVERWRITE = "OVERWRITE"
-    APPEND = "APPEND"
-    MERGE = "MERGE"
-
-    FULL = "FULL"
-    PARTITION = "PARTITION"
-    WATERMARK = "WATERMARK"
-    TIME_INGESTION = "TIME_INGESTION"
-    TIMESTAMP = "TIMESTAMP"
-    RANGE = "RANGE"
-    
-    AUTO = "AUTO"
-    TIME = "TIME"    
-    YEAR = "YEAR"
-    MONTH = "MONTH"
-    DAY = "DAY"
-    HOUR = "HOUR"
-
-    COMPLETE = "COMPLETE"
-
-    INITIAL_FULL_OVERWRITE = "INITIAL_FULL_OVERWRITE"
-
-    INFORMATION_SCHEMA_TABLES = "INFORMATION_SCHEMA.TABLES"
-    INFORMATION_SCHEMA_PARTITIONS = "INFORMATION_SCHEMA.PARTITIONS"
-    INFORMATION_SCHEMA_COLUMNS = "INFORMATION_SCHEMA.COLUMNS"
-    INFORMATION_SCHEMA_TABLE_CONSTRAINTS = "INFORMATION_SCHEMA.TABLE_CONSTRAINTS"
-    INFORMATION_SCHEMA_TABLE_OPTIONS = "INFORMATION_SCHEMA.TABLE_OPTIONS"
-    INFORMATION_SCHEMA_KEY_COLUMN_USAGE = "INFORMATION_SCHEMA.KEY_COLUMN_USAGE"
-    INFORMATION_SCHEMA_VIEWS = "INFORMATION_SCHEMA.VIEWS"
-    INFORMATION_SCHEMA_MATERIALIZED_VIEWS = "INFORMATION_SCHEMA.MATERIALIZED_VIEWS"
-
     CONFIG_JSON_TEMPLATE = """
     {
         "id":"",
         "load_all_tables":true,
         "load_views":false,
         "load_materialized_views":false,
+        "enable_data_expiration":false,
         "autodetect":true,
         "fabric":{
             "workspace_id":"",
@@ -93,7 +63,7 @@ class SyncConstants:
             "object_type":"",
             "enabled":true,
             "source_query":"",
-            "enforce_partition_expiration":true,
+            "enforce_expiration":false,
             "allow_schema_evolution":true,
             "load_strategy":"",
             "load_type":"",
@@ -137,27 +107,20 @@ class SyncConstants:
     }
     """
 
+    def enum_to_list(enum_obj)->list[str]:
+        return [x.name for x in list(enum_obj)]
+
     def get_load_strategies () -> List[str]:
-        return [SyncConstants.FULL, SyncConstants.PARTITION, SyncConstants.WATERMARK, SyncConstants.TIME_INGESTION]
+        return SyncConstants.enum_to_list(LoadStrategy)
 
     def get_load_types() -> List[str]:
-        return [SyncConstants.OVERWRITE, SyncConstants.APPEND, SyncConstants.MERGE]
-
-    def get_partition_types() -> List[str]:
-        return [SyncConstants.TIME, SyncConstants.TIME_INGESTION]
+        return SyncConstants.enum_to_list(LoadType)
 
     def get_partition_grains() -> List[str]:
-        return [SyncConstants.YEAR, SyncConstants.MONTH, SyncConstants.DAY, SyncConstants.HOUR]
+        return SyncConstants.enum_to_list(CalendarInterval)
     
     def get_information_schema_views() -> List[str]:
-        return [SyncConstants.INFORMATION_SCHEMA_TABLES, \
-            SyncConstants.INFORMATION_SCHEMA_PARTITIONS, \
-            SyncConstants.INFORMATION_SCHEMA_COLUMNS, \
-            SyncConstants.INFORMATION_SCHEMA_TABLE_CONSTRAINTS, \
-            SyncConstants.INFORMATION_SCHEMA_KEY_COLUMN_USAGE, \
-            SyncConstants.INFORMATION_SCHEMA_TABLE_OPTIONS, \
-            SyncConstants.INFORMATION_SCHEMA_VIEWS, \
-            SyncConstants.INFORMATION_SCHEMA_MATERIALIZED_VIEWS]
+        return SyncConstants.enum_to_list(SchemaView)
 
 class SyncSchedule:
     """
@@ -170,7 +133,7 @@ class SyncSchedule:
     DeltaVersion:str = None
     SparkAppId:str = None
     MaxWatermark:str = None
-    Status:str = None
+    Status = SyncStatus.SCHEDULED
     FabricPartitionColumns:list[str] = None
 
     def __init__(self, row:Row):
@@ -182,24 +145,24 @@ class SyncSchedule:
         self.SyncId = row["sync_id"]
         self.GroupScheduleId = row["group_schedule_id"]
         self.ScheduleId = row["schedule_id"]
-        self.LoadStrategy = row["load_strategy"]
-        self.LoadType = row["load_type"]
+        self.LoadStrategy = self.assign_enum_val(LoadStrategy, row["load_strategy"])
+        self.LoadType = self.assign_enum_val(LoadType, row["load_type"])
         self.InitialLoad = row["initial_load"]
         self.LastScheduleLoadDate = row["last_schedule_dt"]
         self.Priority = row["priority"]
         self.ProjectId = row["project_id"]
         self.Dataset = row["dataset"]
         self.TableName = row["table_name"]
-        self.ObjectType = row["object_type"]
+        self.ObjectType = self.assign_enum_val(BigQueryObjectType, row["object_type"])
         self.SourceQuery = row["source_query"]
         self.MaxWatermark = row["max_watermark"]
         self.WatermarkColumn = row["watermark_column"]
         self.IsPartitioned = row["is_partitioned"]
         self.PartitionColumn = row["partition_column"]
-        self.PartitionType = row["partition_type"]
+        self.PartitionType = self.assign_enum_val(PartitionType, row["partition_type"])
         self.PartitionGrain = row["partition_grain"]
         self.PartitionId = row["partition_id"]     
-        self.PartitionDataType = row["partition_data_type"]   
+        self.PartitionDataType = self.assign_enum_val(BQDataType, row["partition_data_type"])  
         self.PartitionRange = row["partition_range"]
         self.RequirePartitionFilter = row["require_partition_filter"]
         self.Lakehouse = row["lakehouse"]
@@ -235,7 +198,7 @@ class SyncSchedule:
         """
         if self.InitialLoad and not self.IsTimeIngestionPartitioned and \
             not self.IsRangePartitioned and not (self.IsPartitioned and self.RequirePartitionFilter):
-            return SyncConstants.INITIAL_FULL_OVERWRITE
+            return "INITIAL FULL_OVERWRITE"
         else:
             return f"{self.LoadStrategy}_{self.LoadType}"
     
@@ -245,9 +208,9 @@ class SyncSchedule:
         Returns the write mode based on context
         """
         if self.InitialLoad:
-            return SyncConstants.OVERWRITE
+            return str(LoadType.OVERWRITE)
         else:
-            return self.LoadType
+            return str(self.LoadType)
     
     @property
     def Keys(self) -> list[str]:
@@ -282,13 +245,6 @@ class SyncSchedule:
         return table_nm
 
     @property
-    def BQObjectType(self) -> BigQueryObjectType:
-        """
-        Returns the type of BigQuery object (table, view, etc)
-        """
-        return BigQueryObjectType[self.BQObjectType.upper()]
-
-    @property
     def BQTableName(self) -> str:
         """
         Returns the three-part BigQuery table name
@@ -301,30 +257,36 @@ class SyncSchedule:
         """
         Bool indicator for time ingestion tables
         """
-        return self.LoadStrategy == SyncConstants.TIME_INGESTION
+        return self.LoadStrategy == LoadStrategy.TIME_INGESTION
 
     @property
     def IsRangePartitioned(self) -> bool:
         """
         Bol indicator for range partitioned tables
         """
-        return self.LoadStrategy == SyncConstants.PARTITION and self.PartitionType == SyncConstants.RANGE
+        return self.LoadStrategy == LoadStrategy.PARTITION and self.PartitionType == PartitionType.RANGE
     
     @property
     def IsTimePartitionedStrategy(self) -> bool:
          """
          Bool indicator for the two time partitioned strategies
          """
-         return ((self.LoadStrategy == SyncConstants.PARTITION and 
-            self.PartitionType == SyncConstants.TIME) or self.LoadStrategy == SyncConstants.TIME_INGESTION)
+         return ((self.LoadStrategy == LoadStrategy.PARTITION and 
+            self.PartitionType == PartitionType.TIME) or self.LoadStrategy == LoadStrategy.TIME_INGESTION)
     
+    def assign_enum_val(self, enum_class, value):
+        try:
+            return enum_class(value)
+        except ValueError:
+            return None
+
     def UpdateRowCounts(self, src:int, insert:int = 0, update:int = 0):
         """
         Updates the telemetry row counts based on table configuration
         """
         self.SourceRows += src
 
-        if not self.LoadType == SyncConstants.MERGE:
+        if not self.LoadType == LoadType.MERGE:
             self.InsertedRows += src            
             self.UpdatedRows = 0
         else:
@@ -354,10 +316,11 @@ class ConfigDataset(JSONConfigObj):
         Loads from use config JSON
         """
         super().__init__()
-        self.ID  = super().get_json_conf_val(json_config, "id", SyncConstants.DEFAULT_ID)
+        self.ID  = super().get_json_conf_val(json_config, "id", "BQ_SYNC_LOADER")
         self.LoadAllTables = super().get_json_conf_val(json_config, "load_all_tables", True)
         self.LoadViews = super().get_json_conf_val(json_config, "load_views", False)
         self.LoadMaterializedViews = super().get_json_conf_val(json_config, "load_materialized_views", False)
+        self.EnableDataExpiration = super().get_json_conf_val(json_config, "enable_data_expiration", False)
         self.Autodetect = super().get_json_conf_val(json_config, "autodetect", True)
 
         self.Tables = []
@@ -543,11 +506,11 @@ class ConfigBQTable (JSONConfigObj):
         self.ObjectType  = super().get_json_conf_val(json_config, "object_type", "BASE_TABLE")
         self.Priority = super().get_json_conf_val(json_config, "priority", 100)
         self.SourceQuery = super().get_json_conf_val(json_config, "source_query", "")
-        self.LoadStrategy = super().get_json_conf_val(json_config, "load_strategy" , SyncConstants.FULL)
-        self.LoadType = super().get_json_conf_val(json_config, "load_type", SyncConstants.OVERWRITE)
-        self.Interval =  super().get_json_conf_val(json_config, "interval", SyncConstants.AUTO)
+        self.LoadStrategy = super().get_json_conf_val(json_config, "load_strategy" , str(LoadStrategy.FULL))
+        self.LoadType = super().get_json_conf_val(json_config, "load_type", str(LoadType.OVERWRITE))
+        self.Interval =  super().get_json_conf_val(json_config, "interval", str(ScheduleType.AUTO))
         self.Enabled =  super().get_json_conf_val(json_config, "enabled", True)
-        self.EnforcePartitionExpiration = super().get_json_conf_val(json_config, "enforce_partition_expiration", False)
+        self.EnforceExpiration = super().get_json_conf_val(json_config, "enforce_expiration", False)
         self.EnableDeletionVectors = super().get_json_conf_val(json_config, "enable_deletion_vectors", False)
         self.AllowSchemaEvolution = super().get_json_conf_val(json_config, "allow_schema_evolution", False)
         self.FlattenTable = super().get_json_conf_val(json_config, "flatten_table", False)
@@ -651,14 +614,14 @@ class ConfigBase():
         
         return df
 
-    def write_lakehouse_table(self, df:DataFrame, lakehouse:str, tbl_nm:str, mode:str="OVERWRITE"):
+    def write_lakehouse_table(self, df:DataFrame, lakehouse:str, tbl_nm:str, mode:LoadType=LoadType.OVERWRITE):
         """
         Write a DataFrame to the lakehouse using the Lakehouse.TableName notation
         """
         dest_table = f"{lakehouse}.{tbl_nm}"
 
         df.write \
-            .mode(mode) \
+            .mode(str(mode)) \
             .saveAsTable(dest_table)
 
 class SyncBase():
