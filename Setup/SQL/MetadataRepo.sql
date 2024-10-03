@@ -1,4 +1,4 @@
-DROP TABLE IF NOT EXISTS bq_sync_data_expiration;
+DROP TABLE IF EXISTS bq_sync_data_expiration;
 CREATE TABLE IF NOT EXISTS bq_sync_data_expiration (
     sync_id STRING, 
     table_catalog STRING, 
@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS bq_sync_configuration
     watermark_column STRING,
     autodetect BOOLEAN,
     use_lakehouse_schema BOOLEAN,
-    enforce_partition_expiration BOOLEAN,
+    enforce_expiration BOOLEAN,
     allow_schema_evolution BOOLEAN,
     table_maintenance_enabled BOOLEAN,
     table_maintenance_interval STRING,

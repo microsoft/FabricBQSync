@@ -1,7 +1,9 @@
 {
 	"load_all_tables": true|false,
-	"load_views":true|false,
-    "load_materialized_views":true|false,
+	"enable_views":true|false,
+	"load_all_views":true|false,
+	"enable_materialized_views":true|false,
+    "load_all_materialized_views":true|false,
 	"enable_data_expiration": true|false,
 	"fabric":{
         "workspace_id":"[FABRIC_WORKSPACE_ID]",
