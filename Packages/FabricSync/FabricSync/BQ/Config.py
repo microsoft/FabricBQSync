@@ -20,8 +20,10 @@ class SyncConstants:
     {
         "id":"",
         "load_all_tables":true,
-        "load_views":false,
-        "load_materialized_views":false,
+        "enable_views":false,
+        "load_all_views":false,
+        "enable_materialized_views":false,
+        "load_all_materialized_views":false,
         "enable_data_expiration":false,
         "autodetect":true,
         "fabric":{
@@ -169,7 +171,7 @@ class SyncSchedule:
         self.LakehouseSchema = row["lakehouse_schema"]
         self.DestinationTableName = row["lakehouse_table_name"]
         self.UseLakehouseSchema = row["use_lakehouse_schema"]
-        self.EnforcePartitionExpiration = row["enforce_partition_expiration"]
+        self.EnforcePartitionExpiration = row["enforce_expiration"]
         self.AllowSchemaEvolution = row["allow_schema_evolution"]
         self.EnableTableMaintenance = row["table_maintenance_enabled"]
         self.TableMaintenanceInterval = row["table_maintenance_interval"]
@@ -318,8 +320,10 @@ class ConfigDataset(JSONConfigObj):
         super().__init__()
         self.ID  = super().get_json_conf_val(json_config, "id", "BQ_SYNC_LOADER")
         self.LoadAllTables = super().get_json_conf_val(json_config, "load_all_tables", True)
-        self.LoadViews = super().get_json_conf_val(json_config, "load_views", False)
-        self.LoadMaterializedViews = super().get_json_conf_val(json_config, "load_materialized_views", False)
+        self.EnableViews = super().get_json_conf_val(json_config, "enable_views", False)
+        self.LoadAllViews = super().get_json_conf_val(json_config, "load_all_views", False)
+        self.EnableMaterializedViews = super().get_json_conf_val(json_config, "enable_materialized_views", False)
+        self.LoadAllMaterializedViews = super().get_json_conf_val(json_config, "load_all_materialized_views", False)
         self.EnableDataExpiration = super().get_json_conf_val(json_config, "enable_data_expiration", False)
         self.Autodetect = super().get_json_conf_val(json_config, "autodetect", True)
 

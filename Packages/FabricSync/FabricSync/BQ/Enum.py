@@ -43,6 +43,7 @@ class SyncStatus(BaseEnum):
     COMPLETE = "COMPLETE"
     SKIPPED = "SKIPPED"
     FAILED = "FAILED"
+    EXPIRED = "EXPIRED"
     SCHEDULED = "SCHEDULED"
 
 class CalendarInterval(BaseEnum):

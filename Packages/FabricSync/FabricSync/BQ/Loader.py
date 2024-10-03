@@ -58,9 +58,23 @@ class ConfigMetadataLoader(ConfigBase):
 
         df = self.read_bq_to_dataframe(bql)
 
-        if not self.UserConfig.LoadAllTables:
-            filter_list = self.UserConfig.get_table_name_list(project, dataset, BigQueryObjectType.BASE_TABLE, True)
-            df = df.filter(col("table_name").isin(filter_list))   
+        filter_list = None
+        
+        match type:
+            case BigQueryObjectType.BASE_TABLE:
+                if not self.UserConfig.LoadAllTables:
+                    filter_list = self.UserConfig.get_table_name_list(project, dataset, BigQueryObjectType.BASE_TABLE, True)
+            case BigQueryObjectType.VIEW:
+                if not self.UserConfig.LoadAllViews:
+                    filter_list = self.UserConfig.get_table_name_list(project, dataset, BigQueryObjectType.VIEW, True)
+            case BigQueryObjectType.MATERIALIZED_VIEW:
+                if not self.UserConfig.LoadAllMaterializedViews:
+                    filter_list = self.UserConfig.get_table_name_list(project, dataset, BigQueryObjectType.MATERIALIZED_VIEW, True)
+            case _:
+                pass
+
+        if filter_list:
+            df = df.filter(col("table_name").isin(filter_list)) 
 
         self.write_lakehouse_table(df, self.UserConfig.Fabric.MetadataLakehouse, tbl_nm, LoadType.APPEND)
 
@@ -121,10 +135,10 @@ class ConfigMetadataLoader(ConfigBase):
             vw = SchemaView[view]
             match vw:
                 case SchemaView.INFORMATION_SCHEMA_VIEWS:
-                    if self.UserConfig.LoadViews:
+                    if self.UserConfig.EnableViews:
                         workQueue.put(view)
                 case SchemaView.INFORMATION_SCHEMA_MATERIALIZED_VIEWS:
-                    if self.UserConfig.LoadMaterializedViews:
+                    if self.UserConfig.EnableMaterializedViews:
                         workQueue.put(view)
                 case _:
                     workQueue.put(view)
@@ -141,10 +155,10 @@ class ConfigMetadataLoader(ConfigBase):
                     case SchemaView.INFORMATION_SCHEMA_TABLES:
                         self.sync_bq_information_schema_core(project=p.ProjectID, dataset=d.Dataset, type=BigQueryObjectType.BASE_TABLE)
                     case SchemaView.INFORMATION_SCHEMA_VIEWS:
-                        if self.UserConfig.LoadViews:
+                        if self.UserConfig.EnableViews:
                             self.sync_bq_information_schema_core(project=p.ProjectID, dataset=d.Dataset, type=BigQueryObjectType.VIEW)
                     case SchemaView.INFORMATION_SCHEMA_MATERIALIZED_VIEWS:
-                        if self.UserConfig.LoadMaterializedViews:
+                        if self.UserConfig.EnableMaterializedViews:
                             self.sync_bq_information_schema_core(project=p.ProjectID, dataset=d.Dataset, type=BigQueryObjectType.MATERIALIZED_VIEW)
                     case _:
                         self.sync_bq_information_schema_table_dependent(project=p.ProjectID, dataset=d.Dataset, dependent_tbl=view)
@@ -182,7 +196,13 @@ class ConfigMetadataLoader(ConfigBase):
 
     def auto_detect_bq_schema(self):
         print("Auto-detect schema/configuration...")
-        self.Metastore.auto_detect_table_profiles(self.UserConfig.LoadAllTables)
+        self.Metastore.auto_detect_table_profiles(self.UserConfig.ID, self.UserConfig.LoadAllTables)
+
+        if self.UserConfig.EnableViews:
+            self.Metastore.auto_detect_view_profiles(self.UserConfig.ID, self.UserConfig.LoadAllViews)
+
+        if self.UserConfig.EnableMaterializedViews:
+            self.Metastore.auto_detect_materialized_view_profiles(self.UserConfig.ID, self.UserConfig.LoadAllMaterializedViews)
 
 class Scheduler(ConfigBase):
     """
@@ -202,7 +222,8 @@ class Scheduler(ConfigBase):
         schedule_id = self.Metastore.get_current_schedule(self.UserConfig.ID, schedule_type)
 
         if not schedule_id:
-            schedule_id = self.Metastore.build_new_schedule(schedule_type, self.UserConfig.ID)
+            schedule_id = self.Metastore.build_new_schedule(schedule_type, self.UserConfig.ID,
+                self.UserConfig.EnableViews, self.UserConfig.EnableMaterializedViews)
         
         return schedule_id
 
@@ -215,9 +236,6 @@ class BQDataRetention(ConfigBase):
         Calls parent init to load User Config from JSON file
         """
         super().__init__(context, user_config, gcp_credential)
-        
-        if self.UserConfig.EnableDataExpiration:
-            self.Metastore.ensure_retention_metastore_table()
     
     def execute(self):        
         print ("Enforcing Data Expiration/Retention Policy...")
@@ -720,7 +738,7 @@ class BQScheduleLoader(ConfigBase):
         return schedule
 
     def show_sync_status(self, schedule:SyncSchedule):
-        show_status = f"{schedule.SummaryLoadType} {schedule.ProjectId}.{schedule.Dataset}.{schedule.TableName}"
+        show_status = f"{schedule.SummaryLoadType} {schedule.ObjectType} {schedule.ProjectId}.{schedule.Dataset}.{schedule.TableName}"
 
         if schedule.PartitionId:
             show_status = f"{show_status}${schedule.PartitionId}"
@@ -868,12 +886,12 @@ class BQSync(SyncBase):
             self.Loader.run_sequential_schedule(group_schedule_id)
         
         self.Metastore.commit_table_configuration(group_schedule_id)
-
-        if optimize_metadata:
-            self.Metastore.optimize_metadata_tbls()
         
         if self.UserConfig.EnableDataExpiration:
             self.DataRetention.execute()
+        
+        if optimize_metadata:
+            self.Metastore.optimize_metadata_tbls()
 
 class SyncConfigurationHelper(SyncBase):
     def __init__(self, context:SparkSession, config_path:str):
