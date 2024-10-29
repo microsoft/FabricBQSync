@@ -3,8 +3,8 @@ from pyspark.sql.types import *
 from delta.tables import *
 import uuid
 
-from FabricSync.DeltaTableUtility import *
-from FabricSync.BQ.Enum import *
+from .Admin.DeltaTableUtility import *
+from .Enum import *
 
 class FabricMetastore():
     def __init__(self, context:SparkSession):
@@ -762,7 +762,7 @@ class FabricMetastore():
         self.Context.sql(sql)
     
     def ensure_schemas(self, workspace:str, sync_id:str):
-        df = spark.read.table("bq_sync_configuration")
+        df = self.Context.read.table("bq_sync_configuration")
         df = df.filter((col("sync_id")==sync_id) & 
             (col("enabled")==True) & (col("use_lakehouse_schema")==True))
         df = df.select(col("lakehouse"), coalesce(col("lakehouse_schema"), col("dataset")).alias("schema"))

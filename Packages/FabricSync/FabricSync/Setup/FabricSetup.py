@@ -1,6 +1,6 @@
 from packaging import version
 from pyspark.sql import SparkSession
-from notebookutils import mssparkutils
+#from notebookutils import mssparkutils
 from github import *
 
 import requests
@@ -10,7 +10,7 @@ import json
 import shutil
 import pandas as pd
 from pathlib import Path
-from FabricAPI import FabricAPIUtil
+from Packages.FabricSync.FabricSync.Admin.FabricAPI import FabricAPIUtil
 
 class SetupUtil():
     def __init__(self, session:SparkSession):

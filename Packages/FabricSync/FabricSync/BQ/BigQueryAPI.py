@@ -2,7 +2,6 @@ import time
 import json
 import jwt
 import requests
-import httplib2
 
 class BigQueryAccessPolicy:
     """

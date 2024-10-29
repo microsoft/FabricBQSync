@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 
 setup(
-    name='FabricSync', #needs to build fabric
+    name='FabricSync',
     version='1.0.0',
     author='Microsoft GBBs North America',  
     author_email='chriprice@microsoft.com',
