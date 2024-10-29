@@ -1,9 +1,9 @@
 {
 	"load_all_tables": true|false,
-	"enable_views":true|false,
-	"load_all_views":true|false,
-	"enable_materialized_views":true|false,
+	"load_all_views":true|false,	
     "load_all_materialized_views":true|false,
+	"enable_views":true|false,
+	"enable_materialized_views":true|false,
 	"enable_data_expiration": true|false,
 	"fabric":{
         "workspace_id":"[FABRIC_WORKSPACE_ID]",
@@ -28,28 +28,20 @@
         "materialization_dataset":"[DATASET_ID]",
         "billing_project_id":"[GCP_PROJECT_ID]"
 	},
-	
-	"async": {
-		"enabled": true|false,
-		"parallelism": 5,
-		"cell_timeout": 36000,
-		"notebook_timeout": 72000
-	},
-	"tables": [
-	{
-		"load_priority": 100,
+	"table_defaults":{
+		"priority": 100,
 		"project_id": "[BQ_TABLE_PROJECT_ID]",
 		"dataset":"[BQ_TABLE_DATASET]",
-		"table_name": "[BQ_TABLE_NAME]",
+		"object_type":"[BASE_TABLE|VIEW|MATERIALIZED_VIEW]",
+		"load_strategy": "[FULL|WATERMARK|PARTITION]",
+		"load_type": "[OVERWRITE|APPEND|MERGE]",
 		"enabled": true|false,
 		"enforce_expiration": true|false,
 		"allow_schema_evoluton": true|false,
-		"load_strategy": "[FULL|WATERMARK}PARTITION]",
-		"load_type": "[OVERWRITE|APPEND|MERGE]",
 		"interval": "AUTO",
 		"flatten_table":true|false,
-        "flatten_inplace":true|true,
-		"explode_arrays":true|true,
+        "flatten_inplace":true|false,
+		"explode_arrays":true|false,
 		"table_options": [
 		{
 			"key": "delta.enableDeletionVectors",
@@ -62,6 +54,46 @@
 		{
 			"key": "delta.autoOptimize.autoCompact ",
 			"value": "true|false"
+		}
+		],
+		"watermark": {
+			"column": "[BQ_WATERMARK_COLUMN]"
+		}
+	},
+	"async": {
+		"enabled": true|false,
+		"parallelism": 5,
+		"cell_timeout": 36000,
+		"notebook_timeout": 72000
+	},
+	"tables": [
+	{
+		"priority": 100,
+		"project_id": "[BQ_TABLE_PROJECT_ID]",
+		"dataset":"[BQ_TABLE_DATASET]",
+		"table_name": "[BQ_TABLE_NAME]",
+		"object_type":"[BASE_TABLE|VIEW|MATERIALIZED_VIEW]",
+		"load_strategy": "[FULL|WATERMARK|PARTITION]",
+		"load_type": "[OVERWRITE|APPEND|MERGE]",
+		"enabled": true|false,
+		"enforce_expiration": true|false,
+		"allow_schema_evoluton": true|false,
+		"interval": "AUTO",
+		"flatten_table":true|false,
+        "flatten_inplace":true|false,
+		"explode_arrays":true|false,
+		"table_maintenance":{
+            "enabled":true|false,
+            "interval":"AUTO"
+        },
+		"table_options": [
+		{
+			"key": "delta.enableDeletionVectors",
+			"value": "true|false"
+		},
+		{
+			"key": "delta.targetFileSize",
+			"value": "256MB"
 		}
 		],
 		"keys": [
