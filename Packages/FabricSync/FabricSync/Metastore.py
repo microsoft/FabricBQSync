@@ -5,7 +5,6 @@ import uuid
 
 from .Admin.DeltaTableUtility import *
 from .Enum import *
-
 class FabricMetastore():
     def __init__(self, context:SparkSession):
         self.Context = context
@@ -279,10 +278,24 @@ class FabricMetastore():
             AS
             SELECT
                 sync_id,
-                tbl.project_id,tbl.dataset,tbl.table_name,tbl.object_type,
-                tbl.enabled,tbl.priority,tbl.source_query,
-                tbl.load_strategy,tbl.load_type,tbl.interval,
-                tbl.flatten_table,tbl.flatten_inplace, tbl.explode_arrays,
+                COALESCE(tbl.project_id,default_project_id) as project_id,
+                COALESCE(tbl.dataset,default_dataset) AS dataset,
+                tbl.table_name,
+                COALESCE(tbl.object_type,default_object_type) AS object_type,
+
+                COALESCE(tbl.enabled,default_enabled) AS enabled,
+                COALESCE(tbl.priority,default_priority) AS priority,
+                COALESCE(tbl.interval,default_interval) AS interval,
+                COALESCE(tbl.enforce_expiration,default_enforce_expiration) AS enforce_expiration,
+                COALESCE(tbl.allow_schema_evolution,default_allow_schema_evolution) AS allow_schema_evolution,
+                COALESCE(tbl.flatten_table,default_flatten_table) AS flatten_table,
+                COALESCE(tbl.flatten_inplace,default_flatten_inplace) AS flatten_inplace,
+                COALESCE(tbl.explode_arrays,default_explode_arrays) AS explode_arrays,
+                COALESCE(tbl.table_maintenance.enabled,default_table_maintenance_enabled) AS table_maintenance_enabled,
+                COALESCE(tbl.table_maintenance.interval,default_table_maintenance_interval) AS table_maintenance_interval,
+                tbl.source_query,
+                tbl.load_strategy,
+                tbl.load_type,                
                 tbl.watermark.column as watermark_column,
                 tbl.partitioned.enabled as partition_enabled,
                 tbl.partitioned.type as partition_type,
@@ -294,14 +307,25 @@ class FabricMetastore():
                 tbl.lakehouse_target.schema AS lakehouse_schema,
                 tbl.lakehouse_target.table_name AS lakehouse_target_table,
                 tbl.keys,
-                tbl.enforce_expiration AS enforce_expiration,
-                tbl.allow_schema_evolution AS allow_schema_evolution,
-                tbl.table_maintenance.enabled AS table_maintenance_enabled,
-                tbl.table_maintenance.interval AS table_maintenance_interval,
                 tbl.table_options
             FROM (
                 SELECT 
                     id AS sync_id,
+                    CASE WHEN table_defaults IS NULL THEN NULL ELSE table_defaults.project_id END AS default_project_id,
+                    CASE WHEN table_defaults IS NULL THEN NULL ELSE table_defaults.dataset END AS default_dataset,
+                    CASE WHEN table_defaults IS NULL THEN NULL ELSE table_defaults.object_type END AS default_object_type,
+                    CASE WHEN table_defaults IS NULL THEN NULL ELSE table_defaults.priority END AS default_priority,
+                    CASE WHEN table_defaults IS NULL THEN NULL ELSE table_defaults.enabled END AS default_enabled,
+                    CASE WHEN table_defaults IS NULL THEN NULL ELSE table_defaults.enforce_expiration END AS default_enforce_expiration,
+                    CASE WHEN table_defaults IS NULL THEN NULL ELSE table_defaults.allow_schema_evolution END AS default_allow_schema_evolution,
+                    CASE WHEN table_defaults IS NULL THEN NULL ELSE table_defaults.interval END AS default_interval,
+                    CASE WHEN table_defaults IS NULL THEN NULL ELSE table_defaults.flatten_table END AS default_flatten_table,
+                    CASE WHEN table_defaults IS NULL THEN NULL ELSE table_defaults.flatten_inplace END AS default_flatten_inplace,
+                    CASE WHEN table_defaults IS NULL THEN NULL ELSE table_defaults.explode_arrays END AS default_explode_arrays,
+                    CASE WHEN table_defaults IS NULL OR table_defaults.table_maintenance IS NULL THEN NULL 
+                        ELSE table_defaults.table_maintenance.enabled END AS default_table_maintenance_enabled,
+                    CASE WHEN table_defaults IS NULL OR table_defaults.table_maintenance IS NULL THEN NULL 
+                        ELSE table_defaults.table_maintenance.interval END AS default_table_maintenance_interval,
                     EXPLODE(tables) AS tbl 
                 FROM user_config_json)
         """
@@ -464,7 +488,7 @@ class FabricMetastore():
         WITH default_config AS (
             SELECT id AS sync_id,
             COALESCE(autodetect, TRUE) AS autodetect, 
-            load_all_views,
+            load_all_materialized_views,
             enable_data_expiration,
             fabric.target_lakehouse AS target_lakehouse,
             fabric.target_schema AS target_schema,
@@ -482,7 +506,7 @@ class FabricMetastore():
                 a.table_schema as dataset,
                 a.table_name as table_name,
                 'MATERIALIZED_VIEW' AS object_type,
-                CASE WHEN d.load_all_views THEN COALESCE(u.enabled, TRUE) ELSE
+                CASE WHEN d.load_all_materialized_views THEN COALESCE(u.enabled, TRUE) ELSE
                     COALESCE(u.enabled, FALSE) END AS enabled,
                 COALESCE(u.lakehouse, d.target_lakehouse) AS lakehouse,                
                 CASE WHEN d.enable_schemas THEN
@@ -519,7 +543,8 @@ class FabricMetastore():
             LEFT JOIN user_config_tables u ON 
                 a.table_catalog = u.project_id AND
                 a.table_schema = u.dataset AND
-                a.table_name = u.table_name
+                a.table_name = u.table_name AND
+                u.object_type='MATERIALIZED_VIEW'
             CROSS JOIN default_config d
         )
 
@@ -608,7 +633,8 @@ class FabricMetastore():
             LEFT JOIN user_config_tables u ON 
                 a.table_catalog = u.project_id AND
                 a.table_schema = u.dataset AND
-                a.table_name = u.table_name
+                a.table_name = u.table_name AND
+                u.object_type='VIEW'
             CROSS JOIN default_config d
         )
 
@@ -735,7 +761,8 @@ class FabricMetastore():
             LEFT JOIN user_config_tables u ON 
                 a.table_catalog = u.project_id AND
                 a.table_schema = u.dataset AND
-                a.table_name = u.table_name
+                a.table_name = u.table_name AND
+                u.object_type='BASE_TABLE'
             CROSS JOIN default_config d
         )
 
