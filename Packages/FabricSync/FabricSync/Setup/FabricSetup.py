@@ -10,7 +10,7 @@ import json
 import shutil
 import pandas as pd
 from pathlib import Path
-from Packages.FabricSync.FabricSync.Admin.FabricAPI import FabricAPIUtil
+from ..Admin.FabricAPI import FabricAPIUtil
 
 class SetupUtil():
     def __init__(self, session:SparkSession):
