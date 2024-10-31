@@ -199,9 +199,14 @@ class SetupUtil():
                 "cell_timeout":0,
                 "notebook_timeout":0
             },
-            "tables": [{
+            "table_defaults":{
+                "priority": 100,
                 "project_id":data["gcp_project_id"],
-		        "dataset":data["gcp_dataset_id"],
+		        "dataset":data["gcp_dataset_id"], 
+                "object_type":"BASE_TABLE",
+                "enabled": True
+            },
+            "tables": [{
                 "table_name": "__BLANK__TEMPLATE__",
                 "enabled": False
             }]

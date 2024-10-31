@@ -134,53 +134,18 @@ class SyncConstants:
     """
 
     def enum_to_list(enum_obj)->list[str]:
-        """
-        Converts an enumeration object to a list of its member names.
-            Args:
-                enum_obj (Enum): The enumeration object to convert.
-            Returns:
-                list[str]: A list containing the names of the enumeration members.
-        """
         return [x.name for x in list(enum_obj)]
 
     def get_load_strategies () -> List[str]:
-        """
-        Retrieves a list of load strategies.
-
-        Returns:
-            List[str]: A list of load strategy names as strings.
-        """
         return SyncConstants.enum_to_list(LoadStrategy)
 
     def get_load_types() -> List[str]:
-        """
-        Retrieves a list of load types.
-        This function converts the LoadType enumeration to a list of strings
-        using the SyncConstants.enum_to_list method.
-        Returns:
-            List[str]: A list of load types as strings.
-        """
-
         return SyncConstants.enum_to_list(LoadType)
 
     def get_partition_grains() -> List[str]:
-        """
-        Retrieve a list of partition grains.
-        This function converts the CalendarInterval enumeration to a list of strings
-        using the SyncConstants.enum_to_list method.
-        Returns:
-            List[str]: A list of partition grains as strings.
-        """
-
         return SyncConstants.enum_to_list(CalendarInterval)
     
     def get_information_schema_views() -> List[str]:
-        """
-        Retrieves a list of information schema views.
-        Returns:
-            List[str]: A list of schema view names as strings.
-        """
-
         return SyncConstants.enum_to_list(SchemaView)
 
 
@@ -398,15 +363,9 @@ class ConfigPartition(JSONConfigObj):
 
 class ConfigBQTableDefault (JSONConfigObj):
     """
-    User Config class for Big Query Table default configuration
+    User Config class for Big Query Table mapping configuration
     """
     def __str__(self):
-        """
-        Returns a string representation of the object.
-        Returns:
-            str: The table name as a string.
-        """
-
         return str(self.TableName)
 
     def __init__(self, json_config:str = None, defaults = None):
@@ -431,13 +390,13 @@ class ConfigBQTableDefault (JSONConfigObj):
         
         self.TableOptions:dict[str, str] = {}
         
-        if "table_options" in json_config:
+        if json_config and "table_options" in json_config:
             for o in json_config["table_options"]:
                 self.TableOptions[o["key"]] = o["value"]
         elif defaults:
             self.TableOptions = defaults.TableOptions
 
-        if "watermark" in json_config:
+        if json_config and "watermark" in json_config:
             self.Watermark = ConfigTableColumn(
                 super().get_json_conf_val(json_config["watermark"], "column", ""))
         elif defaults:
@@ -445,7 +404,7 @@ class ConfigBQTableDefault (JSONConfigObj):
         else:
             self.Watermark = ConfigTableColumn()
         
-        if "table_maintenance" in json_config:
+        if json_config and "table_maintenance" in json_config:
             self.TableMaintenance = ConfigTableMaintenance(json_config["table_maintenance"])
         elif defaults:
             self.TableMaintenance = defaults.TableMaintenance
@@ -453,9 +412,6 @@ class ConfigBQTableDefault (JSONConfigObj):
             self.TableMaintenance = ConfigTableMaintenance()
 
 class ConfigBQTable (ConfigBQTableDefault):
-    """
-    User Config class for Big Query Table mapping configuration
-    """
     def __init__(self, json_config:str = None, defaults:ConfigBQTableDefault = None):
         """
         Loads from user config JSON object
@@ -483,16 +439,6 @@ class ConfigBQTable (ConfigBQTableDefault):
                     super().get_json_conf_val(c, "column", "")))
     
     def get_table_keys(self):
-        """
-        Retrieves the list of table keys.
-        This method checks if the `Keys` attribute is present and not empty.
-        If `Keys` is available, it extracts the `Column` attribute from each key
-        and returns a list of these columns. If `Keys` is not available, it 
-        returns an empty list.
-        Returns:
-            list: A list of columns from the table keys, or an empty list if no keys are present.
-        """
-
         keys = []
 
         if self.Keys:
