@@ -187,18 +187,35 @@ class SyncBase():
 
         return md5.hexdigest()
     
+
+    def validate_json_file(self, config_path:str) -> bool:
+        """
+        Validates if the given JSON file is properly formatted.
+        Args:
+            config_path (str): The path to the JSON file to be validated.
+        Returns:
+            bool: True if the JSON file is valid, False otherwise.
+        """
+
+        with open(config_path, 'r') as file:
+            try:
+                json.load(file)
+            except ValueError:
+                return False
+            
+        return True
+
     def get_current_config_hash(self, config_df:DataFrame) -> str:
         """
-        Computes and returns the current configuration hash.
-        This method checks if the `ConfigMD5Hash` attribute is already set. If not, it collects the 
-        configuration data from the provided DataFrame and sets the `ConfigMD5Hash` attribute to the 
-        MD5 hash value found in the first row of the DataFrame.
+        Retrieves the current configuration hash.
+        This method checks if the `ConfigMD5Hash` attribute is already set. If not, it collects the configuration
+        data from the provided DataFrame and sets the `ConfigMD5Hash` attribute to the MD5 file hash from the first
+        row of the DataFrame.
         Args:
-            config_df (DataFrame): A Spark DataFrame containing the configuration data.
+            config_df (DataFrame): A DataFrame containing configuration data with an 'md5_file_hash' column.
         Returns:
             str: The MD5 hash of the current configuration.
         """
-
         if not self.ConfigMD5Hash:
             cfg = [c for c in config_df.collect()]
 
@@ -233,6 +250,9 @@ class SyncBase():
         """
         if not os.path.exists(config_path):
             raise Exception("JSON User Config does not exists at the path supplied")
+
+        if not self.validate_json_file(config_path):
+            raise Exception("Invalid JSON User Config: JSON is not well-formed")
 
         self.ConfigMD5Hash = self.generate_md5_file_hash(config_path)
         df_schema = self.Context.read.json(self.Context.sparkContext.parallelize([SyncConstants.CONFIG_JSON_TEMPLATE]))
