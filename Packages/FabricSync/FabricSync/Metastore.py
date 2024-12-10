@@ -5,6 +5,7 @@ import uuid
 
 from .Admin.DeltaTableUtility import *
 from .Enum import *
+
 class FabricMetastore():
     def __init__(self, context:SparkSession):
         self.Context = context
@@ -130,7 +131,7 @@ class FabricMetastore():
 
     def get_schedule(self, group_schedule_id:str):
         """
-        Gets the schedule activities that need to be run based on the configuration and metadat
+        Gets the schedule activities that need to be run based on the configuration and metadata
         """
         sql = f"""
         WITH last_completed_schedule AS (
@@ -172,7 +173,8 @@ class FabricMetastore():
         SELECT c.*, 
             p.partition_id,p.require_partition_filter,
             s.group_schedule_id,s.schedule_id,h.max_watermark,h.last_schedule_dt,
-            CASE WHEN (h.schedule_id IS NULL) THEN TRUE ELSE FALSE END AS initial_load
+            CASE WHEN (h.schedule_id IS NULL) THEN TRUE ELSE FALSE END AS initial_load,
+            ps.total_rows
         FROM bq_sync_configuration c
         JOIN bq_sync_schedule s ON c.sync_id = s.sync_id AND c.project_id = s.project_id 
             AND c.dataset = s.dataset AND  c.table_name = s.table_name
@@ -183,9 +185,11 @@ class FabricMetastore():
         LEFT JOIN bq_sync_schedule_telemetry t ON s.sync_id = t.sync_id AND s.schedule_id = t.schedule_id 
             AND c.project_id = t.project_id AND c.dataset = t.dataset AND c.table_name = t.table_name AND
             COALESCE(p.partition_id, '0') = COALESCE(t.partition_id, '0') AND t.status = 'COMPLETE'
+        LEFT JOIN bq_information_schema_partitions ps ON c.project_id = ps.table_catalog AND c.dataset = ps.table_schema 
+            AND c.table_name = ps.table_name AND COALESCE(p.partition_id, '0') = COALESCE(ps.partition_id, '0')
         WHERE s.status = 'SCHEDULED' AND c.enabled = TRUE AND t.schedule_id IS NULL
             AND s.group_schedule_id = '{group_schedule_id}'
-        ORDER BY c.priority
+        ORDER BY c.priority ASC, ps.total_rows ASC
         """
         df = self.Context.sql(sql)
         df.createOrReplaceTempView("LoaderQueue")
@@ -553,7 +557,6 @@ class FabricMetastore():
         ON t.sync_id = s.sync_id AND t.project_id = s.project_id AND t.dataset = s.dataset AND t.table_name = s.table_name
         WHEN MATCHED AND t.sync_state <> 'INIT' THEN
             UPDATE SET
-                t.source_query = s.source_query,
                 t.enabled = s.enabled,
                 t.interval = s.interval,
                 t.priority = s.priority,
@@ -644,7 +647,6 @@ class FabricMetastore():
         ON t.sync_id = s.sync_id AND t.project_id = s.project_id AND t.dataset = s.dataset AND t.table_name = s.table_name
         WHEN MATCHED AND t.sync_state <> 'INIT' THEN
             UPDATE SET
-                t.source_query = s.source_query,
                 t.enabled = s.enabled,
                 t.interval = s.interval,
                 t.priority = s.priority,
@@ -773,7 +775,6 @@ class FabricMetastore():
         ON t.sync_id = s.sync_id AND t.project_id = s.project_id AND t.dataset = s.dataset AND t.table_name = s.table_name
         WHEN MATCHED AND t.sync_state <> 'INIT' THEN
             UPDATE SET
-                t.source_query = s.source_query,
                 t.enabled = s.enabled,
                 t.interval = s.interval,
                 t.priority = s.priority,

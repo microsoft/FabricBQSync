@@ -6,6 +6,7 @@ from datetime import datetime, date, timezone
 from typing import Tuple
 from queue import PriorityQueue
 from threading import Thread, Lock
+import traceback
 
 from ..Config import *
 from ..Core import *
@@ -142,23 +143,6 @@ class BQScheduleLoader(ConfigBase):
         return schedule
 
     def get_bq_table(self, schedule:SyncSchedule) -> tuple[SyncSchedule, DataFrame]:
-        """
-            Retrieves a BigQuery table as a DataFrame based on the provided synchronization schedule.
-            Args:
-                schedule (SyncSchedule): The synchronization schedule containing details about how to retrieve the BigQuery table.
-            Returns:
-                tuple[SyncSchedule, DataFrame]: A tuple containing the updated synchronization schedule and the retrieved DataFrame.
-            The method handles different partitioning strategies:
-            - Time partitioned strategy: Constructs a partition filter based on the partition grain and data type.
-            - Range partitioned strategy: Constructs a partition filter based on the partition range.
-            - Watermark load strategy: Constructs a predicate based on the watermark column and value.
-            - Default strategy: Reads the entire BigQuery table or executes a source query if provided.
-            Additionally, the method handles partitioning of the DataFrame if the schedule specifies partitioning:
-            - Time partitioning: Adds proxy columns for time-based partitioning.
-            - Range partitioning: Adds a range partition column.
-            The method uses utility functions from SyncUtil to construct partition filters, predicates, and proxy columns.
-        """
-
         if schedule.IsTimePartitionedStrategy and schedule.PartitionId is not None:
             part_format = SyncUtil.get_bq_partition_id_format(schedule.PartitionGrain)
 
@@ -167,10 +151,10 @@ class BQScheduleLoader(ConfigBase):
             else:
                 part_filter = f"date_trunc({schedule.PartitionColumn}, {schedule.PartitionGrain}) = PARSE_DATETIME('{part_format}', '{schedule.PartitionId}')"
 
-            df_bq = self.read_bq_partition_to_dataframe(schedule.BQTableName, part_filter, True)
+            df_bq = self.read_bq_partition_to_dataframe(schedule.ProjectId, schedule.BQTableName, part_filter)
         elif schedule.IsRangePartitioned:
             part_filter = SyncUtil.get_partition_range_predicate(schedule)
-            df_bq = self.read_bq_partition_to_dataframe(schedule.BQTableName, part_filter, True)
+            df_bq = self.read_bq_partition_to_dataframe(schedule.ProjectId, schedule.BQTableName, part_filter)
         else:
             if schedule.LoadStrategy == LoadStrategy.WATERMARK and not schedule.InitialLoad:
                 if schedule.MaxWatermark.isdigit():
@@ -178,14 +162,14 @@ class BQScheduleLoader(ConfigBase):
                 else:
                     predicate = f"{schedule.WatermarkColumn} > '{schedule.MaxWatermark}'"
 
-                df_bq = self.read_bq_partition_to_dataframe(schedule.BQTableName, predicate, True)
+                df_bq = self.read_bq_partition_to_dataframe(schedule.ProjectId, schedule.BQTableName, predicate)
             else:
                 src = schedule.BQTableName     
 
                 if schedule.SourceQuery:
                     src = schedule.SourceQuery
 
-                df_bq = self.read_bq_to_dataframe(src, True)
+                df_bq = self.read_bq_to_dataframe(schedule.ProjectId, src)
 
         if schedule.IsPartitioned:
             if schedule.PartitionType == PartitionType.TIME:
@@ -203,26 +187,6 @@ class BQScheduleLoader(ConfigBase):
         return (schedule, df_bq)
 
     def save_bq_dataframe(self, schedule:SyncSchedule, df_bq:DataFrame, lock:Lock) -> SyncSchedule:
-        """
-            Saves a DataFrame to BigQuery with various configurations and options.
-            Parameters:
-            schedule (SyncSchedule): The synchronization schedule containing configuration options.
-            df_bq (DataFrame): The DataFrame to be saved.
-            lock (Lock): A lock object to manage concurrent access.
-            Returns:
-            SyncSchedule: The updated synchronization schedule with status and metadata.
-            Raises:
-            Exception: If an invalid load configuration is detected (e.g., Merge is not supported when Explode Arrays is enabled).
-            The function performs the following steps:
-            1. Configures write options based on the schedule.
-            2. Optionally flattens complex types (structs & arrays) in the DataFrame.
-            3. Evolves the schema if schema evolution is allowed and it's not an initial load.
-            4. Writes the DataFrame to BigQuery, handling partitioned and non-partitioned loads.
-            5. Merges the table if the load type is MERGE.
-            6. Updates the synchronization schedule with row counts, Spark application ID, Delta version, and status.
-            7. Unpersists the DataFrame to free up memory.
-        """
-
         write_config = { **schedule.TableOptions }
         table_maint = None
 
@@ -344,37 +308,35 @@ class BQScheduleLoader(ConfigBase):
             b. All other writes respect the configure MODE against the write destination
         4. Collect and save telemetry
         """
-        schedule.SummaryLoadType = schedule.DefaultSummaryLoadType
-        self.show_sync_status(schedule)
+        
+        with SyncTimer() as t:
+            schedule.SummaryLoadType = schedule.DefaultSummaryLoadType
+            self.show_sync_status(schedule, message=schedule.SummaryLoadType)
 
-        #Get BQ table using sync config
-        schedule, df_bq = self.get_bq_table(schedule)
+            #Get BQ table using sync config
+            schedule, df_bq = self.get_bq_table(schedule)
 
-        #On initial load, force drop the table to ensure a clean load
-        if schedule.InitialLoad and not schedule.IsPartitionedSyncLoad:
-            self.Context.sql(f"DROP TABLE IF EXISTS {schedule.LakehouseTableName}")
-            
-        #Save BQ table to Lakehouse
-        schedule = self.save_bq_dataframe(schedule, df_bq, lock)
+            #On initial load, force drop the table to ensure a clean load
+            if schedule.InitialLoad and not schedule.IsPartitionedSyncLoad:
+                self.Context.sql(f"DROP TABLE IF EXISTS {schedule.LakehouseTableName}")
+                
+            #Save BQ table to Lakehouse
+            schedule = self.save_bq_dataframe(schedule, df_bq, lock)
+
+        self.show_sync_status(schedule, message="FINISHED", status=f"in {str(t)}")
 
         return schedule
 
-    def show_sync_status(self, schedule:SyncSchedule):        
-        """
-        Displays the synchronization status for a given schedule.
-        Args:
-            schedule (SyncSchedule): The synchronization schedule containing details 
-                                     such as load type, object type, project ID, dataset, 
-                                     table name, and partition ID.
-        Returns:
-            None
-        """
-        show_status = f"{schedule.SummaryLoadType} {schedule.ObjectType} {schedule.ProjectId}.{schedule.Dataset}.{schedule.TableName}"
+    def show_sync_status(self, schedule:SyncSchedule, message:str, status:str=None):
+        msg_header = f"{message} {schedule.ObjectType} {schedule.ProjectId}.{schedule.Dataset}.{schedule.TableName}"
 
         if schedule.PartitionId:
-            show_status = f"{show_status}${schedule.PartitionId}"
+            msg_header = f"{msg_header}${schedule.PartitionId}"
 
-        print(f"{show_status}...")
+        if not status:
+            print(f"{msg_header}...")
+        else:
+            print(f"{msg_header} {status}...")
 
     def save_schedule_telemetry(self, schedule:SyncSchedule):
         """
@@ -396,78 +358,57 @@ class BQScheduleLoader(ConfigBase):
             delta_version=schedule.DeltaVersion, \
             spark_application_id=schedule.SparkAppId, \
             max_watermark=schedule.MaxWatermark, \
-            summary_load=schedule.SummaryLoadType \
+            summary_load=schedule.SummaryLoadType, \
+            source_query=schedule.SourceQuery \
         )])
 
         self.Metastore.save_schedule_telemetry(rdd)
 
-    def run_sequential_schedule(self, group_schedule_id:str):
-        """
-        Run the schedule activities sequentially based on priority order
-        """
+    def run_sequential_schedule(self, group_schedule_id:str) -> bool:
         print(f"Sequential schedule sync starting...")
-        df_schedule = self.Metastore.get_schedule(group_schedule_id)
 
-        for row in df_schedule.collect():
-            schedule = SyncSchedule(row)
-            self.sync_bq_table(schedule)
-            self.save_schedule_telemetry(schedule)  
+        initial_loads = False
 
-        self.Metastore.process_load_group_telemetry(group_schedule_id)
-        print(f"Sequential schedule sync complete...")
+        with SyncTimer() as t:
+            df_schedule = self.Metastore.get_schedule(group_schedule_id)           
+
+            for row in df_schedule.collect():
+                schedule = SyncSchedule(row)
+
+                if schedule.InitialLoad:
+                    initial_loads = True
+
+                self.sync_bq_table(schedule)
+                self.save_schedule_telemetry(schedule)  
+
+            self.Metastore.process_load_group_telemetry(group_schedule_id)
+
+        print(f"Sequential schedule sync completed in {str(t)}...")
+        return initial_loads
     
     def schedule_sync(self, schedule:SyncSchedule, lock:Lock) -> SyncSchedule:
-        """
-        Schedules and performs a synchronization of a BigQuery table based on the provided schedule.
-        Args:
-            schedule (SyncSchedule): The synchronization schedule containing the details of the sync operation.
-            lock (Lock): A threading lock to ensure thread-safe operations during the sync process.
-        Returns:
-            SyncSchedule: The updated synchronization schedule after the sync operation is performed.
-        """
-
         schedule = self.sync_bq_table(schedule, lock)
         self.save_schedule_telemetry(schedule) 
 
         return schedule
 
     def task_runner(self, sync_function, workQueue:PriorityQueue, lock:Lock):
-        """
-        Executes tasks from a priority queue using a provided synchronization function.
-        Args:
-            sync_function (callable): The function to be executed for each task. It should accept two arguments: 
-                                      a schedule object and a lock object.
-            workQueue (PriorityQueue): A priority queue containing tasks to be executed. Each task is expected to be a tuple 
-                                       where the third element is a schedule object.
-            lock (Lock): A threading lock to ensure thread-safe operations.
-        Raises:
-            Exception: If an error occurs during the execution of the sync_function, it is caught and logged. The schedule's 
-                       status is updated to FAILED, and the error message is saved in the schedule's SummaryLoadType.
-        """
-
         while not workQueue.empty():
             value = workQueue.get()
             schedule = value[2]
-            
+
             try:
                 sync_function(schedule, lock)
             except Exception as e:
-                print(f"ERROR with {schedule.ProjectId}.{schedule.Dataset}.{schedule.TableName}: {e}")
+                ex_stack = traceback.format_exc()
+                print(f"ERROR with {schedule.ProjectId}.{schedule.Dataset}.{schedule.TableName}: {ex_stack}")
                 schedule.Status = SyncStatus.FAILED
-                schedule.SummaryLoadType = f"ERROR: {e}"
+                schedule.SummaryLoadType = f"ERROR: {ex_stack}"
                 self.save_schedule_telemetry(schedule) 
             finally:
                 workQueue.task_done()
 
     def process_queue(self, workQueue:PriorityQueue, task_function, sync_function):
-        """
-        Processes tasks from a priority queue using multiple threads.
-        Args:
-            workQueue (PriorityQueue): The queue containing tasks to be processed.
-            task_function (callable): The function to be executed by each thread.
-            sync_function (callable): The function to be passed to the task_function.
-        """
-
         lock = Lock() 
         for i in range(self.UserConfig.Async.Parallelism):
             t=Thread(target=task_function, args=(sync_function, workQueue, lock))
@@ -476,52 +417,51 @@ class BQScheduleLoader(ConfigBase):
             
         workQueue.join()
 
-    def run_schedule(self, group_schedule_id:str):
-        """
-        Executes the schedule based on the provided group schedule ID.
-        This method checks if asynchronous execution is enabled in the user configuration.
-        If enabled, it runs the schedule asynchronously; otherwise, it runs the schedule sequentially.
-        Args:
-            group_schedule_id (str): The ID of the group schedule to be executed.
-        """
-
+    def run_schedule(self, group_schedule_id:str) -> bool:
         if self.UserConfig.Async.Enabled:
-            self.run_async_schedule(group_schedule_id)
+            initial_loads = self.run_async_schedule(group_schedule_id)
         else:
-            self.run_sequential_schedule(group_schedule_id)
+            initial_loads = self.run_sequential_schedule(group_schedule_id)
+        
+        return initial_loads
 
-    def run_async_schedule(self, group_schedule_id:str):
-        """
-        Runs the schedule activities in parallel using python threading
-
-        - Utilitizes the priority to define load groups to respect priority
-        - Parallelism is control from the User Config JSON file
-        """
+    def run_async_schedule(self, group_schedule_id:str) -> bool:
         print(f"Async schedule started with parallelism of {self.UserConfig.Async.Parallelism}...")
-        workQueue = PriorityQueue()
 
-        schedule = self.Metastore.get_schedule(group_schedule_id)
+        initial_loads = False
 
-        load_grps = [i["priority"] for i in schedule.select("priority").distinct().orderBy("priority").collect()]
+        with SyncTimer() as tt:
+            workQueue = PriorityQueue()
 
-        if load_grps:
-            for grp in load_grps:
-                grp_nm = "LOAD GROUP {0}".format(grp)
-                grp_df = schedule.where(f"priority = '{grp}'")
+            schedule = self.Metastore.get_schedule(group_schedule_id)
 
-                for tbl in grp_df.collect():
-                    s = SyncSchedule(tbl)
-                    nm = "{0}.{1}".format(s.Dataset, s.TableName)        
+            load_grps = [i["priority"] for i in schedule.select("priority").distinct().orderBy("priority").collect()]
 
-                    if s.PartitionId is not None:
-                        nm = "{0}${1}".format(nm, s.PartitionId)        
+            if load_grps:
+                for grp in load_grps:
+                    grp_nm = "LOAD GROUP {0}".format(grp)
+                    grp_df = schedule.where(f"priority = '{grp}'").sort("total_rows")
 
-                    workQueue.put((s.Priority, nm, s))
+                    for tbl in grp_df.collect():
+                        s = SyncSchedule(tbl)
+                        nm = "{0}.{1}".format(s.Dataset, s.TableName)        
 
-                if not workQueue.empty():
-                    print(f"### Processing {grp_nm}...")
-                    self.process_queue(workQueue, self.task_runner, self.schedule_sync)
+                        if s.PartitionId is not None:
+                            nm = "{0}${1}".format(nm, s.PartitionId)        
 
-            self.Metastore.process_load_group_telemetry(group_schedule_id)
+                        if s.InitialLoad:
+                            initial_loads = True
+
+                        workQueue.put((s.Priority, nm, s))
+
+                    if not workQueue.empty():
+                        print(f"### Processing {grp_nm}...")
+                        with SyncTimer() as t:                        
+                            self.process_queue(workQueue, self.task_runner, self.schedule_sync)
+                        print(f"### {grp_nm} completed in {str(t)}...")
+
+                self.Metastore.process_load_group_telemetry(group_schedule_id)
        
-        print(f"Async schedule sync complete...")
+        print(f"Async schedule sync completed in {str(tt)}...")
+
+        return initial_loads

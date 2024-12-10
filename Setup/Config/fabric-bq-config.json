@@ -5,6 +5,7 @@
 	"enable_views":true|false,
 	"enable_materialized_views":true|false,
 	"enable_data_expiration": true|false,
+	"use_standard_api":true|false,
 	"fabric":{
         "workspace_id":"[FABRIC_WORKSPACE_ID]",
         "metadata_lakehouse":"[FABRIC_METADATA_LAKEHOUSE]",
@@ -42,20 +43,6 @@
 		"flatten_table":true|false,
         "flatten_inplace":true|false,
 		"explode_arrays":true|false,
-		"table_options": [
-		{
-			"key": "delta.enableDeletionVectors",
-			"value": "true|false"
-		},
-		{
-			"key": "delta.targetFileSize",
-			"value": "256MB"
-		},
-		{
-			"key": "delta.autoOptimize.autoCompact ",
-			"value": "true|false"
-		}
-		],
 		"watermark": {
 			"column": "[BQ_WATERMARK_COLUMN]"
 		}
@@ -86,21 +73,6 @@
             "enabled":true|false,
             "interval":"AUTO"
         },
-		"table_options": [
-		{
-			"key": "delta.enableDeletionVectors",
-			"value": "true|false"
-		},
-		{
-			"key": "delta.targetFileSize",
-			"value": "256MB"
-		}
-		],
-		"keys": [
-		{
-			"column": "[MERGE_JOIN_KEY_COLUMNS]"
-		}
-		],
 		"partitioned": {
 			"enabled": true|false,
 			"type" : "[TIME|RANGE]",
