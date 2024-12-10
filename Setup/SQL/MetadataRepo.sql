@@ -95,5 +95,6 @@ CREATE TABLE IF NOT EXISTS bq_sync_schedule_telemetry
     delta_version BIGINT,
     spark_application_id STRING,
     max_watermark STRING,
-    summary_load STRING
+    summary_load STRING,
+    source_query STRING
 );

@@ -159,30 +159,12 @@ class SyncSchedule:
     
     @property
     def IsPartitionedSyncLoad(self) -> bool:
-        """
-        Determines if the sync load is partitioned.
-        This method checks if the sync load is partitioned based on the following conditions:
-        - The `IsPartitioned` attribute is True.
-        - If the `IsTimePartitionedStrategy` attribute is True and `PartitionId` is set, or if the `IsRangePartitioned` attribute is True.
-        Returns:
-            bool: True if the sync load is partitioned, False otherwise.
-        """
-
         if self.IsPartitioned:
             if (self.IsTimePartitionedStrategy and self.PartitionId) or self.IsRangePartitioned:
                 return True
         return False
     
     def assign_enum_val(self, enum_class, value):
-        """
-        Assigns a value to an enum class.
-        Args:
-            enum_class (Enum): The enumeration class to which the value should be assigned.
-            value (Any): The value to be assigned to the enum class.
-        Returns:
-            Enum or None: The corresponding enum member if the value is valid, otherwise None.
-        """
-
         try:
             return enum_class(value)
         except ValueError:

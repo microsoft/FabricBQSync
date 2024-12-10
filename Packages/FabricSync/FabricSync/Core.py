@@ -8,27 +8,92 @@ import base64 as b64
 from pathlib import Path
 import os
 import hashlib
+import time
+import functools
+import warnings
+import sqlvalidator
+import traceback
+
+from google.cloud import bigquery
+from google.oauth2.service_account import Credentials
+
+from contextlib import ContextDecorator
+from dataclasses import dataclass, field
+from typing import Any, Callable, ClassVar, Dict, Optional
 
 from .Enum import *
 from .Metastore import FabricMetastore
 from .Config import *
 
-class ConfigBase():
-    """
-    ConfigBase is a base configuration class for handling BigQuery operations using Spark.
-    Methods:
-        __init__(context: SparkSession, user_config, gcp_credential: str):
-            Initializes the ConfigBase class with Spark context, user configuration, and GCP credentials.
-        get_bq_reader_config(partition_filter: str = None):
-            Generates Spark reader options required for the BigQuery Spark Connector.
-        read_bq_partition_to_dataframe(table: str, partition_filter: str, cache_results: bool = False) -> DataFrame:
-            Reads a specific partition from a BigQuery table using the BigQuery Spark connector.
-        read_bq_to_dataframe(query: str, partition_filter: str = None, cache_results: bool = False) -> DataFrame:
-            Reads a BigQuery table using the BigQuery Spark connector.
-        write_lakehouse_table(df: DataFrame, lakehouse: str, tbl_nm: str, mode: LoadType = LoadType.OVERWRITE):
-            Writes a DataFrame to the lakehouse using the Lakehouse.TableName notation.
-    """
+def ignore_warnings(category: Warning):
+    def ignore_warnings_decorator(func: Callable):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", category=category)
+                return func(*args, **kwargs)
+        return wrapper
+    return ignore_warnings_decorator
 
+class SyncTimerError(Exception):
+    """A custom exception for Sync Timer class"""
+
+@dataclass
+class SyncTimer(ContextDecorator):
+    _start_time: Optional[float] = field(default=None, init=False, repr=False)
+
+    def start(self) -> None:
+        if self._start_time is not None:
+            raise SyncTimerError(f"Timer is already running.")
+
+        self._start_time = time.perf_counter()
+
+    def stop(self) -> float:
+        if self._start_time is None:
+            raise SyncTimerError(f"Timer is not running.")
+
+        self.elapsed_time = time.perf_counter() - self._start_time
+        self._start_time = None
+
+        return self.elapsed_time
+
+    def __enter__(self):
+        self.start()
+        return self
+
+    def __exit__(self, *exc_info: Any) -> None:
+        self.stop()
+    
+    def __str__(self):
+        if self.elapsed_time:
+            return f"{(self.elapsed_time/60):.4f} mins"
+        else:
+            return None
+
+warnings.filterwarnings('ignore', category=UserWarning)
+
+class BigQueryClient():
+    def __init__(self, context:SparkSession, project_id:str, credentials:str):
+        key = json.loads(b64.b64decode(credentials))
+        bq_credentials = Credentials.from_service_account_info(key)
+
+        self.Context = context
+        self.project_id = project_id
+        self.client = bigquery.Client(project=project_id, credentials=bq_credentials)
+    
+    @ignore_warnings(category=UserWarning)
+    def read_to_dataframe(self, query:str):
+        query = self.client.query(query)
+        bq = query.to_dataframe()
+        
+        df = None
+
+        if not bq.empty:
+            df = self.Context.createDataFrame(bq)
+
+        return df
+
+class ConfigBase():
     def __init__(self, context:SparkSession, user_config, gcp_credential:str):
         """
         Initializes the Config class with the given parameters.
@@ -76,55 +141,53 @@ class ConfigBase():
         
         return cfg
         
-    def read_bq_partition_to_dataframe(self, table:str, partition_filter:str, cache_results:bool=False) -> DataFrame:
-        """
-        Reads a BigQuery partition into a DataFrame.
-        Args:
-            table (str): The name of the BigQuery table.
-            partition_filter (str): The filter to apply to the partition.
-            cache_results (bool, optional): Whether to cache the results. Defaults to False.
-        Returns:
-            DataFrame: The resulting DataFrame from the BigQuery partition.
-        """
-        return self.read_bq_to_dataframe(query=table, partition_filter=partition_filter, cache_results=cache_results)
+    def read_bq_partition_to_dataframe(self, project_id: str, table:str, partition_filter:str, cache_results:bool=True, api:BigQueryAPI=BigQueryAPI.STORAGE) -> DataFrame:
+        return self.read_bq_to_dataframe(project_id=project_id, query=table, partition_filter=partition_filter, cache_results=cache_results, api=api)
 
-    def read_bq_to_dataframe(self, query:str, partition_filter:str=None, cache_results:bool=False) -> DataFrame:
-        """
-        Reads data from BigQuery into a DataFrame based on the provided SQL query.
-        Args:
-            query (str): The SQL query to execute against BigQuery.
-            partition_filter (str, optional): An optional partition filter to apply to the query. Defaults to None.
-            cache_results (bool, optional): If True, caches the resulting DataFrame in memory. Defaults to False.
-        Returns:
-            DataFrame: The resulting DataFrame containing the data from BigQuery.
-        """
-
-        cfg = self.get_bq_reader_config(partition_filter=partition_filter)
-
-        df = self.Context.read.format("bigquery").options(**cfg).load(query)
+    def read_bq_to_dataframe(self, project_id: str, query:str, partition_filter:str=None, cache_results:bool=True, api:BigQueryAPI=BigQueryAPI.STORAGE) -> DataFrame:
+        if api == BigQueryAPI.STORAGE:
+            df = self.read_bq_storage_to_dataframe(query, partition_filter)
+        else:
+            df = self.read_bq_standard_to_dataframe(project_id, query, partition_filter)
         
         if cache_results:
             df.cache()
         
         return df
 
-    def write_lakehouse_table(self, df:DataFrame, lakehouse:str, tbl_nm:str, mode:LoadType=LoadType.OVERWRITE):
-        """
-        Writes a DataFrame to a specified lakehouse table.
-        Parameters:
-        df (DataFrame): The DataFrame to be written.
-        lakehouse (str): The name of the lakehouse.
-        tbl_nm (str): The name of the table within the lakehouse.
-        mode (LoadType, optional): The mode for writing the DataFrame. Defaults to LoadType.OVERWRITE.
-        Returns:
-        None
-        """
+    def read_bq_storage_to_dataframe(self, query:str, partition_filter:str=None) -> DataFrame:
+        cfg = self.get_bq_reader_config(partition_filter=partition_filter)
+        df = self.Context.read.format("bigquery").options(**cfg).load(query)
 
-        dest_table = f"{lakehouse}.{tbl_nm}"
+        return df
 
-        df.write \
-            .mode(str(mode)) \
-            .saveAsTable(dest_table)
+    def read_bq_standard_to_dataframe(self, project_id: str, query:str, partition_filter:str=None) -> DataFrame:
+        sql_query = self.build_bq_query(query, partition_filter)
+
+        bq_client = BigQueryClient(self.Context, project_id, self.GCPCredential)
+        df = bq_client.read_to_dataframe(query)
+
+        return df
+
+    def build_bq_query(self, query:str, partition_filter:str=None) -> str:
+        if self.is_sql_query(query):
+            sql = query
+        else:
+            sql = f"SELECT * FROM {query}"
+
+        if partition_filter:
+            q = sqlvalidator.parse(sql)
+
+            if q.sql_query and q.sql_query.where_clause:
+                sql = " ".join([sql, f"AND {partition_filter}"])
+            else:
+                sql = " ".join([sql, f"WHERE {partition_filter}"])
+        
+        return sql
+
+    def is_sql_query(self, query:str):
+        sql_query = sqlvalidator.parse(query)
+        return sql_query.is_valid()
 
 
 class SyncBase():
@@ -189,33 +252,16 @@ class SyncBase():
     
 
     def validate_json_file(self, config_path:str) -> bool:
-        """
-        Validates if the given JSON file is properly formatted.
-        Args:
-            config_path (str): The path to the JSON file to be validated.
-        Returns:
-            bool: True if the JSON file is valid, False otherwise.
-        """
-
         with open(config_path, 'r') as file:
             try:
-                json.load(file)
-            except ValueError:
+                data = json.load(file, strict=False)
+            except ValueError as err:
+                print(traceback.format_exc())
                 return False
             
         return True
 
     def get_current_config_hash(self, config_df:DataFrame) -> str:
-        """
-        Retrieves the current configuration hash.
-        This method checks if the `ConfigMD5Hash` attribute is already set. If not, it collects the configuration
-        data from the provided DataFrame and sets the `ConfigMD5Hash` attribute to the MD5 file hash from the first
-        row of the DataFrame.
-        Args:
-            config_df (DataFrame): A DataFrame containing configuration data with an 'md5_file_hash' column.
-        Returns:
-            str: The MD5 hash of the current configuration.
-        """
         if not self.ConfigMD5Hash:
             cfg = [c for c in config_df.collect()]
 

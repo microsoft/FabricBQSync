@@ -1,7 +1,6 @@
 from pyspark.sql.functions import *
 from pyspark.sql.types import *
 from delta.tables import *
-import json
 
 
 from .Metastore import *
@@ -22,6 +21,7 @@ class SyncConstants:
         "load_all_views":false,
         "load_all_materialized_views":false,
         "autodetect":true,
+        "use_standard_api":false,
         "fabric":{
             "workspace_id":"",
             "metadata_lakehouse":"",
@@ -191,6 +191,7 @@ class ConfigDataset(JSONConfigObj):
         self.LoadAllMaterializedViews = super().get_json_conf_val(json_config, "load_all_materialized_views", False)
         self.EnableDataExpiration = super().get_json_conf_val(json_config, "enable_data_expiration", False)
         self.Autodetect = super().get_json_conf_val(json_config, "autodetect", True)
+        self.UseStandardAPI = super().get_json_conf_val(json_config, "use_standard_api", False)
 
         self.Tables = []
 
@@ -445,76 +446,3 @@ class ConfigBQTable (ConfigBQTableDefault):
             keys = [k.Column for k in self.Keys]
         
         return keys
-
-class ConfigBase():
-    '''
-    Base class for sync objects that require access to user-supplied configuration
-    '''
-    def __init__(self, context:SparkSession, user_config, gcp_credential:str):
-        """
-        Init method loads the common config base class
-        """
-        self.Context = context
-        self.UserConfig = user_config
-        self.GCPCredential = gcp_credential
-        self.Metastore = FabricMetastore(context)
-    
-    def get_bq_reader_config(self, partition_filter:str = None):
-        """
-        Spark Reader options required for the BigQuery Spark Connector
-        --parentProject - billing project id for the API transaction costs, defaults to service account project id if not specified
-        --credentials - gcp service account credentials
-        --viewEnabled - required to be true when reading queries, views or information schema
-        --materializationProject - billing project id where the views will be materialized out to temp tables for storage api
-        --materializationDataset - dataset where views will be materialized out to temp tables for storage api
-        --filter - required for tables that have mandatory partition filters or when reading table partitions
-        """
-        cfg = {
-            "credentials" : self.GCPCredential,
-            "viewsEnabled" : "true"
-        }
-    
-        if self.UserConfig.GCPCredential.MaterializationProjectID:
-            cfg["materializationProject"] = self.UserConfig.GCPCredential.MaterializationProjectID
-        
-        if self.UserConfig.GCPCredential.MaterializationDataset:
-            cfg["materializationDataset"] = self.UserConfig.GCPCredential.MaterializationDataset
-
-        if self.UserConfig.GCPCredential.BillingProjectID:
-            cfg["parentProject"] = self.UserConfig.GCPCredential.BillingProjectID
-
-        if partition_filter:
-            cfg["filter"] = partition_filter
-        
-        return cfg
-        
-    def read_bq_partition_to_dataframe(self, table:str, partition_filter:str, cache_results:bool=False) -> DataFrame:
-        """
-        Reads a specific partition using the BigQuery spark connector.
-        BigQuery does not support table decorator so the table and partition info 
-        is passed using options
-        """        
-        return self.read_bq_to_dataframe(query=table, partition_filter=partition_filter, cache_results=cache_results)
-
-    def read_bq_to_dataframe(self, query:str, partition_filter:str=None, cache_results:bool=False) -> DataFrame:
-        """
-        Reads a BigQuery table using the BigQuery spark connector
-        """
-        cfg = self.get_bq_reader_config(partition_filter=partition_filter)
-
-        df = self.Context.read.format("bigquery").options(**cfg).load(query)
-        
-        if cache_results:
-            df.cache()
-        
-        return df
-
-    def write_lakehouse_table(self, df:DataFrame, lakehouse:str, tbl_nm:str, mode:LoadType=LoadType.OVERWRITE):
-        """
-        Write a DataFrame to the lakehouse using the Lakehouse.TableName notation
-        """
-        dest_table = f"{lakehouse}.{tbl_nm}"
-
-        df.write \
-            .mode(str(mode)) \
-            .saveAsTable(dest_table)

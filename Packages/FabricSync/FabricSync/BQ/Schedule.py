@@ -5,7 +5,7 @@ from ..Config import *
 from ..Core import *
 from ..Metastore import *
 
-class Scheduler(ConfigBase):
+class BQScheduler(ConfigBase):
     """
     Class responsible for calculating the to-be run schedule based on the sync config and 
     the most recent BigQuery table metadata. Schedule is persisted to the Sync Schedule
