@@ -2,3 +2,4 @@ mlflow-skinny==2.18.0
 google-cloud-bigquery==3.26.0
 google-cloud-bigquery[pandas]==3.26.0
 sqlvalidator==0.0.20
+pydantic
