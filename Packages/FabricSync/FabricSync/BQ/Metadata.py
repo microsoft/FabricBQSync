@@ -99,7 +99,7 @@ class BQMetadataLoader(ConfigBase):
             
             if filter_list:
                 tbls = ", ".join(f"'{t}'" for t in filter_list)
-                bql = bql + f" AND table_name IN ({tbls})"            
+                bql = bql + f" AND t.table_name IN ({tbls})"            
 
         if self.UserConfig.UseStandardAPI:
             bq_api = BigQueryAPI.STANDARD
