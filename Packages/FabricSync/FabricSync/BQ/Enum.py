@@ -12,6 +12,91 @@ class BaseEnum(Enum):
     def __str__(self):
         return str(self.value)
 
+class SupportedTypeConversion(BaseEnum):
+    """
+    Enum class for supported type conversions.
+    Attributes:
+        STRING_TO_DATE (str): Conversion from string to date.
+        STRING_TO_TIMESTAMP (str): Conversion from string to timestamp.
+        STRING_TO_INT (str): Conversion from string to integer.
+        STRING_TO_LONG (str): Conversion from string to long integer.
+        STRING_TO_DECIMAL (str): Conversion from string to decimal.
+        DATE_TO_STRING (str): Conversion from date to string.
+        TIMESTAMP_TO_STRING (str): Conversion from timestamp to string.
+        INT_TO_STRING (str): Conversion from integer to string.
+        DECIMAL_TO_STRING (str): Conversion from decimal to string.
+        LONG_TO_STRING (str): Conversion from long integer to string.
+    """
+
+    STRING_TO_DATE = "STRING_TO_DATE"
+    STRING_TO_TIMESTAMP = "STRING_TO_TIMESTAMP"
+    STRING_TO_INT = "STRING_TO_INT"
+    STRING_TO_LONG = "STRING_TO_LONG"
+    STRING_TO_DECIMAL = "STRING_TO_DECIMAL"
+    DATE_TO_STRING = "DATE_TO_STRING"
+    TIMESTAMP_TO_STRING = "TIMESTAMP_TO_STRING"
+    INT_TO_STRING = "INT_TO_STRING"
+    DECIMAL_TO_STRING = "DECIMAL_TO_STRING"
+    LONG_TO_STRING = "LONG_TO_STRING"
+
+class ObjectFilterType(BaseEnum):
+    """
+    Enum class representing the type of object filter.
+    Attributes:
+        INCLUDE (str): Represents an inclusion filter type.
+        EXCLUDE (str): Represents an exclusion filter type.
+    """
+
+    INCLUDE = "INCLUDE"
+    EXCLUDE = "EXCLUDE"
+
+class PredicateType(BaseEnum):
+    """
+    Enum class representing predicate types for logical operations.
+    Attributes:
+        AND (str): Represents the logical AND operation.
+        OR (str): Represents the logical OR operation.
+    """
+
+    AND = "AND"
+    OR = "OR"
+    
+class SyncLogLevel(BaseEnum):
+    """
+    SyncLogLevel is an enumeration that defines various levels of logging for synchronization processes.
+    Attributes:
+        DEBUG (int): Debug-level messages, typically used for development and troubleshooting (value: 10).
+        INFO (int): Informational messages that highlight the progress of the application (value: 20).
+        WARNING (int): Warning messages that indicate a potential issue or important situation (value: 30).
+        SYNC_STATUS (int): Messages specifically related to the status of synchronization (value: 34).
+        TELEMETRY (int): Messages related to telemetry data (value: 35).
+        ERROR (int): Error messages indicating a failure in the application (value: 40).
+        CRITICAL (int): Critical messages indicating a severe failure that may cause the application to terminate (value: 50).
+    """
+
+    DEBUG = 10
+    INFO = 20
+    WARNING = 30
+    SYNC_STATUS = 34
+    TELEMETRY = 35
+    ERROR = 40
+    CRITICAL = 50
+
+class SyncLogFileInterval(BaseEnum):
+    """
+    Enum representing the intervals for sync log files.
+    Attributes:
+        HOUR (str): Represents an hourly interval.
+        DAY (str): Represents a daily interval.
+        WEEK (str): Represents a weekly interval.
+        MONTH (str): Represents a monthly interval.
+    """
+
+    HOUR = "H"
+    DAY = "D"
+    WEEK = "W"
+    MONTH = "M"
+    
 class BigQueryObjectType(BaseEnum):
     """
     BigQueryObjectType is an enumeration that represents different types of BigQuery objects.
@@ -159,5 +244,12 @@ class SchemaView(BaseEnum):
     INFORMATION_SCHEMA_MATERIALIZED_VIEWS = "INFORMATION_SCHEMA.MATERIALIZED_VIEWS"
 
 class BigQueryAPI(BaseEnum):
+    """
+    Enum representing different BigQuery API types.
+    Attributes:
+        STANDARD (str): Represents the standard BigQuery API.
+        STORAGE (str): Represents the BigQuery storage API.
+    """
+
     STANDARD = "STANDARD",
     STORAGE = "STORAGE"

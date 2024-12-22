@@ -1,15 +1,15 @@
+from pyspark.sql import SparkSession
 from pyspark.sql.functions import *
 from pyspark.sql.types import *
 from delta.tables import *
-from queue import PriorityQueue
-from threading import Thread
 import traceback
 
-from ..Config import *
-from ..Core import *
-from ..Admin.DeltaTableUtility import *
-from ..Enum import *
-
+from .Model.Config import *
+from .Core import *
+from .Admin.DeltaTableUtility import *
+from .Enum import *
+from .Exceptions import *
+from .Constants import SyncConstants
 class BQMetadataLoader(ConfigBase):
     """
     Class handles:
@@ -27,188 +27,250 @@ class BQMetadataLoader(ConfigBase):
             gcp_credential (str): Google Cloud Platform credential string.
         """
         super().__init__(context, user_config, gcp_credential)
+        self.load_bq_information_schema_models()
 
-    def sync_bq_information_schema_core(self, project:str, dataset:str, type:BigQueryObjectType):
+    def sync_bq_information_schema_core(self, project:str, dataset:str, type:BigQueryObjectType, mode:LoadType):
+        is_enabled = False
+
         match type:
             case BigQueryObjectType.VIEW:
                 view = SchemaView.INFORMATION_SCHEMA_VIEWS
+                is_enabled = self.UserConfig.AutoDiscover.Views.Enabled
             case BigQueryObjectType.MATERIALIZED_VIEW:
                 view = SchemaView.INFORMATION_SCHEMA_MATERIALIZED_VIEWS
+                is_enabled = self.UserConfig.AutoDiscover.MaterializedViews.Enabled
             case BigQueryObjectType.BASE_TABLE:
                 view = SchemaView.INFORMATION_SCHEMA_TABLES
-        
-        bq_table = f"{project}.{dataset}.{view}"
-        tbl_nm = f"BQ_{view}".replace(".", "_")
+                is_enabled = self.UserConfig.AutoDiscover.Tables.Enabled
 
-        bql = f"SELECT * FROM {bq_table}"
-        predicates = []
+        schema_model = self.schema_models[view]
 
-        if type == BigQueryObjectType.BASE_TABLE:
-            predicates.append("table_type='BASE TABLE'")
-            predicates.append("table_name NOT LIKE '_bqc_%'")
+        if is_enabled:
+            filter_list = None
+            filter = None
 
-        filter_list = None
-        
-        match type:
-            case BigQueryObjectType.BASE_TABLE:
-                if not self.UserConfig.LoadAllTables:
+            if self.UserConfig.GCP.API.UseStandardAPI:
+                bq_api = BigQueryAPI.STANDARD
+            else:
+                bq_api = BigQueryAPI.STORAGE
+
+            qm = {
+                "ProjectId": project,
+                "Dataset": dataset,
+                "Query": schema_model.get_base_sql(project, dataset),
+                "API": bq_api
+            }
+            query_model = BQQueryModel(**qm)
+
+            predicate_type = PredicateType.OR
+
+            match type:
+                case BigQueryObjectType.BASE_TABLE:
+                    query_model.add_predicate("table_type='BASE TABLE'")
+                    query_model.add_predicate("table_name NOT LIKE '_bqc_%'")
+
+                    if not self.UserConfig.LoadAllTables:
+                        predicate_type = PredicateType.AND
+                        
                     filter_list = self.UserConfig.get_table_name_list(project, dataset, BigQueryObjectType.BASE_TABLE, True)
-            case BigQueryObjectType.VIEW:
-                if not self.UserConfig.LoadAllViews:
+                    filter = self.UserConfig.autodiscover.tables.filter
+                case BigQueryObjectType.VIEW:
+                    if not self.UserConfig.LoadAllViews:
+                        predicate_type = PredicateType.AND                   
+                    
                     filter_list = self.UserConfig.get_table_name_list(project, dataset, BigQueryObjectType.VIEW, True)
-            case BigQueryObjectType.MATERIALIZED_VIEW:
-                if not self.UserConfig.LoadAllMaterializedViews:
+                    filter = self.UserConfig.autodiscover.views.filter
+                case BigQueryObjectType.MATERIALIZED_VIEW:
+                    if not self.UserConfig.LoadAllMaterializedViews:
+                        predicate_type = PredicateType.AND                    
+                    
                     filter_list = self.UserConfig.get_table_name_list(project, dataset, BigQueryObjectType.MATERIALIZED_VIEW, True)
-            case _:
-                pass
+                    filter = self.UserConfig.autodiscover.materialized_views.filter
+                case _:
+                    pass
+
+            filter_pattern = self.build_filter_predicate(filter)
+
+            if filter_list:
+                tbls = ", ".join(f"'{t}'" for t in filter_list)
+
+                if filter_pattern:
+                    query_model.add_predicate(f"((table_name IN ({tbls})) OR ({filter_pattern}))", PredicateType.AND)
+                else:
+                    query_model.add_predicate(f"table_name IN ({tbls})", predicate_type)
+            else:
+                if filter_pattern:
+                    query_model.add_predicate(filter_pattern, PredicateType.AND)
+
+            df = self.read_bq_to_dataframe(query_model, schema=schema_model.get_df_schema(), cache_results=False)
+
+            if not df:
+                df = schema_model.get_empty_df(self.Context)
+        else:
+            self.Logger.sync_status(f"Metadata Sync for {view} SKIPPED (Not Enabled in Config)...")
+            df = schema_model.get_empty_df(self.Context)
+        
+        df.write.mode(str(mode)).saveAsTable(f"{self.UserConfig.Fabric.MetadataLakehouse}.{schema_model.TableName}")
+
+    def build_filter_predicate(self, filter):
+        if filter:
+            if filter.type and filter.pattern:
+                if filter.type == ObjectFilterType.INCLUDE.value:
+                    return f"table_name LIKE '{filter.pattern}'"
+                else:
+                    return f"table_name NOT LIKE '{filter.pattern}'"
+        
+        return None
+
+    def sync_bq_information_schema_table_dependent(self, project:str, dataset:str, view:SchemaView, mode:LoadType): 
+        schema_model = self.schema_models[view]
+
+        bql = schema_model.get_base_sql(project, dataset, alias="c")
+        bql = bql + \
+            f" JOIN {project}.{dataset}.{SchemaView.INFORMATION_SCHEMA_TABLES} t ON t.table_catalog=c.table_catalog AND t.table_schema=c.table_schema AND t.table_name=c.table_name"
+
+        if self.UserConfig.GCP.API.UseStandardAPI:
+            bq_api = BigQueryAPI.STANDARD
+        else:
+            bq_api = BigQueryAPI.STORAGE
+
+        qm = {
+            "ProjectId": project,
+            "Dataset": dataset,
+            "Query": bql,
+            "API": bq_api
+        }
+
+        query_model = BQQueryModel(**qm)
+
+        query_model.add_predicate("t.table_type='BASE TABLE'")
+        query_model.add_predicate("t.table_name NOT LIKE '_bqc_%'")
+
+        filter = self.UserConfig.autodiscover.tables.filter
+        filter_pattern = self.build_filter_predicate(filter)
+
+        filter_list = self.UserConfig.get_table_name_list(project, dataset, BigQueryObjectType.BASE_TABLE, True)
 
         if filter_list:
             tbls = ", ".join(f"'{t}'" for t in filter_list)
-            predicates.append(f"table_name IN ({tbls})")
 
-        if len(predicates) > 0:
-            bql = bql + " WHERE " + " AND ".join(predicates)
-        
-        if self.UserConfig.UseStandardAPI:
-            bq_api = BigQueryAPI.STANDARD
+            if filter_pattern:
+                query_model.add_predicate(f"((t.table_name IN ({tbls})) OR (t.{filter_pattern}))", PredicateType.AND)          
+            elif not self.UserConfig.LoadAllTables:
+                query_model.add_predicate(f"t.table_name IN ({tbls})", PredicateType.AND) 
         else:
-            bq_api = BigQueryAPI.STORAGE
+            if filter_pattern:
+                query_model.add_predicate(f"t.{filter_pattern}", PredicateType.AND)                
 
-        df = self.read_bq_to_dataframe(project, bql, cache_results=False, api=bq_api)
+        df = self.read_bq_to_dataframe(query_model, schema=schema_model.get_df_schema(), cache_results=False)
 
         if not df:
-            df = self.create_placeholder_dataframe(view)
+            df = schema_model.get_empty_df(self.Context)
 
-        df.write.mode("APPEND").saveAsTable(f"{self.UserConfig.Fabric.MetadataLakehouse}.{tbl_nm}")
+        df.write.mode(str(mode)).saveAsTable(f"{self.UserConfig.Fabric.MetadataLakehouse}.{schema_model.TableName}")
 
-    def sync_bq_information_schema_table_dependent(self, project:str, dataset:str, dependent_tbl:SchemaView): 
-        bq_table = f"{project}.{dataset}.{SchemaView.INFORMATION_SCHEMA_TABLES}"
-        bq_dependent_tbl = f"{project}.{dataset}.{dependent_tbl}"
-        tbl_nm = f"BQ_{dependent_tbl}".replace(".", "_")
+    def load_bq_information_schema_models(self):
+        self.schema_models = {}
 
-        bql = f"""
-        SELECT c.*
-        FROM {bq_dependent_tbl} c
-        JOIN {bq_table} t ON t.table_catalog=c.table_catalog AND t.table_schema=c.table_schema AND t.table_name=c.table_name
-        WHERE t.table_type='BASE TABLE'
-        AND t.table_name NOT LIKE '_bqc_%'
-        """
+        self.schema_models[SchemaView.INFORMATION_SCHEMA_TABLES] = InformationSchemaModel.define(SchemaView.INFORMATION_SCHEMA_TABLES, 
+            "table_catalog,table_schema,table_name,table_type,creation_time,ddl", 
+            '{"fields":[{"metadata":{},"name":"table_catalog","nullable":true,"type":"string"},{"metadata":{},"name":"table_schema","nullable":true,"type":"string"},{"metadata":{},"name":"table_name","nullable":true,"type":"string"},{"metadata":{},"name":"table_type","nullable":true,"type":"string"},{"metadata":{},"name":"creation_time","nullable":true,"type":"timestamp"},{"metadata":{},"name":"ddl","nullable":true,"type":"string"}],"type":"struct"}')
 
-        if not self.UserConfig.LoadAllTables:
-            filter_list = self.UserConfig.get_table_name_list(project, dataset, BigQueryObjectType.BASE_TABLE, True)
-            
-            if filter_list:
-                tbls = ", ".join(f"'{t}'" for t in filter_list)
-                bql = bql + f" AND t.table_name IN ({tbls})"            
+        self.schema_models[SchemaView.INFORMATION_SCHEMA_VIEWS] = InformationSchemaModel.define(SchemaView.INFORMATION_SCHEMA_VIEWS, 
+            "table_catalog,table_schema,table_name,view_definition",
+            '{"fields":[{"metadata":{},"name":"table_catalog","nullable":true,"type":"string"},{"metadata":{},"name":"table_schema","nullable":true,"type":"string"},{"metadata":{},"name":"table_name","nullable":true,"type":"string"},{"metadata":{},"name":"view_definition","nullable":true,"type":"string"}],"type":"struct"}')
 
-        if self.UserConfig.UseStandardAPI:
-            bq_api = BigQueryAPI.STANDARD
-        else:
-            bq_api = BigQueryAPI.STORAGE
+        self.schema_models[SchemaView.INFORMATION_SCHEMA_COLUMNS] = InformationSchemaModel.define(SchemaView.INFORMATION_SCHEMA_COLUMNS, 
+            "table_catalog,table_schema,table_name,column_name,ordinal_position,is_nullable,data_type,is_partitioning_column",
+            '{"fields":[{"metadata":{},"name":"table_catalog","nullable":true,"type":"string"},{"metadata":{},"name":"table_schema","nullable":true,"type":"string"},{"metadata":{},"name":"table_name","nullable":true,"type":"string"},{"metadata":{},"name":"column_name","nullable":true,"type":"string"},{"metadata":{},"name":"ordinal_position","nullable":true,"type":"long"},{"metadata":{},"name":"is_nullable","nullable":true,"type":"string"},{"metadata":{},"name":"data_type","nullable":true,"type":"string"},{"metadata":{},"name":"is_partitioning_column","nullable":true,"type":"string"}],"type":"struct"}')
 
-        df = self.read_bq_to_dataframe(project, bql, cache_results=False, api=bq_api)
+        self.schema_models[SchemaView.INFORMATION_SCHEMA_KEY_COLUMN_USAGE] = InformationSchemaModel.define(SchemaView.INFORMATION_SCHEMA_KEY_COLUMN_USAGE, 
+            "constraint_catalog,constraint_schema,constraint_name,table_catalog,table_schema,table_name,column_name,ordinal_position,position_in_unique_constraint",
+            '{"fields":[{"metadata":{},"name":"constraint_catalog","nullable":true,"type":"string"},{"metadata":{},"name":"constraint_schema","nullable":true,"type":"string"},{"metadata":{},"name":"constraint_name","nullable":true,"type":"string"},{"metadata":{},"name":"table_catalog","nullable":true,"type":"string"},{"metadata":{},"name":"table_schema","nullable":true,"type":"string"},{"metadata":{},"name":"table_name","nullable":true,"type":"string"},{"metadata":{},"name":"column_name","nullable":true,"type":"string"},{"metadata":{},"name":"ordinal_position","nullable":true,"type":"long"},{"metadata":{},"name":"position_in_unique_constraint","nullable":true,"type":"long"}],"type":"struct"}')
 
-        if not df:
-            df = self.create_placeholder_dataframe(dependent_tbl)
+        self.schema_models[SchemaView.INFORMATION_SCHEMA_MATERIALIZED_VIEWS] = InformationSchemaModel.define(SchemaView.INFORMATION_SCHEMA_MATERIALIZED_VIEWS, 
+            "table_catalog,table_schema,table_name,last_refresh_time,refresh_watermark",
+            '{"fields":[{"metadata":{},"name":"table_catalog","nullable":true,"type":"string"},{"metadata":{},"name":"table_schema","nullable":true,"type":"string"},{"metadata":{},"name":"table_name","nullable":true,"type":"string"},{"metadata":{},"name":"last_refresh_time","nullable":true,"type":"timestamp"},{"metadata":{},"name":"refresh_watermark","nullable":true,"type":"timestamp"}],"type":"struct"}')
 
-        df.write.mode(str(LoadType.APPEND)).saveAsTable(f"{self.UserConfig.Fabric.MetadataLakehouse}.{tbl_nm}")
+        self.schema_models[SchemaView.INFORMATION_SCHEMA_PARTITIONS] = InformationSchemaModel.define(SchemaView.INFORMATION_SCHEMA_PARTITIONS, 
+            "table_catalog,table_schema,table_name,partition_id,total_rows,total_logical_bytes,total_billable_bytes,last_modified_time,storage_tier",
+            '{"fields":[{"metadata":{},"name":"table_catalog","nullable":true,"type":"string"},{"metadata":{},"name":"table_schema","nullable":true,"type":"string"},{"metadata":{},"name":"table_name","nullable":true,"type":"string"},{"metadata":{},"name":"partition_id","nullable":true,"type":"string"},{"metadata":{},"name":"total_rows","nullable":true,"type":"long"},{"metadata":{},"name":"total_logical_bytes","nullable":true,"type":"long"},{"metadata":{},"name":"total_billable_bytes","nullable":true,"type":"long"},{"metadata":{},"name":"last_modified_time","nullable":true,"type":"timestamp"},{"metadata":{},"name":"storage_tier","nullable":true,"type":"string"}],"type":"struct"}')
 
+        self.schema_models[SchemaView.INFORMATION_SCHEMA_TABLE_CONSTRAINTS] = InformationSchemaModel.define(SchemaView.INFORMATION_SCHEMA_TABLE_CONSTRAINTS, 
+            "constraint_catalog,constraint_schema,constraint_name,table_catalog,table_schema,table_name,constraint_type,is_deferrable,initially_deferred,enforced",
+            '{"fields":[{"metadata":{},"name":"constraint_catalog","nullable":true,"type":"string"},{"metadata":{},"name":"constraint_schema","nullable":true,"type":"string"},{"metadata":{},"name":"constraint_name","nullable":true,"type":"string"},{"metadata":{},"name":"table_catalog","nullable":true,"type":"string"},{"metadata":{},"name":"table_schema","nullable":true,"type":"string"},{"metadata":{},"name":"table_name","nullable":true,"type":"string"},{"metadata":{},"name":"constraint_type","nullable":true,"type":"string"},{"metadata":{},"name":"is_deferrable","nullable":true,"type":"string"},{"metadata":{},"name":"initially_deferred","nullable":true,"type":"string"},{"metadata":{},"name":"enforced","nullable":true,"type":"string"}],"type":"struct"}')
+
+        self.schema_models[SchemaView.INFORMATION_SCHEMA_TABLE_OPTIONS] = InformationSchemaModel.define(SchemaView.INFORMATION_SCHEMA_TABLE_OPTIONS, 
+            "table_catalog,table_schema,table_name,option_name,option_type,option_value",
+            '{"fields":[{"metadata":{},"name":"table_catalog","nullable":true,"type":"string"},{"metadata":{},"name":"table_schema","nullable":true,"type":"string"},{"metadata":{},"name":"table_name","nullable":true,"type":"string"},{"metadata":{},"name":"option_name","nullable":true,"type":"string"},{"metadata":{},"name":"option_type","nullable":true,"type":"string"},{"metadata":{},"name":"option_value","nullable":true,"type":"string"}],"type":"struct"}')
+    
     def cleanup_metadata_cache(self):
         metadata_views = SyncConstants.get_information_schema_views()
         list(map(lambda x: self.Context.sql(f"DROP TABLE IF EXISTS BQ_{x.replace('.', '_')}"), metadata_views))
 
-    def task_runner(self, sync_function, workQueue:PriorityQueue):
-        while not workQueue.empty():
-            value = SchemaView[workQueue.get()]
+    def thread_exception_handler(self, value):
+        self.Logger.error(msg=f"ERROR {value}: {traceback.format_exc()}")
 
-            try:
-                sync_function(value)
-            except Exception as e:
-                print(f"ERROR {value}: {traceback.format_exc()}")
-                self.has_exception = True
-            finally:
-                workQueue.task_done()
-
-    def process_queue(self, workQueue:PriorityQueue, task_function, sync_function):
-        self.has_exception = False
-
-        for i in range(self.UserConfig.Async.Parallelism):
-            t=Thread(target=task_function, args=(sync_function, workQueue))
-            t.daemon = True
-            t.start() 
-            
-        workQueue.join()
-        
     def async_bq_metadata(self):
-        print(f"Async metadata update with parallelism of {self.UserConfig.Async.Parallelism}...")
+        self.Logger.sync_status(f"Async metadata update with parallelism of {self.UserConfig.Async.Parallelism}...")
 
-        workQueue = PriorityQueue()
+        processor = QueueProcessor(num_threads=self.UserConfig.Async.Parallelism)
 
         for view in SyncConstants.get_information_schema_views():
             vw = SchemaView[view]
             match vw:
-                case SchemaView.INFORMATION_SCHEMA_VIEWS:
-                    if self.UserConfig.EnableViews:
-                        workQueue.put(view)
-                case SchemaView.INFORMATION_SCHEMA_MATERIALIZED_VIEWS:
-                    if self.UserConfig.EnableMaterializedViews:
-                        workQueue.put(view)
+                case SchemaView.INFORMATION_SCHEMA_VIEWS | \
+                    SchemaView.INFORMATION_SCHEMA_MATERIALIZED_VIEWS | SchemaView.INFORMATION_SCHEMA_TABLES:
+                    processor.put((1,view))
                 case _:
-                    workQueue.put(view)
+                    processor.put((2,view))
 
-        self.process_queue(workQueue, self.task_runner, self.metadata_sync)
+        processor.process(self.metadata_sync, self.thread_exception_handler)
 
-        if self.has_exception:            
-            print("ERROR: Async metadata failed....please resolve errors and try again...")
+        if processor.has_exceptions:
+            self.has_exception = True            
+            self.Logger.error(msg="ERROR: Async metadata failed....please resolve errors and try again...")
+        else:
+            self.has_exception = False
 
-    def metadata_sync(self, view:SchemaView):
-        print(f"Syncing metadata for {view}...")
+    def metadata_sync(self, value, lock):
+        view = SchemaView[value[1]]
+        self.Logger.sync_status(f"Syncing metadata for {view}...")
+
+        mode = LoadType.OVERWRITE
 
         with SyncTimer() as t:
-            for p in self.UserConfig.GCPCredential.Projects:
+            #Clean-up existing table
+            self.Context.sql(f"DROP TABLE IF EXISTS BQ_{str(view).replace('.', '_')}")
+
+            for p in self.UserConfig.GCP.Projects:
                 for d in p.Datasets:
                     match view:
                         case SchemaView.INFORMATION_SCHEMA_TABLES:
-                            self.sync_bq_information_schema_core(project=p.ProjectID, dataset=d.Dataset, type=BigQueryObjectType.BASE_TABLE)
+                            self.sync_bq_information_schema_core(project=p.ProjectID, dataset=d.Dataset, type=BigQueryObjectType.BASE_TABLE, mode=mode)
                         case SchemaView.INFORMATION_SCHEMA_VIEWS:
-                            if self.UserConfig.EnableViews:
-                                self.sync_bq_information_schema_core(project=p.ProjectID, dataset=d.Dataset, type=BigQueryObjectType.VIEW)
+                            self.sync_bq_information_schema_core(project=p.ProjectID, dataset=d.Dataset, type=BigQueryObjectType.VIEW, mode=mode)
                         case SchemaView.INFORMATION_SCHEMA_MATERIALIZED_VIEWS:
-                            if self.UserConfig.EnableMaterializedViews:
-                                self.sync_bq_information_schema_core(project=p.ProjectID, dataset=d.Dataset, type=BigQueryObjectType.MATERIALIZED_VIEW)
+                            self.sync_bq_information_schema_core(project=p.ProjectID, dataset=d.Dataset, type=BigQueryObjectType.MATERIALIZED_VIEW, mode=mode)
                         case _:
-                            self.sync_bq_information_schema_table_dependent(project=p.ProjectID, dataset=d.Dataset, dependent_tbl=view)
+                            self.sync_bq_information_schema_table_dependent(project=p.ProjectID, dataset=d.Dataset, view=view, mode=mode)
+                    
+                    if mode == LoadType.OVERWRITE:
+                        mode = LoadType.APPEND
         
-        print(f"Syncing metadata for {view} completed in {str(t)}...")
+        self.Logger.sync_status(f"Syncing metadata for {view} completed in {str(t)}...")
 
-    def sync_metadata(self) -> bool:
-        """
-        Loads the required INFORMATION_SCHEMA tables from BigQuery:
-
-        1. TABLES
-        2. PARTITIONS
-        3. COLUMNS
-        4. TABLE_CONSTRAINTS
-        5. KEY_COLUMN_USAGE
-        6. TABLE_OPTIONS
-        7. VIEWS
-        8. MATERIALIZED VIEWS
-        """
-        print(f"BQ Metadata Update with BQ {'STANDARD' if self.UserConfig.UseStandardAPI == True else 'STORAGE'} API...")
+    @Telemetry.Metadata_Sync
+    def sync_metadata(self):        
+        self.Logger.sync_status(f"BQ Metadata Update with BQ {'STANDARD' if self.UserConfig.GCP.API.UseStandardAPI == True else 'STORAGE'} API...")
         with SyncTimer() as t:
-            self.cleanup_metadata_cache()
-
-            self.Context.conf.set("spark.databricks.delta.schema.autoMerge.enabled", "true")
             self.async_bq_metadata()
-            self.Context.conf.set("spark.databricks.delta.schema.autoMerge.enabled", "false")
 
-            if not self.has_exception:
-                self.create_proxy_views()
-        
         if not self.has_exception:
-            print(f"BQ Metadata Update completed in {str(t)}...")
-
-        return (self.has_exception == False)
+            self.create_proxy_views()
+            self.Logger.sync_status(f"BQ Metadata Update completed in {str(t)}...")
+        else:
+            raise MetadataSyncError(msg="BQ Metadata sync failed. Please check the logs.")
 
     def create_proxy_views(self):
         """
@@ -219,152 +281,11 @@ class BQMetadataLoader(ConfigBase):
 
         self.Metastore.create_autodetect_view()      
 
+    @Telemetry.Auto_Discover
     def auto_detect_config(self):
-        print("Auto-detecting schema/configuration...")
+        self.Logger.sync_status("Auto-detecting schema/configuration...")
 
         with SyncTimer() as t:
-            self.Metastore.auto_detect_table_profiles(self.UserConfig.ID, self.UserConfig.LoadAllTables)
-
-            if self.UserConfig.EnableViews:
-                self.Metastore.auto_detect_view_profiles(self.UserConfig.ID, self.UserConfig.LoadAllViews)
-
-            if self.UserConfig.EnableMaterializedViews:
-                self.Metastore.auto_detect_materialized_view_profiles(self.UserConfig.ID, self.UserConfig.LoadAllMaterializedViews)
+            self.Metastore.auto_detect_profiles(self.UserConfig.ID)
         
-        print(f"Auto-detect schema/configuration completed in {str(t)}...")
-    
-    def create_placeholder_dataframe(self, tbl:SchemaView):
-        match tbl:
-            case SchemaView.INFORMATION_SCHEMA_TABLES:
-                df = self.create_tables_placeholder()
-            case SchemaView.INFORMATION_SCHEMA_KEY_COLUMN_USAGE:
-                df = self.create_key_column_usage_placeholder()
-            case SchemaView.INFORMATION_SCHEMA_COLUMNS:
-                df = self.create_columns_placeholder()
-            case SchemaView.INFORMATION_SCHEMA_PARTITIONS:
-                df = self.create_partitions_placeholder()
-            case SchemaView.INFORMATION_SCHEMA_TABLE_CONSTRAINTS:
-                df = self.create_table_constraints_placeholder()
-            case SchemaView.INFORMATION_SCHEMA_TABLE_OPTIONS:
-                df = self.create_table_options_placeholder()
-            case SchemaView.INFORMATION_SCHEMA_VIEWS:
-                df = self.create_view_placeholder()
-            case SchemaView.INFORMATION_SCHEMA_MATERIALIZED_VIEWS:
-                df = self.create_materialized_view_placeholder()
-
-        return df
-
-    def create_view_placeholder(self) -> DataFrame:
-        df_schema = StructType([
-            StructField('table_catalog', StringType(), True), StructField('table_schema', StringType(), True), 
-            StructField('table_name', StringType(), True), StructField('view_definition', StringType(), True), 
-            StructField('check_option', StringType(), True), StructField('use_standard_sql', StringType(), True)])
-
-        df = self.Context.createDataFrame(data = self.Context.sparkContext.emptyRDD(),
-                                    schema = df_schema)
-        
-        return df
-
-    def create_materialized_view_placeholder(self) -> DataFrame:
-        df_schema = StructType([
-            StructField('table_catalog', StringType(), True), StructField('table_schema', StringType(), True), 
-            StructField('table_name', StringType(), True), StructField('last_refresh_time', TimestampType(), True), 
-            StructField('refresh_watermark', TimestampType(), True), 
-            StructField('last_refresh_status', StructType([StructField('reason', StringType(), True), 
-            StructField('location', StringType(), True), StructField('debug_info', StringType(), True), 
-            StructField('message', StringType(), True)]), True)])
-
-        df = self.Context.createDataFrame(data = self.Context.sparkContext.emptyRDD(),
-                                    schema = df_schema)
-        
-        return df
-
-    def create_key_column_usage_placeholder(self) -> DataFrame:
-        df_schema = StructType([
-            StructField('constraint_catalog', StringType(), True), StructField('constraint_schema', StringType(), True), 
-            StructField('constraint_name', StringType(), True), StructField('table_catalog', StringType(), True), 
-            StructField('table_schema', StringType(), True), StructField('table_name', StringType(), True), 
-            StructField('column_name', StringType(), True), StructField('ordinal_position', LongType(), True), 
-            StructField('position_in_unique_constraint', LongType(), True)])
-
-        df = self.Context.createDataFrame(data = self.Context.sparkContext.emptyRDD(),
-                                    schema = df_schema)
-        
-        return df
-    
-    def create_table_constraints_placeholder(self) -> DataFrame:
-        df_schema = StructType([
-            StructField('constraint_catalog', StringType(), True), StructField('constraint_schema', StringType(), True), 
-            StructField('constraint_name', StringType(), True), StructField('table_catalog', StringType(), True), 
-            StructField('table_schema', StringType(), True), StructField('table_name', StringType(), True), 
-            StructField('constraint_type', StringType(), True), StructField('is_deferrable', StringType(), True), 
-            StructField('initially_deferred', StringType(), True), StructField('enforced', StringType(), True)])
-
-        df = self.Context.createDataFrame(data = self.Context.sparkContext.emptyRDD(),
-                                    schema = df_schema)
-        
-        return df
-    
-    def create_table_options_placeholder(self) -> DataFrame:
-        df_schema = StructType([
-            StructField('table_catalog', StringType(), True), StructField('table_schema', StringType(), True), 
-            StructField('table_name', StringType(), True), StructField('option_name', StringType(), True), 
-            StructField('option_type', StringType(), True), StructField('option_value', StringType(), True)])
-
-        df = self.Context.createDataFrame(data = self.Context.sparkContext.emptyRDD(),
-                                    schema = df_schema)
-        
-        return df
-    
-    def create_tables_placeholder(self) -> DataFrame:
-        df_schema = StructType([
-            StructField('table_catalog', StringType(), True), StructField('table_schema', StringType(), True), 
-            StructField('table_name', StringType(), True), StructField('table_type', StringType(), True), 
-            StructField('is_insertable_into', StringType(), True), StructField('is_typed', StringType(), True), 
-            StructField('creation_time', TimestampType(), True), StructField('base_table_catalog', StringType(), True), 
-            StructField('base_table_schema', StringType(), True), StructField('base_table_name', StringType(), True), 
-            StructField('snapshot_time_ms', TimestampType(), True), StructField('ddl', StringType(), True), 
-            StructField('default_collation_name', StringType(), True), 
-            StructField('upsert_stream_apply_watermark', TimestampType(), True), 
-            StructField('replica_source_catalog', StringType(), True), StructField('replica_source_schema', StringType(), True), 
-            StructField('replica_source_name', StringType(), True), StructField('replication_status', StringType(), True), 
-            StructField('replication_error', StringType(), True), StructField('is_change_history_enabled', StringType(), True), 
-            StructField('sync_status', StructType([StructField('last_completion_time', TimestampType(), True), 
-            StructField('error_time', TimestampType(), True), 
-            StructField('error', StructType([StructField('reason', StringType(), True), StructField('location', StringType(), True), 
-            StructField('message', StringType(), True)]), True)]), True)])
-
-        df = self.Context.createDataFrame(data = self.Context.sparkContext.emptyRDD(),
-                                    schema = df_schema)
-        
-        return df
-    
-    def create_partitions_placeholder(self) -> DataFrame:
-        df_schema = StructType(
-            [StructField('table_catalog', StringType(), True), StructField('table_schema', StringType(), True), 
-            StructField('table_name', StringType(), True), StructField('partition_id', StringType(), True), 
-            StructField('total_rows', LongType(), True), StructField('total_logical_bytes', LongType(), True), 
-            StructField('total_billable_bytes', LongType(), True), 
-            StructField('last_modified_time', TimestampType(), True), StructField('storage_tier', StringType(), True)])
-
-        df = self.Context.createDataFrame(data = self.Context.sparkContext.emptyRDD(),
-                                    schema = df_schema)
-        
-        return df
-    
-    def create_columns_placeholder(self) -> DataFrame:
-        df_schema = StructType(
-            [StructField('table_catalog', StringType(), True), StructField('table_schema', StringType(), True), 
-            StructField('table_name', StringType(), True), StructField('column_name', StringType(), True), 
-            StructField('ordinal_position', LongType(), True), StructField('is_nullable', StringType(), True), 
-            StructField('data_type', StringType(), True), StructField('is_generated', StringType(), True), 
-            StructField('generation_expression', StringType(), True), StructField('is_stored', StringType(), True), 
-            StructField('is_hidden', StringType(), True), StructField('is_updatable', StringType(), True), 
-            StructField('is_system_defined', StringType(), True), StructField('is_partitioning_column', StringType(), True), 
-            StructField('clustering_ordinal_position', LongType(), True), StructField('collation_name', StringType(), True), 
-            StructField('column_default', StringType(), True), StructField('rounding_mode', StringType(), True)])
-
-        df = self.Context.createDataFrame(data = self.Context.sparkContext.emptyRDD(),
-                                    schema = df_schema)
-        
-        return df
+        self.Logger.sync_status(f"Auto-detect schema/configuration completed in {str(t)}...")

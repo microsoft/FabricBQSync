@@ -20,6 +20,7 @@ DROP TABLE IF EXISTS bq_sync_configuration;
 CREATE TABLE IF NOT EXISTS bq_sync_configuration
 (
     sync_id STRING,
+    table_id STRING,
     project_id STRING,
     dataset STRING,
     table_name STRING,
@@ -28,7 +29,9 @@ CREATE TABLE IF NOT EXISTS bq_sync_configuration
     lakehouse STRING,
     lakehouse_schema STRING,
     lakehouse_table_name STRING,
+    lakehouse_partition STRING,
     source_query STRING,
+    source_predicate STRING,
     priority INTEGER,
     load_strategy STRING,
     load_type STRING,
@@ -50,7 +53,7 @@ CREATE TABLE IF NOT EXISTS bq_sync_configuration
     flatten_table BOOLEAN,
     flatten_inplace BOOLEAN,
     explode_arrays BOOLEAN,
-    table_options ARRAY<STRUCT<key:STRING,value:STRING>>,
+    column_map STRING,
     config_override BOOLEAN,
     sync_state STRING,
     created_dt TIMESTAMP,
@@ -96,5 +99,6 @@ CREATE TABLE IF NOT EXISTS bq_sync_schedule_telemetry
     spark_application_id STRING,
     max_watermark STRING,
     summary_load STRING,
-    source_query STRING
+    source_query STRING,
+    source_predicate STRING
 );

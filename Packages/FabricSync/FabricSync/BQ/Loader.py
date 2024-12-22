@@ -1,19 +1,21 @@
+from pyspark.sql import SparkSession, DataFrame, Row
 from pyspark.sql.functions import *
 from pyspark.sql.types import *
-from pyspark.sql import Row
 from delta.tables import *
+
 from datetime import datetime, date, timezone
 from typing import Tuple
-from queue import PriorityQueue
-from threading import Thread, Lock
-import traceback
+from threading import Lock
 
-from ..Config import *
-from ..Core import *
-from ..Admin.DeltaTableUtility import *
-from ..Enum import *
+from .Model.Config import *
+from .Core import *
+from .Admin.DeltaTableUtility import *
+from .Enum import *
 from .Model.Schedule import SyncSchedule
+from .Model.Query import *
 from .SyncUtils import *
+from .Logging import *
+from .Exceptions import *
 
 class BQScheduleLoader(ConfigBase):
     """
@@ -25,25 +27,6 @@ class BQScheduleLoader(ConfigBase):
         Calls parent init to load User Config from JSON file
         """
         super().__init__(context, user_config, gcp_credential)
-        self._SyncTableIndex:list[str] = []
-        self._TableIndexLock = Lock()
-
-    def appendTableIndex(self, table:str):
-        """
-        Thread-safe list of sync'd tables
-        """
-        with self._TableIndexLock:
-            if not table in self._SyncTableIndex:
-                self._SyncTableIndex.append(table)
-    
-    def isTabledSynced(self, table:str) -> bool:
-        """
-        Thread-safe list exists for sync'd tables
-        """
-        with self._TableIndexLock:
-            exists = (table in self._SyncTableIndex)
-        
-        return exists
 
     def get_delta_merge_row_counts(self, schedule:SyncSchedule) -> Tuple[int, int, int]:
         """
@@ -77,28 +60,6 @@ class BQScheduleLoader(ConfigBase):
                 continue
 
         return (inserts, updates, deletes)
-
-    def get_max_watermark(self, schedule:SyncSchedule, df_bq:DataFrame) -> str:
-        """
-        Get the max value for the supplied table and column
-        """
-        df = df_bq.select(max(col(schedule.WatermarkColumn)).alias("watermark"))
-
-        max_watermark = None
-
-        for r in df.collect():
-            max_watermark = r["watermark"] 
-
-        val = None
-
-        if type(max_watermark) is date:
-            val = max_watermark.strftime("%Y-%m-%d")
-        elif type(max_watermark) is datetime:
-            val = max_watermark.strftime("%Y-%m-%d %H:%M:%S%z")
-        else:
-            val = str(max_watermark)
-
-        return val
 
     def merge_table(self, schedule:SyncSchedule, tableName:str, src:DataFrame) -> SyncSchedule:
         """
@@ -138,41 +99,51 @@ class BQScheduleLoader(ConfigBase):
 
         results = self.get_delta_merge_row_counts(schedule)
 
-        schedule.UpdateRowCounts(src=0, insert=results[0], update=results[1])
+        schedule.UpdateRowCounts(insert=results[0], update=results[1])
         
         return schedule
 
     def get_bq_table(self, schedule:SyncSchedule) -> tuple[SyncSchedule, DataFrame]:
+        qm = {
+            "ProjectId": schedule.ProjectId,
+            "Dataset": schedule.Dataset,
+            "TableName": schedule.BQTableName,
+            "Predicate": []
+        }
+        query_model = BQQueryModel(**qm)
+
         if schedule.IsTimePartitionedStrategy and schedule.PartitionId is not None:
             part_format = SyncUtil.get_bq_partition_id_format(schedule.PartitionGrain)
 
-            if schedule.PartitionDataType == BQDataType.TIMESTAMP:                  
+            if schedule.PartitionDataType == str(BQDataType.TIMESTAMP):                  
                 part_filter = f"timestamp_trunc({schedule.PartitionColumn}, {schedule.PartitionGrain}) = PARSE_TIMESTAMP('{part_format}', '{schedule.PartitionId}')"
             else:
                 part_filter = f"date_trunc({schedule.PartitionColumn}, {schedule.PartitionGrain}) = PARSE_DATETIME('{part_format}', '{schedule.PartitionId}')"
 
-            df_bq = self.read_bq_partition_to_dataframe(schedule.ProjectId, schedule.BQTableName, part_filter)
+            query_model.PartitionFilter = part_filter
         elif schedule.IsRangePartitioned:
             part_filter = SyncUtil.get_partition_range_predicate(schedule)
-            df_bq = self.read_bq_partition_to_dataframe(schedule.ProjectId, schedule.BQTableName, part_filter)
+            query_model.PartitionFilter = part_filter
         else:
-            if schedule.LoadStrategy == LoadStrategy.WATERMARK and not schedule.InitialLoad:
+            if schedule.Load_Strategy == str(LoadStrategy.WATERMARK) and not schedule.InitialLoad:
                 if schedule.MaxWatermark.isdigit():
                     predicate = f"{schedule.WatermarkColumn} > {schedule.MaxWatermark}"
                 else:
                     predicate = f"{schedule.WatermarkColumn} > '{schedule.MaxWatermark}'"
 
-                df_bq = self.read_bq_partition_to_dataframe(schedule.ProjectId, schedule.BQTableName, predicate)
-            else:
-                src = schedule.BQTableName     
+                query_model.add_predicate(predicate)
+        
+        if schedule.SourceQuery:
+            query_model.Query = schedule.SourceQuery
+                
+        if schedule.SourcePredicate:
+            query_model.add_predicate(schedule.SourcePredicate)
 
-                if schedule.SourceQuery:
-                    src = schedule.SourceQuery
+        df_bq = self.read_bq_to_dataframe(query_model, cache_results=True)
 
-                df_bq = self.read_bq_to_dataframe(schedule.ProjectId, src)
+        if schedule.IsPartitioned and not schedule.LakehousePartition:
+            if schedule.Partition_Type == str(PartitionType.TIME):
 
-        if schedule.IsPartitioned:
-            if schedule.PartitionType == PartitionType.TIME:
                 proxy_cols = SyncUtil.get_fabric_partition_proxy_cols(schedule.PartitionGrain)
                 schedule.FabricPartitionColumns = SyncUtil.get_fabric_partition_cols(schedule.PartitionColumn, proxy_cols)
 
@@ -187,13 +158,13 @@ class BQScheduleLoader(ConfigBase):
         return (schedule, df_bq)
 
     def save_bq_dataframe(self, schedule:SyncSchedule, df_bq:DataFrame, lock:Lock) -> SyncSchedule:
-        write_config = { **schedule.TableOptions }
+        write_config = { }
         table_maint = None
 
         #Flattening complex types (structs & arrays)
         df_bq_flattened = None
         if schedule.FlattenTable:
-            if schedule.LoadType == LoadType.MERGE and schedule.ExplodeArrays:
+            if schedule.Load_Type == str(LoadType.MERGE) and schedule.ExplodeArrays:
                 raise Exception("Invalid load configuration: Merge is not supported when Explode Arrays is enabed")
                 
             if schedule.FlattenInPlace:
@@ -208,36 +179,36 @@ class BQScheduleLoader(ConfigBase):
                 table_maint.evolve_schema(df_bq)
                 write_config["mergeSchema"] = True
 
-        if not schedule.LoadType == LoadType.MERGE or schedule.InitialLoad:
+        if not schedule.Load_Type == str(LoadType.MERGE) or schedule.InitialLoad:
             if schedule.IsPartitionedSyncLoad:
                 has_lock = False
 
-                if schedule.InitialLoad:
+                if schedule.InitialLoad or schedule.LakehousePartition:
                     has_lock = True
                     lock.acquire()
                 else:
                     write_config["partitionOverwriteMode"] = "dynamic"
                 
                 try:
+                    partition_cols = self.get_lakehouse_partitions(schedule)
+
                     df_bq.write \
-                        .partitionBy(schedule.FabricPartitionColumns) \
+                        .partitionBy(partition_cols) \
                         .mode(str(LoadType.OVERWRITE)) \
                         .options(**write_config) \
                         .saveAsTable(schedule.LakehouseTableName)
-                    
+                        
                     if df_bq_flattened:
-                       df_bq_flattened.write \
-                            .partitionBy(schedule.FabricPartitionColumns) \
+                        df_bq_flattened.write \
+                            .partitionBy(partition_cols) \
                             .mode(str(LoadType.OVERWRITE)) \
                             .options(**write_config) \
                             .saveAsTable(f"{schedule.LakehouseTableName}_flattened") 
                 finally:
-                    self.appendTableIndex(schedule.LakehouseTableName)
-
                     if has_lock:
                         lock.release()
             else:
-                if schedule.FabricPartitionColumns is None:
+                if not schedule.FabricPartitionColumns and not schedule.LakehousePartition:
                     df_bq.write \
                         .mode(schedule.Mode) \
                         .options( **write_config) \
@@ -249,36 +220,32 @@ class BQScheduleLoader(ConfigBase):
                             .options( **write_config) \
                             .saveAsTable(f"{schedule.LakehouseTableName}_flattened")
                 else:
+                    partition_cols = self.get_lakehouse_partitions(schedule)
+
                     df_bq.write \
-                        .partitionBy(schedule.FabricPartitionColumns) \
+                        .partitionBy(partition_cols) \
                         .mode(schedule.Mode) \
                         .options( **write_config) \
                         .saveAsTable(schedule.LakehouseTableName)
                     
                     if df_bq_flattened:
                         df_bq_flattened.write \
-                            .partitionBy(schedule.FabricPartitionColumns) \
+                            .partitionBy(partition_cols) \
                             .mode(schedule.Mode) \
                             .options( **write_config) \
                             .saveAsTable(f"{schedule.LakehouseTableName}_flattened")
-                
-                self.appendTableIndex(schedule.LakehouseTableName)
         else:
             schedule = self.merge_table(schedule, schedule.LakehouseTableName, df_bq)
 
             if df_bq_flattened:
                 self.merge_table(schedule, f"{schedule.LakehouseTableName}_flattened", df_bq)
 
-            self.appendTableIndex(schedule.LakehouseTableName)
-
         if not table_maint:
             table_maint = DeltaTableMaintenance(self.Context, schedule.LakehouseTableName)
 
-        if schedule.LoadStrategy == LoadStrategy.WATERMARK:
-            schedule.MaxWatermark = self.get_max_watermark(schedule, df_bq)
+        src_cnt, schedule.MaxWatermark = self.get_source_metrics(schedule, df_bq)
 
-        src_cnt = df_bq.count()
-        schedule.UpdateRowCounts(src_cnt, 0, 0)    
+        schedule.UpdateRowCounts(src=src_cnt)    
         schedule.SparkAppId = self.Context.sparkContext.applicationId
         schedule.DeltaVersion = table_maint.CurrentTableVersion
         schedule.EndTime = datetime.now(timezone.utc)
@@ -287,6 +254,84 @@ class BQScheduleLoader(ConfigBase):
         df_bq.unpersist()
 
         return schedule
+
+    def get_source_metrics(self, schedule:SyncSchedule, df_bq:DataFrame):
+        row_count = 0
+        watermark = None
+
+        if schedule.Load_Strategy == str(LoadStrategy.WATERMARK):
+            df = df_bq.select(max(col(schedule.WatermarkColumn)).alias("watermark"), count("*").alias("row_count"))
+
+            row = df.first()
+            max_watermark = row["watermark"]
+            row_count = row["row_count"]
+
+            if type(max_watermark) is date:
+                watermark = max_watermark.strftime("%Y-%m-%d")
+            elif type(max_watermark) is datetime:
+                watermark = max_watermark.strftime("%Y-%m-%d %H:%M:%S%z")
+            else:
+                watermark = str(max_watermark)
+        else:
+            df = df_bq.select(count("*").alias("row_count"))
+
+            row = df.first()
+            row_count = row["row_count"]
+        
+        return (row_count, watermark)
+
+    def get_lakehouse_partitions(self, schedule:SyncSchedule):
+        if schedule.LakehousePartition:
+            return schedule.LakehousePartition.split(",")
+        else:
+            return schedule.FabricPartitionColumns
+
+    def transform(self, schedule:SyncSchedule, df_bq:DataFrame):
+        df_bq = self.map_columns(schedule, df_bq)
+
+        return (schedule, df_bq)
+
+    def map_columns(self, schedule:SyncSchedule, df_bq:DataFrame) -> DataFrame:
+        maps = schedule.get_column_map()
+
+        if maps:
+            for m in maps:
+                df_bq = self.map_column(m, df_bq)
+        
+        return df_bq 
+
+    def map_column(self, map:MappedColumn, df:DataFrame) -> DataFrame:
+        if map.IsTypeConversion:
+            type_map = f"{map.Source.Type}_TO_{map.Destination.Type}"
+
+            supported_conversion = False
+
+            try:
+                type_conversion = SupportedTypeConversion[type_map]
+                supported_conversion = True
+            except KeyError:
+                self.Logger.sync_status(f"WARNING: Skipped Unsupported Type Conversion ({map.Source.Name}): {map.Source.Type} to {map.Destination.Type}")
+                supported_conversion = False
+
+            if supported_conversion:
+                match type_conversion:
+                    case SupportedTypeConversion.STRING_TO_DATE:
+                        df = df.withColumn(map.Destination.Name, to_date(col(map.Source.Name), map.Format))
+                    case SupportedTypeConversion.STRING_TO_TIMESTAMP:
+                        df = df.withColumn(map.Destination.Name, to_timestamp(col(map.Source.Name), map.Format))
+                    case SupportedTypeConversion.STRING_TO_DECIMAL:
+                        df = df.withColumn(map.Destination.Name, try_to_number(col(map.Source.Name), lit(map.Format)))
+                    case SupportedTypeConversion.DATE_TO_STRING | SupportedTypeConversion.TIMESTAMP_TO_STRING:
+                        df = df.withColumn(map.Destination.Name, date_format(col(map.Source.Name), map.Format))
+                    case _:
+                        df = df.withColumn(map.Destination.Name, col(map.Source.Name).cast(map.Destination.Type.lower()))
+                
+                if map.DropSource:
+                    df = df.drop(map.Source.Name)
+        elif map.IsRename:
+            df = df.withColumnRenamed(map.Source.Name, map.Destination.Name)
+
+        return df
 
     def sync_bq_table(self, schedule:SyncSchedule, lock:Lock = None):
         """
@@ -314,14 +359,26 @@ class BQScheduleLoader(ConfigBase):
             self.show_sync_status(schedule, message=schedule.SummaryLoadType)
 
             #Get BQ table using sync config
-            schedule, df_bq = self.get_bq_table(schedule)
+            try:
+                schedule, df_bq = self.get_bq_table(schedule)
+            except Exception as e:
+                raise SyncLoadError(msg="Failed to retrieve table from BQ", data=schedule) from e
+
+            #Transform
+            try:
+                schedule, df_bq = self.transform(schedule, df_bq)
+            except Exception as e:
+                raise SyncLoadError(msg="Transformation failed during sync", data=schedule) from e
 
             #On initial load, force drop the table to ensure a clean load
             if schedule.InitialLoad and not schedule.IsPartitionedSyncLoad:
                 self.Context.sql(f"DROP TABLE IF EXISTS {schedule.LakehouseTableName}")
                 
             #Save BQ table to Lakehouse
-            schedule = self.save_bq_dataframe(schedule, df_bq, lock)
+            try:
+                schedule = self.save_bq_dataframe(schedule, df_bq, lock)
+            except Exception as e:
+                raise FabricLakehouseError(msg="Error writing BQ table to Lakehouse", data=schedule) from e
 
         self.show_sync_status(schedule, message="FINISHED", status=f"in {str(t)}")
 
@@ -334,116 +391,107 @@ class BQScheduleLoader(ConfigBase):
             msg_header = f"{msg_header}${schedule.PartitionId}"
 
         if not status:
-            print(f"{msg_header}...")
+            self.Logger.sync_status(f"{msg_header}...")
         else:
-            print(f"{msg_header} {status}...")
+            self.Logger.sync_status(f"{msg_header} {status}...")
 
     def save_schedule_telemetry(self, schedule:SyncSchedule):
         """
         Write status and telemetry from sync schedule to Sync Schedule Telemetry Delta table
         """
-        rdd = self.Context.sparkContext.parallelize([Row( \
-            schedule_id=schedule.ScheduleId, \
-            sync_id=schedule.SyncId, \
-            project_id=schedule.ProjectId, \
-            dataset=schedule.Dataset, \
-            table_name=schedule.TableName, \
-            partition_id=schedule.PartitionId, \
-            status=str(schedule.Status), \
-            started=schedule.StartTime, \
-            completed=schedule.EndTime, \
-            src_row_count=schedule.SourceRows, \
-            inserted_row_count=schedule.InsertedRows, \
-            updated_row_count=schedule.UpdatedRows, \
-            delta_version=schedule.DeltaVersion, \
-            spark_application_id=schedule.SparkAppId, \
-            max_watermark=schedule.MaxWatermark, \
-            summary_load=schedule.SummaryLoadType, \
-            source_query=schedule.SourceQuery \
+        rdd = self.Context.sparkContext.parallelize([Row( 
+            schedule_id=schedule.ScheduleId, 
+            sync_id=schedule.SyncId, 
+            project_id=schedule.ProjectId, 
+            dataset=schedule.Dataset, 
+            table_name=schedule.TableName, 
+            partition_id=schedule.PartitionId, 
+            status=str(schedule.Status), 
+            started=schedule.StartTime, 
+            completed=schedule.EndTime, 
+            src_row_count=schedule.SourceRows, 
+            inserted_row_count=schedule.InsertedRows, 
+            updated_row_count=schedule.UpdatedRows, 
+            delta_version=schedule.DeltaVersion, 
+            spark_application_id=schedule.SparkAppId, 
+            max_watermark=schedule.MaxWatermark, 
+            summary_load=schedule.SummaryLoadType, 
+            source_query=schedule.SourceQuery, 
+            source_predicate=schedule.SourcePredicate 
         )])
 
         self.Metastore.save_schedule_telemetry(rdd)
 
-    def run_sequential_schedule(self, group_schedule_id:str) -> bool:
-        print(f"Sequential schedule sync starting...")
+    def run_sequential_schedule(self, sync_id:str, schedule_type:str) -> bool:
+        self.Logger.sync_status(f"Sequential schedule sync starting...")
 
         initial_loads = False
 
         with SyncTimer() as t:
-            df_schedule = self.Metastore.get_schedule(group_schedule_id)           
+            df_schedule = self.Metastore.get_schedule(sync_id, schedule_type)           
 
             for row in df_schedule.collect():
-                schedule = SyncSchedule(row)
+                d = row.asDict()
+                schedule = SyncSchedule(**d)
+                schedule.StartTime = datetime.now(timezone.utc)
 
                 if schedule.InitialLoad:
                     initial_loads = True
 
-                self.sync_bq_table(schedule)
-                self.save_schedule_telemetry(schedule)  
+                self.schedule_sync(schedule)
 
-            self.Metastore.process_load_group_telemetry(group_schedule_id)
+            self.Logger.sync_status("Processing Sync Telemetry...")
+            self.Metastore.process_load_group_telemetry(sync_id, schedule_type)
 
-        print(f"Sequential schedule sync completed in {str(t)}...")
+        self.Logger.sync_status(f"Sequential schedule sync completed in {str(t)}...")
         return initial_loads
-    
-    def schedule_sync(self, schedule:SyncSchedule, lock:Lock) -> SyncSchedule:
+
+    @Telemetry.Sync_Load    
+    def schedule_sync(self, schedule:SyncSchedule, lock=None) -> SyncSchedule:
+        schedule.StartTime = datetime.now(timezone.utc)
         schedule = self.sync_bq_table(schedule, lock)
         self.save_schedule_telemetry(schedule) 
 
         return schedule
 
-    def task_runner(self, sync_function, workQueue:PriorityQueue, lock:Lock):
-        while not workQueue.empty():
-            value = workQueue.get()
-            schedule = value[2]
+    def schedule_sync_wrapper(self, value, lock=None) -> SyncSchedule:
+        schedule = value[2]
+        return self.schedule_sync(schedule, lock)
 
-            try:
-                sync_function(schedule, lock)
-            except Exception as e:
-                ex_stack = traceback.format_exc()
-                print(f"ERROR with {schedule.ProjectId}.{schedule.Dataset}.{schedule.TableName}: {ex_stack}")
-                schedule.Status = SyncStatus.FAILED
-                schedule.SummaryLoadType = f"ERROR: {ex_stack}"
-                self.save_schedule_telemetry(schedule) 
-            finally:
-                workQueue.task_done()
+    def thread_exception_handler(self, value):
+        schedule = value[2]
 
-    def process_queue(self, workQueue:PriorityQueue, task_function, sync_function):
-        lock = Lock() 
-        for i in range(self.UserConfig.Async.Parallelism):
-            t=Thread(target=task_function, args=(sync_function, workQueue, lock))
-            t.daemon = True
-            t.start() 
-            
-        workQueue.join()
+        schedule.Status = SyncStatus.FAILED
+        schedule.SummaryLoadType = f"ERROR: {e}"
+        self.save_schedule_telemetry(schedule) 
+        logging.error(msg=f"ERROR with {schedule.ProjectId}.{schedule.Dataset}.{schedule.TableName}: {e}")
 
-    def run_schedule(self, group_schedule_id:str) -> bool:
+    def run_schedule(self, sync_id:str, schedule_type:str) -> bool:
         if self.UserConfig.Async.Enabled:
-            initial_loads = self.run_async_schedule(group_schedule_id)
+            return self.run_async_schedule(sync_id, schedule_type)
         else:
-            initial_loads = self.run_sequential_schedule(group_schedule_id)
-        
-        return initial_loads
+            return self.run_sequential_schedule(sync_id, schedule_type)
 
-    def run_async_schedule(self, group_schedule_id:str) -> bool:
-        print(f"Async schedule started with parallelism of {self.UserConfig.Async.Parallelism}...")
+    def run_async_schedule(self, sync_id:str, schedule_type:str) -> bool:
+        self.Logger.sync_status(f"Async schedule started with parallelism of {self.UserConfig.Async.Parallelism}...")
 
         initial_loads = False
 
-        with SyncTimer() as tt:
-            workQueue = PriorityQueue()
+        with SyncTimer() as t:
+            processor = QueueProcessor(num_threads=self.UserConfig.Async.Parallelism)
 
-            schedule = self.Metastore.get_schedule(group_schedule_id)
+            schedule = self.Metastore.get_schedule(sync_id, schedule_type)
 
             load_grps = [i["priority"] for i in schedule.select("priority").distinct().orderBy("priority").collect()]
 
             if load_grps:
                 for grp in load_grps:
                     grp_nm = "LOAD GROUP {0}".format(grp)
-                    grp_df = schedule.where(f"priority = '{grp}'").sort("total_rows")
+                    grp_df = schedule.where(f"priority = '{grp}'")
 
                     for tbl in grp_df.collect():
-                        s = SyncSchedule(tbl)
+                        d = tbl.asDict()
+                        s = SyncSchedule(**d)
                         nm = "{0}.{1}".format(s.Dataset, s.TableName)        
 
                         if s.PartitionId is not None:
@@ -452,16 +500,24 @@ class BQScheduleLoader(ConfigBase):
                         if s.InitialLoad:
                             initial_loads = True
 
-                        workQueue.put((s.Priority, nm, s))
+                        priority = s.Priority + tbl["size_priority"]
+                        processor.put((priority, nm, s))
 
-                    if not workQueue.empty():
-                        print(f"### Processing {grp_nm}...")
+                    if not processor.empty():
+                        self.Logger.sync_status(f"### Processing {grp_nm}...")
+
                         with SyncTimer() as t:                        
-                            self.process_queue(workQueue, self.task_runner, self.schedule_sync)
-                        print(f"### {grp_nm} completed in {str(t)}...")
+                            processor.process(self.schedule_sync_wrapper, self.thread_exception_handler)
 
-                self.Metastore.process_load_group_telemetry(group_schedule_id)
+                        if not processor.has_exceptions:
+                            self.Logger.sync_status(f"### {grp_nm} completed in {str(t)}...")
+                        else:
+                            self.Logger.sync_status(f"### {grp_nm} FAILED...")
+                            break
+
+                self.Logger.sync_status("Processing Sync Telemetry...")
+                self.Metastore.process_load_group_telemetry(sync_id, schedule_type)
        
-        print(f"Async schedule sync completed in {str(tt)}...")
+        self.Logger.sync_status(f"Async schedule sync finished in {str(t)}...")
 
         return initial_loads

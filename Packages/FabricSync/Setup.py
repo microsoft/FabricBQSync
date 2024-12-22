@@ -5,7 +5,7 @@ with open('requirements.txt') as f:
 
 setup(
     name='FabricSync',
-    version='1.1.0',
+    version='2.0.0',
     author='Microsoft GBBs North America',  
     author_email='chriprice@microsoft.com',
     description='Fabric Data Sync Utility',

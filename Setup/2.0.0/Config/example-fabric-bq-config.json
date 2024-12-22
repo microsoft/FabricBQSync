@@ -1,0 +1,137 @@
+{
+    "correlation_id": "[APPLICATION_CORRELATION_ID]",
+    "id": "[APPLICATION_NAME]",
+    "enable_data_expiration": false,
+    "autodiscover": {
+        "autodetect": true,
+        "tables": {
+            "enabled": false,
+            "load_all": false,
+            "filter": null
+        },
+        "views": {
+            "enabled": false,
+            "load_all": false,
+            "filter": null
+        },
+        "materialized_views": {
+            "enabled": false,
+            "load_all": false,
+            "filter": null
+        }
+    },
+    "logging": {
+        "log_level": "SYNC_STATUS",
+        "log_path": "[LOG_PATH_AND_NAME]"
+    },
+    "fabric": {
+        "workspace_id": null,
+        "metadata_lakehouse": null,
+        "target_lakehouse": null,
+        "target_schema": null,
+        "enable_schemas": false
+    },
+    "gcp": {
+        "api": {
+            "use_standard_api": false,
+            "auto_select": false,
+            "materialization_project_id": null,
+            "materialization_dataset": null,
+            "billing_project_id": null
+        },
+        "projects": [
+            {
+                "project_id": null,
+                "datasets": [
+                    {
+                        "dataset": null
+                    }
+                ]
+            }
+        ],
+        "gcp_credentials": {
+            "credential_path": null,
+            "access_token": null,
+            "credential": null
+        }
+    },
+    "async": {
+        "enabled": true,
+        "parallelism": 10,
+        "notebook_timeout": 3600,
+        "cell_timeout": 1800
+    },
+    "table_defaults": {
+        "project_id": null,
+        "dataset": null,
+        "object_type": "BASE_TABLE",
+        "priority": 100,
+        "load_strategy": "FULL",
+        "load_type": "OVERWRITE",
+        "interval": "AUTO",
+        "enabled": true,
+        "enforce_expiration": false,
+        "allow_schema_evolution": false,
+        "flatten_table": false,
+        "flatten_inplace": true,
+        "explode_arrays": true,
+        "table_maintenance": {
+            "enabled": false,
+            "interval": "MONTH"
+        }
+    },
+    "tables": [
+        {
+            "project_id": null,
+            "dataset": null,
+            "object_type": "BASE_TABLE",
+            "priority": 100,
+            "load_strategy": "FULL",
+            "load_type": "OVERWRITE",
+            "interval": "AUTO",
+            "enabled": true,
+            "enforce_expiration": false,
+            "allow_schema_evolution": false,
+            "flatten_table": false,
+            "flatten_inplace": true,
+            "explode_arrays": true,
+            "table_maintenance": {
+                "enabled": false,
+                "interval": "MONTH"
+            },
+            "table_name": null,
+            "source_query": null,
+            "predicate": null,
+            "column_map": [
+                {
+                    "source": null,
+                    "destination": null,
+                    "format": null,
+                    "drop_source": false
+                }
+            ],
+            "lakehouse_target": {
+                "lakehouse": null,
+                "schema": null,
+                "table_name": null,
+                "partition_by": null
+            },
+            "bq_partition": {
+                "enabled": false,
+                "type": null,
+                "column": null,
+                "partition_grain": null,
+                "partition_data_type": null,
+                "partition_range": null
+            },
+            "keys": [
+                {
+                    "column": null
+                }
+            ],
+            "watermark": {
+                "column": null
+            }
+        }
+    ]
+}

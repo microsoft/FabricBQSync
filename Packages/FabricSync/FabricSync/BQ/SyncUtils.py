@@ -3,11 +3,12 @@ from pyspark.sql.types import *
 from delta.tables import *
 from datetime import datetime
 
-from ..Config import *
-from ..Core import *
-from ..Admin.DeltaTableUtility import *
-from ..Enum import *
+from .Model.Config import *
+from .Core import *
+from .Admin.DeltaTableUtility import *
+from .Enum import *
 from .Model.Schedule import SyncSchedule
+from .Constants import SyncConstants
 
 class BQDataRetention(ConfigBase):
     """
@@ -20,9 +21,9 @@ class BQDataRetention(ConfigBase):
         super().__init__(context, user_config, gcp_credential)
     
     def execute(self):        
-        print ("Enforcing Data Expiration/Retention Policy...")
+        self.Logger.Sync_Status("Enforcing Data Expiration/Retention Policy...")
         self._enforce_retention_policy()
-        print ("Updating Data Expiration/Retention Policy...")
+        self.Logger.Sync_Status("Updating Data Expiration/Retention Policy...")
         self.Metastore.sync_retention_config(self.UserConfig.ID)
 
     def _enforce_retention_policy(self):
@@ -37,15 +38,21 @@ class BQDataRetention(ConfigBase):
             table_maint = DeltaTableMaintenance(self.Context, table_name)
 
             if d["partition_id"]:
-                print(f"Expiring Partition: {table_name}${d['partition_id']}")
+                self.Logger.Sync_Status(f"Expiring Partition: {table_name}${d['partition_id']}")
                 predicate = SyncUtil.resolve_fabric_partition_predicate(d["partition_type"], d["partition_column"], 
                     d["partition_grain"], d["partition_id"])
                 table_maint.drop_partition(predicate)
             else:
-                print(f"Expiring Table: {table_name}")
+                self.Logger.Sync_Status(f"Expiring Table: {table_name}")
                 table_maint.drop_table()  
 
 class SyncUtil():
+    @staticmethod
+    def optimize_bq_sync_metastore(context):
+        for tbl in SyncConstants.get_metadata_tables():
+            table_maint = DeltaTableMaintenance(context, tbl)
+            table_maint.optimize_and_vacuum()
+
     @staticmethod
     def flatten_structs(nested_df:DataFrame) -> DataFrame:
         """
@@ -97,7 +104,6 @@ class SyncUtil():
         if PartitionType[partition_type] == PartitionType.TIME:
             partition_dt=SyncUtil.get_derived_date_from_part_id(partition_grain, partition_id)
             proxy_cols = SyncUtil.get_fabric_partition_proxy_cols(partition_grain)
-
             predicate = SyncUtil.get_fabric_partition_predicate(partition_dt, partition_column, proxy_cols) 
         else:
             predicate = f"__{partition_column}_Range='{partition_id}'"
