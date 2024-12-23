@@ -1,4 +1,4 @@
-# BigQuery (BQ) Sync
+# BigQuery (BQ) Sync v2.0
 
 This project is provided as an accelerator to help synchronize or migrate data from Google BigQuery to Fabric. The primary use cases for this accelerator are:
  - BigQuery customers who wish to continue to leverage their existing investments and data estate while optimizing their PowerBI experience and reducing overall analytics TCO
@@ -7,7 +7,7 @@ This project is provided as an accelerator to help synchronize or migrate data f
 # Getting Started
 
 The accelerator includes an automated installer that can set up your Fabric workspace and install all required dependencies automatically. To use the installer:
-1. Download the Installer Notebook
+1. Download the current Installer Notebook
 2. Import the installer into your Fabric Workspace
 3. Attach the installer to a Lakehouse within the Workspace
 4. Upload your GCP Service Account credential json file to OneLake
@@ -82,14 +82,17 @@ Once the data is synchronized, it is immediately available for downstream consum
 
 Within the accelerator there is an ever-growing set of capabilities that either offer feature parity or enhance & optimize the overall synchronization process. Below is an overview of some of the core capabilities:
 - Multi-Project/Multi-Dataset sync support
+- Table pattern-match filters to filter (include/exclude) during discovery
 - Table & Partition expiration based on BigQuery configuration
 - Synching support for Views & Materialized Views
 - Support for handling tables with required partition filters
 - BigQuery connector configuration for alternative billing and materialization targets
-- Ability to rename BigQuery tables and map to specific Lakehouse
+- Rename BigQuery tables and map to specific Lakehouse targets
+- Rename or convert data types using table-level column mapping
+- Shape BigQuery source with an alternate source sql query and/or source predicate
 - Complex-type (STRUCT/ARRAY) handling/flattening
 - Support for Delta schema evolution for evolving BigQuery table/view schemas
-- Support for Delta table options for Lakehouse performance/optimization
+- Override BigQuery native partitioning with a partitioning schema optimized for the Lakehouse (Delta partitioning)
 - Automatic Lakehouse table maintenance on synced tables
 - Detailed process telemetry that tracks data movement and pairs with native Delta Time Travel capabilities
 
