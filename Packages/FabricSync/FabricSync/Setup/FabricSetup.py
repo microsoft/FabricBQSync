@@ -143,6 +143,7 @@ class SetupUtils():
                     nb_data = nb_data.replace("<<<PATH_SPARK_BQ_JAR>>>", data["spark_jar_path"])
                     nb_data = nb_data.replace("<<<PATH_TO_BQ_SYNC_PACKAGE>>>", data["wheel_path"])
                     nb_data = nb_data.replace("<<<PATH_TO_USER_CONFIG>>>", data["user_config_file_path"])
+                    nb_data = nb_data.replace("<<<VERSION>>>", data["version"])
 
                 fabric_api.upload_fabric_notebook(workspace_id, notebook["name"], nb_data)
             except Exception as e:
@@ -225,9 +226,9 @@ class Installer():
 
     def _get_sql_source_from_git(self, local_path:str):
         git_content = [
-            {"name": "bq_sync_metadata.csv", "url": f"{Installer.GIT_URL}/Setup/{self.data['version']}/SQL/bq_sync_metadata.csv"},
-            {"name": "bq_data_types.csv", "url": f"{Installer.GIT_URL}/Setup/{self.data['version']}/Data/bq_data_types.csv"},
-            {"name": "MetadataRepo.sql", "url":f"{Installer.GIT_URL}/Setup/{self.data['version']}/SQL/MetadataRepo.sql"}
+            {"name": "bq_sync_metadata.csv", "url": f"{Installer.GIT_URL}/Setup/v{self.data['version']}/SQL/bq_sync_metadata.csv"},
+            {"name": "bq_data_types.csv", "url": f"{Installer.GIT_URL}/Setup/v{self.data['version']}/Data/bq_data_types.csv"},
+            {"name": "MetadataRepo.sql", "url":f"{Installer.GIT_URL}/Setup/v{self.data['version']}/SQL/MetadataRepo.sql"}
             ]
 
         for c in git_content:
