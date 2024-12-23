@@ -1,4 +1,4 @@
-from pyspark.sql import SparkSession, DataFrame, Row
+from pyspark.sql import SparkSession, DataFrame, Row, Observation
 from pyspark.sql.functions import *
 from pyspark.sql.types import *
 from delta.tables import *
@@ -103,7 +103,7 @@ class BQScheduleLoader(ConfigBase):
         
         return schedule
 
-    def get_bq_table(self, schedule:SyncSchedule) -> tuple[SyncSchedule, DataFrame]:
+    def get_bq_table(self, schedule:SyncSchedule) -> tuple[SyncSchedule, DataFrame, Observation]:
         qm = {
             "ProjectId": schedule.ProjectId,
             "Dataset": schedule.Dataset,
@@ -139,7 +139,21 @@ class BQScheduleLoader(ConfigBase):
         if schedule.SourcePredicate:
             query_model.add_predicate(schedule.SourcePredicate)
 
-        df_bq = self.read_bq_to_dataframe(query_model, cache_results=True)
+        if self.UserConfig.Optimization.UseApproximateRowCounts:
+            query_model.Cached = False
+
+            observation = Observation(name="BQSyncMetricsObservation")
+        else:
+            observation = None
+
+        df_bq = self.read_bq_to_dataframe(query_model)
+
+        if observation:
+            if schedule.Load_Strategy == str(LoadStrategy.WATERMARK) and schedule.WatermarkColumn:
+                df_bq = df_bq.observe(observation, count(lit(1)).alias("row_count"),
+                    max(col(schedule.WatermarkColumn)).alias("watermark"))
+            else:
+                df_bq = df_bq.observe(observation, count(lit(1)).alias("row_count"))
 
         if schedule.IsPartitioned and not schedule.LakehousePartition:
             if schedule.Partition_Type == str(PartitionType.TIME):
@@ -155,9 +169,9 @@ class BQScheduleLoader(ConfigBase):
                 schedule.FabricPartitionColumns = [f"__{schedule.PartitionColumn}_Range"]
                 df_bq = SyncUtil.create_fabric_range_partition(self.Context, df_bq, schedule)
         
-        return (schedule, df_bq)
+        return (schedule, df_bq, observation)
 
-    def save_bq_dataframe(self, schedule:SyncSchedule, df_bq:DataFrame, lock:Lock) -> SyncSchedule:
+    def save_bq_dataframe(self, schedule:SyncSchedule, df_bq:DataFrame, lock:Lock, observation:Observation = None) -> SyncSchedule:
         write_config = { }
         table_maint = None
 
@@ -255,29 +269,37 @@ class BQScheduleLoader(ConfigBase):
 
         return schedule
 
-    def get_source_metrics(self, schedule:SyncSchedule, df_bq:DataFrame):
+    def format_watermark(self, max_watermark):
+        if type(max_watermark) is date:
+            return max_watermark.strftime("%Y-%m-%d")
+        elif type(max_watermark) is datetime:
+            return max_watermark.strftime("%Y-%m-%d %H:%M:%S%z")
+        else:
+            return str(max_watermark)
+
+    def get_source_metrics(self, schedule:SyncSchedule, df_bq:DataFrame, observation:Observation = None):
         row_count = 0
         watermark = None
 
-        if schedule.Load_Strategy == str(LoadStrategy.WATERMARK):
-            df = df_bq.select(max(col(schedule.WatermarkColumn)).alias("watermark"), count("*").alias("row_count"))
+        if self.UserConfig.Optimization.UseApproximateRowCounts and observation:
+            observations = observation.get
+            row_count = observations["row_count"]
 
-            row = df.first()
-            max_watermark = row["watermark"]
-            row_count = row["row_count"]
-
-            if type(max_watermark) is date:
-                watermark = max_watermark.strftime("%Y-%m-%d")
-            elif type(max_watermark) is datetime:
-                watermark = max_watermark.strftime("%Y-%m-%d %H:%M:%S%z")
-            else:
-                watermark = str(max_watermark)
+            if "watermark" in observations:
+                watermark = self.format_watermark(observations["watermark"])
         else:
-            df = df_bq.select(count("*").alias("row_count"))
+            if schedule.Load_Strategy == str(LoadStrategy.WATERMARK):
+                df = df_bq.select(max(col(schedule.WatermarkColumn)).alias("watermark"), count("*").alias("row_count"))
 
-            row = df.first()
-            row_count = row["row_count"]
-        
+                row = df.first()
+                row_count = row["row_count"]
+                watermark = self.format_watermark(row["watermark"])
+            else:
+                df = df_bq.select(count("*").alias("row_count"))
+
+                row = df.first()
+                row_count = row["row_count"]
+            
         return (row_count, watermark)
 
     def get_lakehouse_partitions(self, schedule:SyncSchedule):
@@ -360,7 +382,7 @@ class BQScheduleLoader(ConfigBase):
 
             #Get BQ table using sync config
             try:
-                schedule, df_bq = self.get_bq_table(schedule)
+                schedule, df_bq, observation = self.get_bq_table(schedule)
             except Exception as e:
                 raise SyncLoadError(msg="Failed to retrieve table from BQ", data=schedule) from e
 
@@ -376,7 +398,7 @@ class BQScheduleLoader(ConfigBase):
                 
             #Save BQ table to Lakehouse
             try:
-                schedule = self.save_bq_dataframe(schedule, df_bq, lock)
+                schedule = self.save_bq_dataframe(schedule, df_bq, lock, observation)
             except Exception as e:
                 raise FabricLakehouseError(msg="Error writing BQ table to Lakehouse", data=schedule) from e
 

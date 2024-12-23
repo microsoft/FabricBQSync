@@ -198,14 +198,14 @@ class ConfigBase():
         
         return cfg
         
-    def read_bq_to_dataframe(self, query:BQQueryModel, schema:StructType = None, cache_results:bool=True) -> DataFrame:
+    def read_bq_to_dataframe(self, query:BQQueryModel, schema:StructType = None) -> DataFrame:
         try:
             if query.API == str(BigQueryAPI.STORAGE):
                 df = self.read_bq_storage_to_dataframe(query)
             else:
                 df = self.read_bq_standard_to_dataframe(query, schema)
-            
-            if cache_results:
+
+            if query.Cached:
                 df.cache()
         except Exception as e:
             raise BQConnectorError(msg="Read to dataframe failed.", query=query) from e

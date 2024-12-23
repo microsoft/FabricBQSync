@@ -10,7 +10,6 @@ import os
 import json
 import shutil
 import pandas as pd
-import datetime
 from pathlib import Path
 import uuid
 import random
@@ -22,8 +21,40 @@ from ..BQ.Core import *
 from ..BQ.SyncUtils import *
 from ..BQ.Utils import *
 from ..BQ.Exceptions import *
+from ..BQ.Constants import SyncConstants
 
 class SetupUtils():
+    def get_current_version(context:SparkSession):
+        uri = context.conf.get(f"{SyncConstants.SPARK_CONF_PREFIX}.telemetry_endpoint")
+        api_proxy = RestAPIProxy(base_url=uri)
+
+        try:
+            response = api_proxy.get(endpoint="version")
+            json_data = response.json()
+
+            return json_data["version"]
+        except Exception as e:
+            return  None
+
+    def check_for_update(context:SparkSession, version:str = None):
+        current_version = SetupUtils.get_current_version(context)
+
+        if not current_version:
+            return (False, None)
+
+        if not version:
+            version = "1.1.0"
+        
+        parsed_v = pv.parse(version)
+        parsed_cv = pv.parse(current_version)
+
+        if parsed_v < parsed_cv:
+            return (True, current_version)
+        else:
+            return (False, version)
+        
+        return (False, None)
+
     def read_file_to_string(path:str) -> str:
         contents = ""
 
@@ -93,6 +124,30 @@ class SetupUtils():
 
         with open(config_path, "w") as outfile:
             outfile.write(json_obj)
+    
+    def download_notebooks(workspace_id, git_notebooks, data=None, notebooks_path=None, use_local=False):
+        fabric_api = FabricAPIUtil()
+
+        for notebook in git_notebooks:
+            try:
+                if not use_local:
+                    nb_data = SetupUtils.download_encoded_to_string(notebook["url"])
+                else:
+                    nb_local = SetupUtils.read_file_to_string(f"{notebooks_path}/{notebook['file_name']}")
+                    nb_data = "\r\n".join(nb_local)
+
+                if data:
+                    nb_data = nb_data.replace("<<<FABRIC_WORKSPACE_ID>>>", data["workspace_id"])
+                    nb_data = nb_data.replace("<<<METADATA_LAKEHOUSE_ID>>>", data["metadata_lakehouse_id"])
+                    nb_data = nb_data.replace("<<<METADATA_LAKEHOUSE_NAME>>>", data["metadata_lakehouse"])
+                    nb_data = nb_data.replace("<<<PATH_SPARK_BQ_JAR>>>", data["spark_jar_path"])
+                    nb_data = nb_data.replace("<<<PATH_TO_BQ_SYNC_PACKAGE>>>", data["wheel_path"])
+                    nb_data = nb_data.replace("<<<PATH_TO_USER_CONFIG>>>", data["user_config_file_path"])
+
+                fabric_api.upload_fabric_notebook(workspace_id, notebook["name"], nb_data)
+            except Exception as e:
+                error_msg = f"Failed to deploye BQ Sync notebook to workspace: {notebook['name']}"
+                raise SyncInstallError(msg="error_msg") from e
 
 class MetaStoreDataUpdates():
     def process(self, context:SparkSession, version):
@@ -111,11 +166,12 @@ class MetaStoreDataUpdates():
         )
 
 class Installer():
+    GIT_URL = "https://raw.githubusercontent.com/microsoft/FabricBQSync/main"
+
     def __init__(self, context:SparkSession): 
         self.data = {}
         self.Context = context
         self.correlation_id = str(uuid.uuid4())
-        self.GIT_URL = "https://raw.githubusercontent.com/microsoft/FabricBQSync/main"
 
         self.working_path = "Files/BQ_Sync_Process"
         self.base_path = f"/lakehouse/default/{self.working_path}"
@@ -145,7 +201,7 @@ class Installer():
         self.data = data 
 
         cfg = ConfigDataset()
-        
+
         if "version" not in data:
             data["version"] = cfg.Version
         
@@ -169,9 +225,9 @@ class Installer():
 
     def _get_sql_source_from_git(self, local_path:str):
         git_content = [
-            {"name": "bq_sync_metadata.csv", "url": f"{self.GIT_URL}/Setup/{self.data['version']}/bq_sync_metadata.csv"},
-            {"name": "bq_data_types.csv", "url": f"{self.GIT_URL}/Setup/{self.data['version']}/Data/bq_data_types.csv"},
-            {"name": "MetadataRepo.sql", "url":f"{self.GIT_URL}/Setup/SQL/{self.data['version']}/MetadataRepo.sql"}
+            {"name": "bq_sync_metadata.csv", "url": f"{Installer.GIT_URL}/Setup/{self.data['version']}/SQL/bq_sync_metadata.csv"},
+            {"name": "bq_data_types.csv", "url": f"{Installer.GIT_URL}/Setup/{self.data['version']}/Data/bq_data_types.csv"},
+            {"name": "MetadataRepo.sql", "url":f"{Installer.GIT_URL}/Setup/{self.data['version']}/SQL/MetadataRepo.sql"}
             ]
 
         for c in git_content:
@@ -256,7 +312,7 @@ class Installer():
 
     def _download_sync_wheel(self):
         self.data["wheel_name"] = f"FabricSync-{self.data['version']}-py3-none-any.whl"
-        wheel_url = f"{self.GIT_URL}/Packages/FabricSync/dist/{self.data['wheel_name']}"
+        wheel_url = f"{Installer.GIT_URL}/Packages/FabricSync/dist/{self.data['wheel_name']}"
 
         SetupUtils.download_file(wheel_url, f"{self.libs_path}/{self.data['wheel_name']}")
 
@@ -372,41 +428,23 @@ class Installer():
         
         if len(c["tables"]) == 0:
             del c["tables"]
-        
-        return c
-    
-    def _download_notebooks(self):
+
+        return c        
+
+    def _download_sync_notebook(self):
         random_int = random.randint(1, 1000)
         randomizer = f"0000{random_int}"
         git_notebooks = [ \
                     {"name": f"BQ-Sync-Notebook-v{self.data['version']}-{randomizer[-4:]}", 
-                        "url": f"{self.GIT_URL}/Notebooks/v{self.data['version']}/BQ-Sync.ipynb",
+                        "url": f"{Installer.GIT_URL}/Notebooks/v{self.data['version']}/BQ-Sync.ipynb",
                         "file_name": "BQ-Sync.ipynb"}]
-
-        fabric_api = FabricAPIUtil()
-
-        for notebook in git_notebooks:
-            try:
-                if not self.use_local_artifacts:
-                    nb_data = SetupUtils.download_encoded_to_string(notebook["url"])
-                else:
-                    nb_local = SetupUtils.read_file_to_string(f"{self.notebooks_path}/{notebook['file_name']}")
-                    nb_data = "\r\n".join(nb_local)
-
-                nb_data = nb_data.replace("<<<FABRIC_WORKSPACE_ID>>>", self.data["workspace_id"])
-                nb_data = nb_data.replace("<<<METADATA_LAKEHOUSE_ID>>>", self.data["metadata_lakehouse_id"])
-                nb_data = nb_data.replace("<<<METADATA_LAKEHOUSE_NAME>>>", self.data["metadata_lakehouse"])
-                nb_data = nb_data.replace("<<<PATH_SPARK_BQ_JAR>>>", self.data["spark_jar_path"])
-                nb_data = nb_data.replace("<<<PATH_TO_BQ_SYNC_PACKAGE>>>", self.data["wheel_path"])
-                nb_data = nb_data.replace("<<<PATH_TO_USER_CONFIG>>>", self.data["user_config_file_path"])
-
-                fabric_api.upload_fabric_notebook(self.data["workspace_id"], notebook["name"], nb_data)
-
-                self.Logger.sync_status(f"{notebook['name']} successfully copied to workspace, it may take a moment to appear...")
-            except Exception as e:
-                error_msg = f"Failed to deploye BQ Sync notebook to workspace: {notebook['name']}"
-                self.Logger.error(error_msg)
-                raise SyncInstallError(msg="error_msg") from e
+        
+        try:
+            SetupUtils.download_notebooks(self.data["workspace_id"], git_notebooks, self.data, self.notebooks_path, self.use_local_artifacts)
+            self.Logger.sync_status(f"Notebook successfully copied to workspace, it may take a moment to appear...")
+        except SyncInstallError as e:
+            self.Logger.error(e)
+            raise e
         
         if self.cleanup_artifacts:
             shutil.rmtree(self.notebooks_path)
@@ -415,7 +453,7 @@ class Installer():
         cfg = ConfigDataset()
         data["version"] = cfg.Version
         data["workspace_id"] = self.Context.conf.get("trident.workspace.id")
-        
+
         config_data = self._parse_user_config(data)
 
         current_id = Util.get_config_value(config_data, "correlation_id", None)
@@ -543,7 +581,7 @@ class Installer():
 
                 #Get sync notebooks from Git, customize and install into the workspace
                 self.Logger.sync_status("Copying updated BQ Sync artifacts to Fabric workspace...")
-                self._download_notebooks()
+                self._download_sync_notebook()
         
         self.Logger.sync_status(f"BQ Sync Upgrade finished in {str(t)}!")
 
@@ -607,6 +645,6 @@ class Installer():
             #Get sync notebooks from Git, customize and install into the workspace
             self.Logger.sync_status("Copying BQ Sync artifacts to Fabric workspace...")
 
-            self._download_notebooks()
+            self._download_sync_notebook()
         
         self.Logger.sync_status(f"BQ Sync Installer finished in {str(t)}!")

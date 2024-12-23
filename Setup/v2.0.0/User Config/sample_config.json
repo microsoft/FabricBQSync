@@ -1,7 +1,11 @@
 {
-    "correlation_id": "[APPLICATION_CORRELATION_ID]",
-    "id": "[APPLICATION_NAME]",
+    "correlation_id": "<<<System Assigned UUID>>>",
+    "id": "<<<User-defined name>>>",
+    "version": "2.0.0",
     "enable_data_expiration": false,
+    "optimization": {
+        "use_approximate_row_counts": false
+    },
     "autodiscover": {
         "autodetect": true,
         "tables": {
@@ -22,7 +26,7 @@
     },
     "logging": {
         "log_level": "SYNC_STATUS",
-        "log_path": "[LOG_PATH_AND_NAME]"
+        "log_path": "/lakehouse/default/Files/BQ_Sync_Process/logs/fabric_sync.log"
     },
     "fabric": {
         "workspace_id": null,
@@ -64,10 +68,10 @@
     "table_defaults": {
         "project_id": null,
         "dataset": null,
-        "object_type": "BASE_TABLE",
+        "object_type": "<<<BASE_TABLE | VIEW | MATERIALIZED_VIEW>>>",
         "priority": 100,
-        "load_strategy": "FULL",
-        "load_type": "OVERWRITE",
+        "load_strategy": "<<<FULL | WATERMARK | PARTITION>>>",
+        "load_type": "<<<OVERWRITE | APPEND | MERGE>>>",
         "interval": "AUTO",
         "enabled": true,
         "enforce_expiration": false,
@@ -77,17 +81,17 @@
         "explode_arrays": true,
         "table_maintenance": {
             "enabled": false,
-            "interval": "MONTH"
+            "interval": "<<<DAY | WEEK | MONTH>>>"
         }
     },
     "tables": [
         {
             "project_id": null,
             "dataset": null,
-            "object_type": "BASE_TABLE",
+            "object_type": "<<<BASE_TABLE | VIEW | MATERIALIZED_VIEW>>>",
             "priority": 100,
-            "load_strategy": "FULL",
-            "load_type": "OVERWRITE",
+            "load_strategy": "<<<FULL | WATERMARK | PARTITION>>>",
+            "load_type": "<<<OVERWRITE | APPEND | MERGE>>>",
             "interval": "AUTO",
             "enabled": true,
             "enforce_expiration": false,
@@ -97,7 +101,7 @@
             "explode_arrays": true,
             "table_maintenance": {
                 "enabled": false,
-                "interval": "MONTH"
+                "interval": "<<<DAY | WEEK | MONTH>>>"
             },
             "table_name": null,
             "source_query": null,

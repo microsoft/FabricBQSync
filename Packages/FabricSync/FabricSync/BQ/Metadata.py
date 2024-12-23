@@ -10,6 +10,7 @@ from .Admin.DeltaTableUtility import *
 from .Enum import *
 from .Exceptions import *
 from .Constants import SyncConstants
+
 class BQMetadataLoader(ConfigBase):
     """
     Class handles:
@@ -58,7 +59,8 @@ class BQMetadataLoader(ConfigBase):
                 "ProjectId": project,
                 "Dataset": dataset,
                 "Query": schema_model.get_base_sql(project, dataset),
-                "API": bq_api
+                "API": bq_api,
+                "Cached": False
             }
             query_model = BQQueryModel(**qm)
 
@@ -102,7 +104,7 @@ class BQMetadataLoader(ConfigBase):
                 if filter_pattern:
                     query_model.add_predicate(filter_pattern, PredicateType.AND)
 
-            df = self.read_bq_to_dataframe(query_model, schema=schema_model.get_df_schema(), cache_results=False)
+            df = self.read_bq_to_dataframe(query_model, schema=schema_model.get_df_schema())
 
             if not df:
                 df = schema_model.get_empty_df(self.Context)
@@ -138,7 +140,8 @@ class BQMetadataLoader(ConfigBase):
             "ProjectId": project,
             "Dataset": dataset,
             "Query": bql,
-            "API": bq_api
+            "API": bq_api,
+            "Cached": False
         }
 
         query_model = BQQueryModel(**qm)
@@ -162,7 +165,7 @@ class BQMetadataLoader(ConfigBase):
             if filter_pattern:
                 query_model.add_predicate(f"t.{filter_pattern}", PredicateType.AND)                
 
-        df = self.read_bq_to_dataframe(query_model, schema=schema_model.get_df_schema(), cache_results=False)
+        df = self.read_bq_to_dataframe(query_model, schema=schema_model.get_df_schema())
 
         if not df:
             df = schema_model.get_empty_df(self.Context)

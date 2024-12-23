@@ -5,6 +5,7 @@ from pyspark.sql import DataFrame, SparkSession
 import json
 
 from .Config import *
+
 class BQQueryModelPredicate(SyncBaseModel):
     Type:str = Field(alias="type", default=str(PredicateType.AND))
     Predicate:str = Field(alias="predicate", default=None)
@@ -17,6 +18,8 @@ class BQQueryModel(SyncBaseModel):
     PartitionFilter:str = Field(alias="PartitionFilter", default=None)
     Predicate:Optional[List[BQQueryModelPredicate]] = Field(alias="Predicate", default=None)
     API:str = Field(alias="API", default=str(BigQueryAPI.STORAGE))
+
+    Cached:bool = Field(alias="Cached", default=True)
 
     def add_predicate(self, predicate:str, type:PredicateType=PredicateType.AND):
         d = {"predicate": predicate, "type":str(type)}
