@@ -1,72 +1,42 @@
-from pyspark.sql.functions import *
-from pyspark.sql.types import *
-from delta.tables import *
-import uuid
+from pyspark.sql.session import SparkSession, DataFrame
+from pyspark.sql.functions import col, coalesce
+from typing import List
 
-from .Admin.DeltaTableUtility import *
 from .Enum import *
+from .Exceptions import *
 
 class FabricMetastore():
     def __init__(self, context:SparkSession):
         self.Context = context
-    
-    def get_current_schedule(self, sync_id:str, schedule_type:ScheduleType) -> str:
+
+    def build_schedule(self, sync_id:str, schedule_type:ScheduleType):
         sql = f"""
-        SELECT DISTINCT group_schedule_id FROM bq_sync_schedule
-        WHERE sync_id = '{sync_id}'
-        AND schedule_type = '{schedule_type}'
-        AND status NOT IN ('COMPLETE', 'SKIPPED', 'EXPIRED')
-        """
-        df = self.Context.sql(sql)
-
-        schedule = [s["group_schedule_id"] for s in df.collect()]
-        schedule_id = None
-
-        if schedule:
-            schedule_id = schedule[0]
-    
-        return schedule_id
-
-    def build_new_schedule(self, schedule_type:ScheduleType, sync_id:str, enable_views:bool, enable_materialized_views:bool) -> str:
-        """
-        Process responsible for creating and saving the sync schedule
-        """
-        group_schedule_id = uuid.uuid4()
-
-        if enable_views:
-            sql_v = """
-            UNION ALL
-            SELECT table_catalog, table_schema, table_name, NULL
-            FROM bq_information_schema_views              
-            """
-        else:
-            sql_v = ""
-
-        if enable_materialized_views:    
-            sql_mv = """
-            UNION ALL
-            SELECT table_catalog, table_schema, table_name, last_refresh_time
-            FROM bq_information_schema_materialized_views
-            """
-        else:
-            sql_mv = ""
-
-        sql = f"""
-        WITH new_schedule AS ( 
-            SELECT '{group_schedule_id}' AS group_schedule_id, CURRENT_TIMESTAMP() as scheduled
+        WITH current_schedule AS (
+            SELECT sync_id, project_id, dataset, table_name, schedule_type
+            FROM bq_sync_schedule
+            WHERE sync_id = '{sync_id}'
+            AND schedule_type = '{schedule_type}'
+            AND status NOT IN ('COMPLETE', 'SKIPPED', 'EXPIRED')
+        ),
+        new_schedule AS ( 
+            SELECT uuid() AS group_schedule_id, CURRENT_TIMESTAMP() as scheduled
         ),
         last_bq_tbl_updates AS (
             SELECT table_catalog, table_schema, table_name, max(last_modified_time) as last_bq_tbl_update
             FROM bq_information_schema_partitions
             GROUP BY table_catalog, table_schema, table_name
-            {sql_v}
-            {sql_mv}
+            UNION ALL
+            SELECT table_catalog, table_schema, table_name, NULL
+            FROM bq_information_schema_views  
+            UNION ALL
+            SELECT table_catalog, table_schema, table_name, last_refresh_time
+            FROM bq_information_schema_materialized_views
         ),
         last_load AS (
-            SELECT sync_id, project_id, dataset, table_name, MAX(started) AS last_load_update
+            SELECT sync_id, project_id, dataset, table_name, schedule_type, MAX(started) AS last_load_update
             FROM bq_sync_schedule
             WHERE status='COMPLETE'
-            GROUP BY sync_id, project_id, dataset, table_name
+            GROUP BY sync_id, project_id, dataset, table_name, schedule_type
         ),
         schedule AS (
             SELECT
@@ -76,7 +46,7 @@ class FabricMetastore():
                 c.project_id,
                 c.dataset,
                 c.table_name,
-                '{schedule_type}' as schedule_type,
+                c.interval AS schedule_type,
                 n.scheduled,
                 CASE WHEN ((l.last_load_update IS NULL) OR (b.last_bq_tbl_update IS NULL) OR
                         (b.last_bq_tbl_update >= l.last_load_update)) THEN 'SCHEDULED'
@@ -93,30 +63,33 @@ class FabricMetastore():
                 c.project_id= b.table_catalog AND
                 c.dataset = b.table_schema AND
                 c.table_name = b.table_name
-            LEFT JOIN bq_sync_schedule s ON 
-                c.sync_id=s.sync_id AND
-                c.project_id= s.project_id AND
-                c.dataset = s.dataset AND
-                c.table_name = s.table_name AND
-                s.schedule_type = '{schedule_type}' AND
-                s.status = 'SCHEDULED' 
             LEFT JOIN last_load l ON 
                 c.sync_id=l.sync_id AND
                 c.project_id= l.project_id AND
                 c.dataset = l.dataset AND
-                c.table_name = l.table_name
+                c.table_name = l.table_name AND
+                c.interval = l.schedule_type
+            LEFT ANTI JOIN current_schedule d ON
+                c.sync_id=d.sync_id AND
+                c.project_id= d.project_id AND
+                c.dataset = d.dataset AND
+                c.table_name = d.table_name AND
+                c.interval = d.schedule_type
             CROSS JOIN new_schedule n
-            WHERE s.schedule_id IS NULL
-            AND c.enabled = TRUE
+            WHERE c.enabled = TRUE
+            --AND d.group_schedule_id IS NULL
+            AND c.interval='{schedule_type}'
         )
 
         INSERT INTO bq_sync_schedule
         SELECT * FROM schedule s
         WHERE s.sync_id = '{sync_id}'
         """
-        self.Context.sql(sql)
 
-        return group_schedule_id
+        try:
+            self.Context.sql(sql)
+        except Exception as e:
+            raise SchedulerError() from e
         
     def save_schedule_telemetry(self, rdd):
         """
@@ -127,9 +100,13 @@ class FabricMetastore():
         schema = self.Context.table(tbl).schema
 
         df = self.Context.createDataFrame(rdd, schema)
-        df.write.mode("APPEND").saveAsTable(tbl)
 
-    def get_schedule(self, group_schedule_id:str):
+        try:
+            df.write.mode("APPEND").saveAsTable(tbl)
+        except Exception as e:
+            raise SyncLoadError("Error Saving Schedule Telemetry") from e
+
+    def get_schedule(self, sync_id:str, schedule_type:str):
         """
         Gets the schedule activities that need to be run based on the configuration and metadata
         """
@@ -148,6 +125,19 @@ class FabricMetastore():
             SELECT table_catalog, table_schema, table_name, CAST(option_value AS boolean) AS option_value
             FROM bq_information_schema_table_options
             WHERE option_name='require_partition_filter'
+        ),
+        tbl_size AS (
+            SELECT
+                *,
+                ROW_NUMBER() OVER(ORDER BY total_logical_mb DESC) AS size_priority
+            FROM (
+                SELECT
+                    table_catalog, table_schema, table_name,
+                    SUM(total_rows) AS total_rows,
+                    ROUND(SUM(total_logical_bytes)/ (1024 * 1024),0) AS total_logical_mb
+                FROM bq_information_schema_partitions sp
+                GROUP BY table_catalog, table_schema, table_name
+            )
         ),
         tbl_partitions AS (
             SELECT
@@ -170,11 +160,34 @@ class FabricMetastore():
                 )
         )
 
-        SELECT c.*, 
+        SELECT
+            c.table_id, c.sync_id, c.load_strategy, c.load_type,
+            c.priority, c.project_id, c.dataset, c.table_name,
+            c.object_type, 
+            CASE WHEN (c.source_query='') THEN NULL ELSE c.source_query END AS source_query, 
+            CASE WHEN (c.source_predicate='') THEN NULL ELSE c.source_predicate END AS source_predicate,
+            CASE WHEN (c.watermark_column='') THEN NULL ELSE c.watermark_column END AS watermark_column,
+            c.is_partitioned, 
+            CASE WHEN (c.partition_column='') THEN NULL ELSE c.partition_column END AS partition_column, 
+            CASE WHEN (c.partition_grain='') THEN NULL ELSE c.partition_grain END AS partition_grain, 
+            CASE WHEN (c.partition_range='') THEN NULL ELSE c.partition_range END AS partition_range,
+            CASE WHEN (c.partition_type='') THEN NULL ELSE c.partition_type END AS partition_type,  
+            CASE WHEN (c.partition_data_type='') THEN NULL ELSE c.partition_data_type END AS partition_data_type, 
+            c.lakehouse,
+            CASE WHEN (c.lakehouse_schema='') THEN NULL ELSE c.lakehouse_schema END AS lakehouse_schema, 
+            c.lakehouse_table_name, 
+            CASE WHEN (c.lakehouse_partition='') THEN NULL ELSE c.lakehouse_partition END AS lakehouse_partition, 
+            c.use_lakehouse_schema,
+            c.enforce_expiration, c.allow_schema_evolution, c.table_maintenance_enabled, c.table_maintenance_interval,
+            c.flatten_table, c.flatten_inplace, c.explode_arrays, c.primary_keys,
             p.partition_id,p.require_partition_filter,
-            s.group_schedule_id,s.schedule_id,h.max_watermark,h.last_schedule_dt,
+            s.group_schedule_id,s.schedule_id,s.status AS sync_status,s.started,s.completed,
+            h.max_watermark,h.last_schedule_dt,
+            c.column_map,
             CASE WHEN (h.schedule_id IS NULL) THEN TRUE ELSE FALSE END AS initial_load,
-            ps.total_rows
+            COALESCE(ts.total_rows, 0) AS total_rows, 
+            COALESCE(ts.total_logical_mb, 0) AS total_logical_mb, 
+            COALESCE(ts.size_priority, 100) AS size_priority
         FROM bq_sync_configuration c
         JOIN bq_sync_schedule s ON c.sync_id = s.sync_id AND c.project_id = s.project_id 
             AND c.dataset = s.dataset AND  c.table_name = s.table_name
@@ -185,39 +198,49 @@ class FabricMetastore():
         LEFT JOIN bq_sync_schedule_telemetry t ON s.sync_id = t.sync_id AND s.schedule_id = t.schedule_id 
             AND c.project_id = t.project_id AND c.dataset = t.dataset AND c.table_name = t.table_name AND
             COALESCE(p.partition_id, '0') = COALESCE(t.partition_id, '0') AND t.status = 'COMPLETE'
-        LEFT JOIN bq_information_schema_partitions ps ON c.project_id = ps.table_catalog AND c.dataset = ps.table_schema 
-            AND c.table_name = ps.table_name AND COALESCE(p.partition_id, '0') = COALESCE(ps.partition_id, '0')
-        WHERE s.status = 'SCHEDULED' AND c.enabled = TRUE AND t.schedule_id IS NULL
-            AND s.group_schedule_id = '{group_schedule_id}'
-        ORDER BY c.priority ASC, ps.total_rows ASC
+        LEFT JOIN tbl_size ts ON c.project_id = ts.table_catalog AND c.dataset = ts.table_schema 
+            AND c.table_name = ts.table_name
+        WHERE s.status IN ('SCHEDULED', 'FAILED') AND c.enabled = TRUE AND t.schedule_id IS NULL
+            AND c.sync_id='{sync_id}'
+            AND s.schedule_type='{schedule_type}'
         """
         df = self.Context.sql(sql)
         df.createOrReplaceTempView("LoaderQueue")
         df.cache()
 
-        return df
+        try:
+            return df
+        except Exception as e:
+            raise SchedulerError("Failed to retrieve BQ Sync schedule") from e
 
-    def process_load_group_telemetry(self, group_schedule_id:str):
+    def process_load_group_telemetry(self, sync_id:str, schedule_type:str):
         """
         When a load group is complete, summarizes the telemetry to close out the schedule
         """
         sql = f"""
-        WITH schedule_telemetry AS (
+        WITH schedule_telemetry_last AS (
+            SELECT
+                sync_id,schedule_id,project_id,dataset,table_name,status,started,completed,max_watermark,
+                ROW_NUMBER()OVER(PARTITION BY sync_id,schedule_id,project_id,dataset,table_name 
+                    ORDER BY started DESC) AS row_num
+            FROM bq_sync_schedule_telemetry
+        ),        
+        schedule_telemetry AS (
             SELECT
                 sync_id,schedule_id,project_id,dataset,table_name,
                 SUM(CASE WHEN status='COMPLETE' THEN 1 ELSE 0 END) AS completed_activities,
                 SUM(CASE WHEN status='FAILED' THEN 1 ELSE 0 END) AS failed_activities,
                 MIN(started) as started,MAX(completed) as completed
-            FROM bq_sync_schedule_telemetry
+            FROM schedule_telemetry_last
+            WHERE row_num = 1
             GROUP BY sync_id,schedule_id,project_id,dataset,table_name
         ),
         schedule_watermarks AS (
             SELECT
-                sync_id, schedule_id, project_id,dataset, table_name,max_watermark,
-                ROW_NUMBER() OVER(PARTITION BY schedule_id,project_id,dataset,table_name 
-                    ORDER BY completed DESC) AS row_num
-            FROM bq_sync_schedule_telemetry
+                sync_id,schedule_id,project_id,dataset,table_name,max_watermark
+            FROM schedule_telemetry_last
             WHERE max_watermark IS NOT NULL
+            AND row_num=1
         ),
         schedule_results AS (
             SELECT
@@ -230,8 +253,10 @@ class FabricMetastore():
                 s.project_id=t.project_id AND s.dataset=t.dataset AND s.table_name=t.table_name
             LEFT JOIN schedule_watermarks w ON s.sync_id=w.sync_id AND s.schedule_id=w.schedule_id 
                 AND s.project_id=w.project_id AND s.dataset=w.dataset AND s.table_name=w.table_name
-            WHERE s.group_schedule_id = '{group_schedule_id}' AND s.status='SCHEDULED'
-        )  
+            WHERE s.sync_id='{sync_id}'
+            AND s.schedule_type='{schedule_type}' 
+            AND s.status IN ('SCHEDULED', 'FAILED')
+        ) 
 
         MERGE INTO bq_sync_schedule s
         USING schedule_results r
@@ -247,10 +272,13 @@ class FabricMetastore():
                 s.max_watermark = r.max_watermark
 
         """
-        print("Processing Sync Telemetry...")
-        self.Context.sql(sql)
 
-    def commit_table_configuration(self, group_schedule_id:str):
+        try:
+            self.Context.sql(sql)
+        except Exception as e:
+            raise SyncLoadError("Error processing Load Group telemetry") from e
+
+    def commit_table_configuration(self, sync_id:str, schedule_type:str):
         """
         After an initial load, locks the table configuration so no changes can occur when reprocessing metadata
         """
@@ -258,7 +286,9 @@ class FabricMetastore():
         WITH committed AS (
             SELECT sync_id, project_id, dataset, table_name, MAX(started) as started
             FROM bq_sync_schedule
-            WHERE status='COMPLETE' AND group_schedule_id = '{group_schedule_id}'
+            WHERE status='COMPLETE' AND 
+            sync_id='{sync_id}' AND
+            schedule_type='{schedule_type}'
             GROUP BY sync_id, project_id, dataset, table_name
         )
 
@@ -269,9 +299,11 @@ class FabricMetastore():
             UPDATE SET
                 t.sync_state='COMMIT'
         """
-
-        print("Committing Sync Table Configuration...")
-        self.Context.sql(sql)
+        
+        try:
+            self.Context.sql(sql)
+        except Exception as e:
+            raise SchedulerError("Error committing BQ Sync configuration") from e
     
     def create_userconfig_tables_proxy_view(self):
         """
@@ -298,20 +330,22 @@ class FabricMetastore():
                 COALESCE(tbl.table_maintenance.enabled,default_table_maintenance_enabled) AS table_maintenance_enabled,
                 COALESCE(tbl.table_maintenance.interval,default_table_maintenance_interval) AS table_maintenance_interval,
                 tbl.source_query,
+                tbl.predicate AS source_predicate,
                 tbl.load_strategy,
                 tbl.load_type,                
                 tbl.watermark.column as watermark_column,
-                tbl.partitioned.enabled as partition_enabled,
-                tbl.partitioned.type as partition_type,
-                tbl.partitioned.column as partition_column,
-                tbl.partitioned.partition_grain,
-                tbl.partitioned.partition_data_type,
-                tbl.partitioned.partition_range,
+                tbl.bq_partition.enabled as partition_enabled,
+                tbl.bq_partition.type as partition_type,
+                tbl.bq_partition.column as partition_column,
+                tbl.bq_partition.partition_grain,
+                tbl.bq_partition.partition_data_type,
+                tbl.bq_partition.partition_range,
                 tbl.lakehouse_target.lakehouse,
                 tbl.lakehouse_target.schema AS lakehouse_schema,
                 tbl.lakehouse_target.table_name AS lakehouse_target_table,
-                tbl.keys,
-                tbl.table_options
+                tbl.lakehouse_target.partition_by AS lakehouse_partition,
+                to_json(tbl.column_map) AS column_map,
+                tbl.keys
             FROM (
                 SELECT 
                     id AS sync_id,
@@ -333,7 +367,11 @@ class FabricMetastore():
                     EXPLODE(tables) AS tbl 
                 FROM user_config_json)
         """
-        self.Context.sql (sql)
+
+        try:
+            self.Context.sql(sql)
+        except Exception as e:
+            raise SyncConfigurationError("Error creating User Config table view proxy") from e
     
     def create_userconfig_tables_cols_proxy_view(self):
         """
@@ -346,11 +384,15 @@ class FabricMetastore():
                 id AS sync_id, project_id, dataset, table_name, pkeys.column
             FROM (
                 SELECT
-                    id, tbl.project_id, tbl.dataset, tbl.table_name, EXPLODE(tbl.keys) AS pkeys
+                    id, tbl.project_id, tbl.dataset, tbl.table_name, EXPLODE_OUTER(tbl.keys) AS pkeys
                 FROM (SELECT id, EXPLODE(tables) AS tbl FROM user_config_json)
             )
         """
-        self.Context.sql(sql)
+        
+        try:
+            self.Context.sql(sql)
+        except Exception as e:
+            raise SyncConfigurationError("Error creating User Config columns view proxy") from e
     
     def create_autodetect_view(self):
         """
@@ -454,7 +496,7 @@ class FabricMetastore():
         )
 
         SELECT 
-            t.table_catalog, t.table_schema, t.table_name, t.is_insertable_into,
+            t.table_catalog, t.table_schema, t.table_name, 
             p.is_partitioned, p.partition_col, p.partition_data_type, p.partitioning_type, p.partitioning_strategy,
             w.pk_col, r.partition_range
         FROM bq_information_schema_tables t
@@ -472,252 +514,75 @@ class FabricMetastore():
             t.table_name = r.table_name
         """
 
-        self.Context.sql(sql)
-    
-    def enforce_load_all(self, sync_id:str, load_all:bool, bq_type:BigQueryObjectType):
-        if not load_all:
-            sql = f"""
-            UPDATE bq_sync_configuration SET enabled='FALSE'
-            WHERE sync_id='{sync_id}'
-            AND object_type='{str(bq_type)}'
-            AND enabled='TRUE'
-            """
-
+        try:
             self.Context.sql(sql)
+        except Exception as e:
+            raise AutoDiscoveryError("Error creating Autodiscovery proxy view") from e
 
-    def auto_detect_materialized_view_profiles(self, sync_id:str, load_all:bool):
-        self.enforce_load_all(sync_id, load_all, BigQueryObjectType.MATERIALIZED_VIEW)
-
+    def auto_detect_profiles(self, sync_id:str):        
         sql = f"""
         WITH default_config AS (
-            SELECT id AS sync_id,
-            COALESCE(autodetect, TRUE) AS autodetect, 
-            load_all_materialized_views,
+            SELECT '{sync_id}' AS sync_id,
+            COALESCE(autodiscover.autodetect, TRUE) AS autodetect, 
+            autodiscover.materialized_views.load_all AS load_all_materialized_views,
+            autodiscover.views.load_all AS load_all_views,
+            autodiscover.tables.load_all AS load_all_tables,
             enable_data_expiration,
             fabric.target_lakehouse AS target_lakehouse,
             fabric.target_schema AS target_schema,
             COALESCE(fabric.enable_schemas, FALSE) AS enable_schemas 
             FROM user_config_json
         ),
-        auto_detect_views AS (
-            SELECT table_catalog, table_schema, table_name 
-            FROM bq_information_schema_materialized_views
-        ),
-        source AS (
-            SELECT
-                d.sync_id,
-                a.table_catalog as project_id,
-                a.table_schema as dataset,
-                a.table_name as table_name,
-                'MATERIALIZED_VIEW' AS object_type,
-                CASE WHEN d.load_all_materialized_views THEN COALESCE(u.enabled, TRUE) ELSE
-                    COALESCE(u.enabled, FALSE) END AS enabled,
-                COALESCE(u.lakehouse, d.target_lakehouse) AS lakehouse,                
-                CASE WHEN d.enable_schemas THEN
-                    COALESCE(u.lakehouse_schema, COALESCE(d.target_schema, a.table_schema))
-                    ELSE NULL END AS lakehouse_schema,
-                COALESCE(u.lakehouse_target_table, a.table_name) AS lakehouse_table_name,
-                COALESCE(u.source_query, '') AS source_query,
-                COALESCE(u.priority, '100') AS priority,
-                CASE WHEN (u.watermark_column IS NOT NULL AND u.watermark_column <> '') THEN 'WATERMARK' 
-                    ELSE 'FULL' END AS load_strategy,
-                COALESCE(u.load_type, 
-                    CASE WHEN (u.watermark_column IS NOT NULL AND u.watermark_column <> '') THEN 'APPEND' 
-                        ELSE 'OVERWRITE' END) AS load_type,
-                COALESCE(u.interval, 'AUTO') AS interval,
-                NULL AS primary_keys,FALSE AS is_partitioned,'' AS partition_column,
-                '' AS partition_type,'' AS partition_grain,'' AS partition_data_type,
-                '' AS partition_range,'' AS watermark_column, 
-                d.autodetect,
-                d.enable_schemas AS use_lakehouse_schema,
-                CASE WHEN (d.enable_data_expiration) THEN
-                    COALESCE(u.enforce_expiration, FALSE) ELSE FALSE END AS enforce_expiration,
-                COALESCE(u.allow_schema_evolution, FALSE) AS allow_schema_evolution,
-                COALESCE(u.table_maintenance_enabled, FALSE) AS table_maintenance_enabled,
-                COALESCE(u.table_maintenance_interval, 'AUTO') AS table_maintenance_interval,
-                COALESCE(u.flatten_table, FALSE) AS flatten_table,
-                COALESCE(u.flatten_inplace, TRUE) AS flatten_inplace,
-                COALESCE(u.explode_arrays, FALSE) AS explode_arrays,
-                u.table_options,
-                CASE WHEN u.table_name IS NULL THEN FALSE ELSE TRUE END AS config_override,
-                'INIT' AS sync_state,
-                CURRENT_TIMESTAMP() as created_dt,
-                NULL as last_updated_dt
-            FROM auto_detect_views a
-            LEFT JOIN user_config_tables u ON 
-                a.table_catalog = u.project_id AND
-                a.table_schema = u.dataset AND
-                a.table_name = u.table_name AND
-                u.object_type='MATERIALIZED_VIEW'
-            CROSS JOIN default_config d
-        )
-
-        MERGE INTO bq_sync_configuration t
-        USING source s
-        ON t.sync_id = s.sync_id AND t.project_id = s.project_id AND t.dataset = s.dataset AND t.table_name = s.table_name
-        WHEN MATCHED AND t.sync_state <> 'INIT' THEN
-            UPDATE SET
-                t.enabled = s.enabled,
-                t.interval = s.interval,
-                t.priority = s.priority,
-                t.enforce_expiration = s.enforce_expiration,
-                t.allow_schema_evolution = s.allow_schema_evolution,
-                t.table_maintenance_enabled = s.table_maintenance_enabled,
-                t.table_maintenance_interval = s.table_maintenance_interval,
-                t.table_options = s.table_options,
-                t.last_updated_dt = CURRENT_TIMESTAMP()
-        WHEN MATCHED AND t.sync_state = 'INIT' THEN
-            UPDATE SET *
-        WHEN NOT MATCHED THEN
-            INSERT *
-        """
-
-        self.Context.sql(sql)
-
-    def auto_detect_view_profiles(self, sync_id:str, load_all:bool):
-        self.enforce_load_all(sync_id, load_all, BigQueryObjectType.VIEW)
-
-        sql = f"""
-        WITH default_config AS (
-            SELECT id AS sync_id,
-            COALESCE(autodetect, TRUE) AS autodetect, 
-            load_all_views,
-            enable_data_expiration,
-            fabric.target_lakehouse AS target_lakehouse,
-            fabric.target_schema AS target_schema,
-            COALESCE(fabric.enable_schemas, FALSE) AS enable_schemas 
-            FROM user_config_json
-        ),
-        auto_detect_views AS (
-            SELECT table_catalog, table_schema, table_name 
-            FROM bq_information_schema_views
-        ),
-        source AS (
-            SELECT
-                d.sync_id,
-                a.table_catalog as project_id,
-                a.table_schema as dataset,
-                a.table_name as table_name,
-                'VIEW' AS object_type,
-                CASE WHEN d.load_all_views THEN COALESCE(u.enabled, TRUE) ELSE
-                    COALESCE(u.enabled, FALSE) END AS enabled,
-                COALESCE(u.lakehouse, d.target_lakehouse) AS lakehouse,                
-                CASE WHEN d.enable_schemas THEN
-                    COALESCE(u.lakehouse_schema, COALESCE(d.target_schema, a.table_schema))
-                    ELSE NULL END AS lakehouse_schema,
-                COALESCE(u.lakehouse_target_table, a.table_name) AS lakehouse_table_name,
-                COALESCE(u.source_query, '') AS source_query,
-                COALESCE(u.priority, '100') AS priority,
-                CASE WHEN (u.watermark_column IS NOT NULL AND u.watermark_column <> '') THEN 'WATERMARK' 
-                    ELSE 'FULL' END AS load_strategy,
-                COALESCE(u.load_type, 
-                    CASE WHEN (u.watermark_column IS NOT NULL AND u.watermark_column <> '') THEN 'APPEND' 
-                        ELSE 'OVERWRITE' END) AS load_type,
-
-                COALESCE(u.interval, 'AUTO') AS interval,
-                NULL AS primary_keys,FALSE AS is_partitioned,'' AS partition_column,
-                '' AS partition_type,'' AS partition_grain,'' AS partition_data_type,
-                '' AS partition_range,'' AS watermark_column, 
-                d.autodetect,
-                d.enable_schemas AS use_lakehouse_schema,
-                CASE WHEN (d.enable_data_expiration) THEN
-                    COALESCE(u.enforce_expiration, FALSE) ELSE FALSE END AS enforce_expiration,
-                COALESCE(u.allow_schema_evolution, FALSE) AS allow_schema_evolution,
-                COALESCE(u.table_maintenance_enabled, FALSE) AS table_maintenance_enabled,
-                COALESCE(u.table_maintenance_interval, 'AUTO') AS table_maintenance_interval,
-                COALESCE(u.flatten_table, FALSE) AS flatten_table,
-                COALESCE(u.flatten_inplace, TRUE) AS flatten_inplace,
-                COALESCE(u.explode_arrays, FALSE) AS explode_arrays,
-                u.table_options,
-                CASE WHEN u.table_name IS NULL THEN FALSE ELSE TRUE END AS config_override,
-                'INIT' AS sync_state,
-                CURRENT_TIMESTAMP() as created_dt,
-                NULL as last_updated_dt
-            FROM auto_detect_views a
-            LEFT JOIN user_config_tables u ON 
-                a.table_catalog = u.project_id AND
-                a.table_schema = u.dataset AND
-                a.table_name = u.table_name AND
-                u.object_type='VIEW'
-            CROSS JOIN default_config d
-        )
-
-        MERGE INTO bq_sync_configuration t
-        USING source s
-        ON t.sync_id = s.sync_id AND t.project_id = s.project_id AND t.dataset = s.dataset AND t.table_name = s.table_name
-        WHEN MATCHED AND t.sync_state <> 'INIT' THEN
-            UPDATE SET
-                t.enabled = s.enabled,
-                t.interval = s.interval,
-                t.priority = s.priority,
-                t.enforce_expiration = s.enforce_expiration,
-                t.allow_schema_evolution = s.allow_schema_evolution,
-                t.table_maintenance_enabled = s.table_maintenance_enabled,
-                t.table_maintenance_interval = s.table_maintenance_interval,
-                t.table_options = s.table_options,
-                t.last_updated_dt = CURRENT_TIMESTAMP()
-        WHEN MATCHED AND t.sync_state = 'INIT' THEN
-            UPDATE SET *
-        WHEN NOT MATCHED THEN
-            INSERT *
-        """
-
-        self.Context.sql(sql)
-
-    def auto_detect_table_profiles(self, sync_id:str, load_all:bool):
-        """
-        The autodetect provided the following capabilities:
-         
-        1. Uses the BigQuery metadata to determine a default config for each table
-        2. If a user-defined table configuration is supplied it overrides the default configuration
-        3. Write the configuration when the configuration is not locked
-            a. The load configuration doesn't support changes without a reload of the data.
-            b. The only changes that are support for locked configurations are:
-                - Enabling and Disabling the table sync
-                - Changing the table load Priority
-                - Updating the table load Interval
-        """
-        self.enforce_load_all(sync_id, load_all, BigQueryObjectType.BASE_TABLE)
-        
-        sql = f"""
-        WITH default_config AS (
-            SELECT id AS sync_id,
-            COALESCE(autodetect, TRUE) AS autodetect, 
-            load_all_tables,
-            enable_data_expiration,
-            fabric.target_lakehouse AS target_lakehouse,
-            fabric.target_schema AS target_schema,
-            COALESCE(fabric.enable_schemas, FALSE) AS enable_schemas 
-            FROM user_config_json
-        ),
-        pk AS (
-            SELECT
-            a.table_catalog, a.table_schema, a.table_name, array_agg(COALESCE(a.pk_col, u.column)) as pk
+        bq_objects AS (
+            SELECT 
+                d.sync_id, d.autodetect, d.load_all_tables AS load_all, d.enable_data_expiration,
+                d.target_lakehouse, d.target_schema, d.enable_schemas,
+                a.table_catalog, a.table_schema, a.table_name, array_agg(COALESCE(a.pk_col, u.column)) as pk, 'BASE_TABLE' AS object_type
             FROM bq_table_metadata_autodetect a
             LEFT JOIN user_config_table_keys u ON
                 a.table_catalog = u.project_id AND
                 a.table_schema = u.dataset AND
                 a.table_name = u.table_name
-            GROUP BY a.table_catalog, a.table_schema, a.table_name
+            CROSS JOIN default_config d
+            GROUP BY d.sync_id, d.autodetect, d.load_all_tables, d.enable_data_expiration,
+                d.target_lakehouse, d.target_schema, d.enable_schemas, a.table_catalog, a.table_schema, a.table_name
+            UNION ALL
+            SELECT
+                d.sync_id, d.autodetect, d.load_all_materialized_views, d.enable_data_expiration,
+                d.target_lakehouse, d.target_schema, d.enable_schemas,
+                v.table_catalog, v.table_schema, v.table_name, NULL, 'MATERIALIZED_VIEW'
+            FROM bq_information_schema_materialized_views v
+            CROSS JOIN default_config d
+            UNION ALL
+            SELECT 
+                d.sync_id, d.autodetect, d.load_all_views, d.enable_data_expiration,
+                d.target_lakehouse, d.target_schema, d.enable_schemas,
+                table_catalog, table_schema, table_name , NULL, 'VIEW'
+            FROM bq_information_schema_views v
+            CROSS JOIN default_config d
         ),
         source AS (
             SELECT
-                d.sync_id,
+                p.sync_id,
+                UUID() AS table_id,
                 a.table_catalog as project_id,
                 a.table_schema as dataset,
                 a.table_name as table_name,
-                'BASE_TABLE' AS object_type,
-                CASE WHEN d.load_all_tables THEN
+                p.object_type AS object_type,
+
+                CASE WHEN p.load_all THEN
                     COALESCE(u.enabled, TRUE) ELSE
                     COALESCE(u.enabled, FALSE) END AS enabled,
-                COALESCE(u.lakehouse, d.target_lakehouse) AS lakehouse,
-                
-                CASE WHEN d.enable_schemas THEN
-                    COALESCE(u.lakehouse_schema, COALESCE(d.target_schema, a.table_schema))
+                CASE WHEN (COALESCE(u.lakehouse, '')='') 
+                    THEN p.target_lakehouse ELSE u.lakehouse END AS lakehouse,                
+                CASE WHEN p.enable_schemas THEN
+                    COALESCE(u.lakehouse_schema, COALESCE(p.target_schema, a.table_schema))
                     ELSE NULL END AS lakehouse_schema,
-
-                COALESCE(u.lakehouse_target_table, a.table_name) AS lakehouse_table_name,
+                CASE WHEN (COALESCE(u.lakehouse_target_table,'') ='') 
+                    THEN a.table_name ELSE u.lakehouse_target_table END AS lakehouse_table_name,
+                COALESCE(u.lakehouse_partition, '') AS lakehouse_partition,
                 COALESCE(u.source_query, '') AS source_query,
+                COALESCE(u.source_predicate, '') AS source_predicate,
                 COALESCE(u.priority, '100') AS priority,
                 CASE WHEN (COALESCE(u.watermark_column, a.pk_col) IS NOT NULL AND
                         COALESCE(u.watermark_column, a.pk_col) <> '') THEN 'WATERMARK' 
@@ -741,9 +606,9 @@ class FabricMetastore():
                 COALESCE(u.partition_data_type, a.partition_data_type, '') AS partition_data_type,
                 COALESCE(u.partition_range, a.partition_range, '') AS partition_range,
                 COALESCE(u.watermark_column, a.pk_col, '') AS watermark_column, 
-                d.autodetect,
-                d.enable_schemas AS use_lakehouse_schema,
-                CASE WHEN (d.enable_data_expiration) THEN
+                p.autodetect,
+                p.enable_schemas AS use_lakehouse_schema,
+                CASE WHEN (p.enable_data_expiration) THEN
                     COALESCE(u.enforce_expiration, FALSE) ELSE
                     FALSE END AS enforce_expiration,
                 COALESCE(u.allow_schema_evolution, FALSE) AS allow_schema_evolution,
@@ -752,13 +617,13 @@ class FabricMetastore():
                 COALESCE(u.flatten_table, FALSE) AS flatten_table,
                 COALESCE(u.flatten_inplace, TRUE) AS flatten_inplace,
                 COALESCE(u.explode_arrays, FALSE) AS explode_arrays,
-                u.table_options,
+                COALESCE(u.column_map, NULL) AS column_map,
                 CASE WHEN u.table_name IS NULL THEN FALSE ELSE TRUE END AS config_override,
                 'INIT' AS sync_state,
                 CURRENT_TIMESTAMP() as created_dt,
                 NULL as last_updated_dt
             FROM bq_table_metadata_autodetect a
-            JOIN pk p ON
+            JOIN bq_objects p ON
                 a.table_catalog = p.table_catalog AND
                 a.table_schema = p.table_schema AND
                 a.table_name = p.table_name
@@ -766,8 +631,8 @@ class FabricMetastore():
                 a.table_catalog = u.project_id AND
                 a.table_schema = u.dataset AND
                 a.table_name = u.table_name AND
-                u.object_type='BASE_TABLE'
-            CROSS JOIN default_config d
+                p.object_type = u.object_type
+            
         )
 
         MERGE INTO bq_sync_configuration t
@@ -778,19 +643,28 @@ class FabricMetastore():
                 t.enabled = s.enabled,
                 t.interval = s.interval,
                 t.priority = s.priority,
+                t.source_query = s.source_query,
+                t.source_predicate = s.source_predicate,
                 t.enforce_expiration = s.enforce_expiration,
+                t.column_map = s.column_map,
                 t.allow_schema_evolution = s.allow_schema_evolution,
                 t.table_maintenance_enabled = s.table_maintenance_enabled,
                 t.table_maintenance_interval = s.table_maintenance_interval,
-                t.table_options = s.table_options,
                 t.last_updated_dt = CURRENT_TIMESTAMP()
         WHEN MATCHED AND t.sync_state = 'INIT' THEN
             UPDATE SET *
         WHEN NOT MATCHED THEN
             INSERT *
+        WHEN NOT MATCHED BY SOURCE AND t.sync_id = '{sync_id}' AND t.enabled = TRUE THEN
+            UPDATE SET
+                t.enabled = FALSE
         """
 
-        self.Context.sql(sql)
+        try:
+            self.Context.sql(sql)
+        except Exception as e:
+            raise AutoDiscoveryError("Autodiscovery failed.") from e
+            
     
     def ensure_schemas(self, workspace:str, sync_id:str):
         df = self.Context.read.table("bq_sync_configuration")
@@ -800,17 +674,11 @@ class FabricMetastore():
 
         schemas = [f"{r['lakehouse']}.{r['schema']}" for r in df.collect()]
 
-        for schema in schemas:
-            self.Context.sql(f"CREATE SCHEMA IF NOT EXISTS {workspace}.{schema}")
-    
-    def optimize_metadata_tbls(self):
-        print("Optimizing Sync Metadata Metastore...")
-        tbls = ["bq_sync_configuration", "bq_sync_schedule", 
-            "bq_sync_schedule_telemetry", "bq_sync_data_expiration"]
-
-        for tbl in tbls:
-            table_maint = DeltaTableMaintenance(self.Context, tbl)
-            table_maint.optimize_and_vacuum()
+        try:
+            for schema in schemas:
+                self.Context.sql(f"CREATE SCHEMA IF NOT EXISTS {workspace}.{schema}")
+        except Exception as e:
+            raise SyncConfigurationError("Error creating/ensuring Lakehouse schema exists.") from e
     
     def get_sync_temp_views(self) -> List[str]:
         return ["bq_table_metadata_autodetect", \
@@ -875,7 +743,11 @@ class FabricMetastore():
         WHEN NOT MATCHED THEN INSERT *
         WHEN NOT MATCHED BY SOURCE THEN DELETE
         """
-        self.Context.sql(sql)
+        
+        try:
+            self.Context.sql(sql)
+        except Exception as e:
+            raise DataRetentionError("Error applying data expiration policy.") from e
     
     def get_bq_retention_policy(self, sync_id:str) -> DataFrame:
         sql = f"""
@@ -889,6 +761,7 @@ class FabricMetastore():
             AND e.sync_id='{sync_id}'
         """
 
-        df = self.Context.sql(sql)
-
-        return df
+        try:
+            return self.Context.sql(sql)
+        except Exception as e:
+            raise SyncConfigurationError("Failed to retrieve BQ Sync retention policy.") from e
