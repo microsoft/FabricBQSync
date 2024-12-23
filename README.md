@@ -4,10 +4,10 @@ This project is provided as an accelerator to help synchronize or migrate data f
  - BigQuery customers who wish to continue to leverage their existing investments and data estate while optimizing their PowerBI experience and reducing overall analytics TCO
  - BigQuery customers who wish to migrate all or part of their data estate to Microsoft Fabric
 
-# Getting Started
+# Getting Started for New Installs
 
 The accelerator includes an automated installer that can set up your Fabric workspace and install all required dependencies automatically. To use the installer:
-1. Download the current Installer Notebook
+1. Download the current version Installer notebook
 2. Import the installer into your Fabric Workspace
 3. Attach the installer to a Lakehouse within the Workspace
 4. Upload your GCP Service Account credential json file to OneLake
@@ -28,6 +28,22 @@ The installer performs the following actions:
 - Creates an initial default user configuration file based on your config parameters
 - Installs a fully configured and ready to run BQ-Sync-Notebook into your workspace
 
+# Upgrading to Current Version
+
+The accelerator now includes an upgrade utility to simplify the process of upgrading your existing BQ Sync instance to the most current version. The upgrade utility handles major and minor updates. To use the upgrade utility:
+1. Download the current version Upgrade notebook
+2. Import the Upgrade notebook into your Fabric Workspace
+3. Attach the Upgrade notebook to your BQ Sync metadata Lakehouse
+4. Update the notebook parameters to point to your current configuration file.
+5. Run te upgrade process
+
+The upgrade process performs the following actions:
+- Migrates your current configuration file (when necessary). Note that new features/capabilities are turned off by default. Your current configuration file is cloned and is not overwritten.
+- Updates the BQ Sync metastore (when necessary). When schema changes are made to the BQ Sync metastore, the metastore is Optimized as part of the upgrade process.
+- Downloads the current version of the BQ Sync package. If you are using environments or have otherwise optimized your environment it may be necessary to manually update your package repository.
+- Downloads the current version of the Big Query spark connector (when available/necessary)
+- Installed a new version of the BQ Sync notebook, mapped to the new configuration, python package and spark connector
+  
 # Project Overview
 
 For many of our customers, the native mirroring capabilities in Fabric are one of the most exciting features of the platform. While Fabric currently supports a growing number of different mirroring sources, BigQuery is not yet supported. This current gap in capabilities is the foundation of this accelerator.
