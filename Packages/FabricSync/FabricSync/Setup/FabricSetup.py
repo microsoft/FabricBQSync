@@ -319,7 +319,7 @@ class Installer():
 
     def _generate_config(self, path, config_data):
         SetupUtils.generate_base_config(path, config_data)
-        self.data["user_config_file_path"] = f"{self.config_path}/{Path(path).name}"
+        self.data["user_config_file_path"] = path
         
     def _parse_user_config(self, data):
         config_file = data["config_file"]
@@ -557,7 +557,8 @@ class Installer():
 
             #Encode for embedding in config file
             self.Logger.sync_status("Updating configuration file...")
-            cfg = f"{self.config_path}/fabric_bq_config_v{self.data['version']}.json"
+            current_cfg_file = Path(self.data["config_file"]).stem
+            cfg = f"{self.config_path}/{current_cfg_file}_v{self.data['version']}.json"
             self._generate_config(cfg, config_data)
 
             if not self.data["config_file_only"]:
@@ -640,7 +641,8 @@ class Installer():
 
             config_data = self._build_new_config()
 
-            cfg = f"{self.config_path}/fabric_bq_config.json"
+            loader_cfg = self.data["loader_name"].replace(" ", "_")
+            cfg = f"{self.config_path}/{loader_cfg}_v{self.data['version']}.json"
             self._generate_config(cfg, config_data)
 
             #Get sync notebooks from Git, customize and install into the workspace
