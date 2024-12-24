@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "FabricSync"
-version = "2.0.1"
+version = "2.0.2"
 dependencies = [
   'mlflow-skinny == 2.19.0',
   'google-cloud-bigquery == 3.27.0',

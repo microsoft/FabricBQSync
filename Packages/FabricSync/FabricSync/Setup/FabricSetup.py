@@ -22,39 +22,9 @@ from ..BQ.SyncUtils import *
 from ..BQ.Utils import *
 from ..BQ.Exceptions import *
 from ..BQ.Constants import SyncConstants
+from ..Meta import Version
 
 class SetupUtils():
-    def get_current_version(context:SparkSession):
-        uri = context.conf.get(f"{SyncConstants.SPARK_CONF_PREFIX}.telemetry_endpoint")
-        api_proxy = RestAPIProxy(base_url=uri)
-
-        try:
-            response = api_proxy.get(endpoint="version")
-            json_data = response.json()
-
-            return json_data["version"]
-        except Exception as e:
-            return  None
-
-    def check_for_update(context:SparkSession, version:str = None):
-        current_version = SetupUtils.get_current_version(context)
-
-        if not current_version:
-            return (False, None)
-
-        if not version:
-            version = "1.1.0"
-        
-        parsed_v = pv.parse(version)
-        parsed_cv = pv.parse(current_version)
-
-        if parsed_v < parsed_cv:
-            return (True, current_version)
-        else:
-            return (False, version)
-        
-        return (False, None)
-
     def read_file_to_string(path:str) -> str:
         contents = ""
 
@@ -152,14 +122,16 @@ class SetupUtils():
 
 class MetaStoreDataUpdates():
     def process(self, context:SparkSession, version):
-        match version:
-            case "2.0.0":
-                self.process_v2_0_0_0(context)
+        sv = pv.parse(version)
+
+        match sv.major:
+            case 2:
+                self.process_v2(context)
             case _:
                 pass
 
     
-    def process_v2_0_0_0(self, context:SparkSession):
+    def process_v2(self, context:SparkSession):
         deltaTable = DeltaTable.forName(context, "bq_sync_configuration")
 
         deltaTable.update(
@@ -226,9 +198,9 @@ class Installer():
 
     def _get_sql_source_from_git(self, local_path:str):
         git_content = [
-            {"name": "bq_sync_metadata.csv", "url": f"{Installer.GIT_URL}/Setup/v{self.data['version']}/SQL/bq_sync_metadata.csv"},
-            {"name": "bq_data_types.csv", "url": f"{Installer.GIT_URL}/Setup/v{self.data['version']}/Data/bq_data_types.csv"},
-            {"name": "MetadataRepo.sql", "url":f"{Installer.GIT_URL}/Setup/v{self.data['version']}/SQL/MetadataRepo.sql"}
+            {"name": "bq_sync_metadata.csv", "url": f"{Installer.GIT_URL}/Setup/v{self.data["asset_version"]}/SQL/bq_sync_metadata.csv"},
+            {"name": "bq_data_types.csv", "url": f"{Installer.GIT_URL}/Setup/v{self.data["asset_version"]}/Data/bq_data_types.csv"},
+            {"name": "MetadataRepo.sql", "url":f"{Installer.GIT_URL}/Setup/v{self.data["asset_version"]}/SQL/MetadataRepo.sql"}
             ]
 
         for c in git_content:
@@ -313,7 +285,7 @@ class Installer():
 
     def _download_sync_wheel(self):
         self.data["wheel_name"] = f"FabricSync-{self.data['version']}-py3-none-any.whl"
-        wheel_url = f"{Installer.GIT_URL}/Packages/FabricSync/dist/{self.data['wheel_name']}"
+        wheel_url = f"{Installer.GIT_URL}/dist/{self.data['wheel_name']}"
 
         SetupUtils.download_file(wheel_url, f"{self.libs_path}/{self.data['wheel_name']}")
 
@@ -437,7 +409,7 @@ class Installer():
         randomizer = f"0000{random_int}"
         git_notebooks = [ \
                     {"name": f"BQ-Sync-Notebook-v{self.data['version']}-{randomizer[-4:]}", 
-                        "url": f"{Installer.GIT_URL}/Notebooks/v{self.data['version']}/BQ-Sync.ipynb",
+                        "url": f"{Installer.GIT_URL}/Notebooks/v{self.data['asset_version']}/BQ-Sync.ipynb",
                         "file_name": "BQ-Sync.ipynb"}]
         
         try:
@@ -451,8 +423,7 @@ class Installer():
             shutil.rmtree(self.notebooks_path)
 
     def _initialize_existing(self, data):
-        cfg = ConfigDataset()
-        data["version"] = cfg.Version
+        data["version"] = Version.CurrentVersion
         data["workspace_id"] = self.Context.conf.get("trident.workspace.id")
 
         config_data = self._parse_user_config(data)
