@@ -1,4 +1,4 @@
-# BQ Sync User Configuration Index
+# Fabric BQ Sync User Config Map
 The BQ Sync accelerator offers robust user configuration for full control and optimization over the sync process. Multiple configurations are supported with the path to the in-scope configuration file provided at runtime.
 
 Configuration is broken down into the following sections:
