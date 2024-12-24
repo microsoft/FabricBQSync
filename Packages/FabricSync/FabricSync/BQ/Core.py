@@ -18,8 +18,6 @@ from google.oauth2.service_account import Credentials
 from contextlib import ContextDecorator
 from dataclasses import dataclass, field
 from typing import Any, Optional
-import sqlvalidator
-from sqlvalidator.grammar.lexer import ParsingError
 
 from .Enum import *
 from .Metastore import FabricMetastore
@@ -28,6 +26,7 @@ from .Model.Query import *
 from .Logging import *
 from .Exceptions import *
 from .Constants import SyncConstants
+from .Validation import SqlValidator
 
 warnings.filterwarnings('ignore', category=UserWarning)
 
@@ -235,33 +234,23 @@ class ConfigBase():
     def build_bq_query(self, query:BQQueryModel) -> str:
         sql = query.Query if query.Query else query.TableName
 
-        if not self.is_sql_query(sql):
+        if not SqlValidator.is_valid(sql):
             sql = f"SELECT * FROM {query.TableName}"
 
         if query.PartitionFilter:
             query.add_predicate(query.PartitionFilter)
 
         if query.Predicate:
-            q = sqlvalidator.parse(sql)            
-
             p = [f"{p.Type} {p.Predicate}" for p in query.Predicate]
-
             predicates = " ".join(p)
 
-            if q.sql_query and not q.sql_query.where_clause:  
+            if not SqlValidator.has_predicate(sql):  
                 idx = predicates.find(" ")          
                 sql = f"{sql} WHERE {predicates[idx+1:]}"
             else:
                 sql = f"{sql} {predicates}"
 
         return sql
-
-    def is_sql_query(self, query:str):
-        try:
-            sql_query = sqlvalidator.parse(query)
-            return sql_query.is_valid()
-        except ParsingError:
-            return False
 
 class SyncBase():
     '''
