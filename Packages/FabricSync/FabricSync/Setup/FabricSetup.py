@@ -198,9 +198,9 @@ class Installer():
 
     def _get_sql_source_from_git(self, local_path:str):
         git_content = [
-            {"name": "bq_sync_metadata.csv", "url": f"{Installer.GIT_URL}/Setup/v{self.data["asset_version"]}/SQL/bq_sync_metadata.csv"},
-            {"name": "bq_data_types.csv", "url": f"{Installer.GIT_URL}/Setup/v{self.data["asset_version"]}/Data/bq_data_types.csv"},
-            {"name": "MetadataRepo.sql", "url":f"{Installer.GIT_URL}/Setup/v{self.data["asset_version"]}/SQL/MetadataRepo.sql"}
+            {"name": "bq_sync_metadata.csv", "url": f"{Installer.GIT_URL}/Setup/v{self.data['asset_version']}/SQL/bq_sync_metadata.csv"},
+            {"name": "bq_data_types.csv", "url": f"{Installer.GIT_URL}/Setup/v{self.data['asset_version']}/Data/bq_data_types.csv"},
+            {"name": "MetadataRepo.sql", "url":f"{Installer.GIT_URL}/Setup/v{self.data['asset_version']}/SQL/MetadataRepo.sql"}
             ]
 
         for c in git_content:
