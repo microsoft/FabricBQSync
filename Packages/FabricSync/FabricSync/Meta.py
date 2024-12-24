@@ -1,2 +1,2 @@
 class Version():
-    CurrentVersion = "2.0.2"
+    CurrentVersion = "2.0.3"
