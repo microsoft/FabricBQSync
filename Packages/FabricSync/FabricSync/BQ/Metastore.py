@@ -765,3 +765,9 @@ class FabricMetastore():
             return self.Context.sql(sql)
         except Exception as e:
             raise SyncConfigurationError("Failed to retrieve BQ Sync retention policy.") from e
+    
+    def create_proxy_views(self):
+        self.create_userconfig_tables_proxy_view()        
+        self.create_userconfig_tables_cols_proxy_view()
+
+        self.create_autodetect_view()  

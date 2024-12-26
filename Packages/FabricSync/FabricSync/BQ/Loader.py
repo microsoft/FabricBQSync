@@ -3,7 +3,7 @@ from pyspark.sql.functions import *
 from pyspark.sql.types import *
 from delta.tables import *
 
-from datetime import datetime, date, timezone
+from datetime import datetime, timezone
 from typing import Tuple
 from threading import Lock
 
@@ -27,6 +27,7 @@ class BQScheduleLoader(ConfigBase):
         Calls parent init to load User Config from JSON file
         """
         super().__init__(context, user_config, gcp_credential)
+        self.TableLocks = ThreadSafeDict()
 
     def get_delta_merge_row_counts(self, schedule:SyncSchedule) -> Tuple[int, int, int]:
         """
@@ -61,7 +62,21 @@ class BQScheduleLoader(ConfigBase):
 
         return (inserts, updates, deletes)
 
-    def merge_table(self, schedule:SyncSchedule, tableName:str, src:DataFrame) -> SyncSchedule:
+    def merge_table(self, schedule:SyncSchedule, tableName:str, df:DataFrame) -> tuple:
+        if schedule.FlattenTable:
+            df, flattened = self.flatten(schedule=schedule, df=df)
+
+            if flattened:
+                self.merge_dataframe(schedule, f"{schedule.LakehouseTableName}_flattened", flattened)
+
+        self.merge_dataframe(schedule, tableName, df)
+
+        results = self.get_delta_merge_row_counts(schedule)
+        schedule.UpdateRowCounts(insert=results[0], update=results[1])
+        
+        return (schedule, df)
+
+    def merge_dataframe(self, schedule:SyncSchedule, tableName:str, df:DataFrame):
         """
         Merge into Lakehouse Table based on User Configuration. Only supports Insert/Update All
         """
@@ -73,7 +88,7 @@ class BQScheduleLoader(ConfigBase):
             constraints.append(f"s.{p} = d.{p}")
 
         if not constraints:
-            raise ValueError("One or more keys must be specified for a MERGE operation")
+            raise SyncConfigurationError("One or more keys must be specified for a MERGE operation")
         
         if schedule.FabricPartitionColumns and schedule.PartitionId:
             for p in schedule.FabricPartitionColumns:
@@ -88,7 +103,7 @@ class BQScheduleLoader(ConfigBase):
 
         dest.alias('d') \
         .merge( \
-            src.alias('s'), \
+            df.alias('s'), \
             predicate) \
         .whenMatchedUpdateAll() \
         .whenNotMatchedInsertAll() \
@@ -96,12 +111,6 @@ class BQScheduleLoader(ConfigBase):
 
         if (schedule.AllowSchemaEvolution):
             self.Context.conf.set("spark.databricks.delta.schema.autoMerge.enabled", "false")
-
-        results = self.get_delta_merge_row_counts(schedule)
-
-        schedule.UpdateRowCounts(insert=results[0], update=results[1])
-        
-        return schedule
 
     def get_bq_table(self, schedule:SyncSchedule) -> tuple[SyncSchedule, DataFrame, Observation]:
         qm = {
@@ -171,28 +180,7 @@ class BQScheduleLoader(ConfigBase):
         
         return (schedule, df_bq, observation)
 
-    def save_bq_dataframe(self, schedule:SyncSchedule, df_bq:DataFrame, lock:Lock, observation:Observation = None) -> SyncSchedule:
-        write_config = { }
-        table_maint = None
-
-        #Flattening complex types (structs & arrays)
-        df_bq_flattened = None
-        if schedule.FlattenTable:
-            if schedule.Load_Type == str(LoadType.MERGE) and schedule.ExplodeArrays:
-                raise Exception("Invalid load configuration: Merge is not supported when Explode Arrays is enabed")
-                
-            if schedule.FlattenInPlace:
-                df_bq = self.flatten_df(schedule.ExplodeArrays, df_bq)
-            else:
-                df_bq_flattened = self.flatten_df(schedule.ExplodeArrays, df_bq)
-            
-        #Schema Evolution
-        if not schedule.InitialLoad:
-            if schedule.AllowSchemaEvolution:
-                table_maint = DeltaTableMaintenance(self.Context, schedule.LakehouseTableName)
-                table_maint.evolve_schema(df_bq)
-                write_config["mergeSchema"] = True
-
+    def save_bq_dataframe(self, schedule:SyncSchedule, df_bq:DataFrame, lock:Lock, observation:Observation = None, write_config=None) -> SyncSchedule:
         if not schedule.Load_Type == str(LoadType.MERGE) or schedule.InitialLoad:
             if schedule.IsPartitionedSyncLoad:
                 has_lock = False
@@ -205,77 +193,48 @@ class BQScheduleLoader(ConfigBase):
                 
                 try:
                     partition_cols = self.get_lakehouse_partitions(schedule)
-
-                    df_bq.write \
-                        .partitionBy(partition_cols) \
-                        .mode(str(LoadType.OVERWRITE)) \
-                        .options(**write_config) \
-                        .saveAsTable(schedule.LakehouseTableName)
-                        
-                    if df_bq_flattened:
-                        df_bq_flattened.write \
-                            .partitionBy(partition_cols) \
-                            .mode(str(LoadType.OVERWRITE)) \
-                            .options(**write_config) \
-                            .saveAsTable(f"{schedule.LakehouseTableName}_flattened") 
+                    df_bq = self.save_to_lakehouse(schedule, df=df_bq, moder=str(LoadType.OVERWRITE), 
+                        partition_by=partition_cols, options=write_config)
                 finally:
                     if has_lock:
                         lock.release()
             else:
                 if not schedule.FabricPartitionColumns and not schedule.LakehousePartition:
-                    df_bq.write \
-                        .mode(schedule.Mode) \
-                        .options( **write_config) \
-                        .saveAsTable(schedule.LakehouseTableName)
-                    
-                    if df_bq_flattened:
-                        df_bq_flattened.write \
-                            .mode(schedule.Mode) \
-                            .options( **write_config) \
-                            .saveAsTable(f"{schedule.LakehouseTableName}_flattened")
+                    df_bq = self.save_to_lakehouse(schedule, df=df_bq, options=write_config)
                 else:
                     partition_cols = self.get_lakehouse_partitions(schedule)
-
-                    df_bq.write \
-                        .partitionBy(partition_cols) \
-                        .mode(schedule.Mode) \
-                        .options( **write_config) \
-                        .saveAsTable(schedule.LakehouseTableName)
-                    
-                    if df_bq_flattened:
-                        df_bq_flattened.write \
-                            .partitionBy(partition_cols) \
-                            .mode(schedule.Mode) \
-                            .options( **write_config) \
-                            .saveAsTable(f"{schedule.LakehouseTableName}_flattened")
+                    df_bq = self.save_to_lakehouse(schedule, df=df_bq, partition_by=partition_cols, options=write_config)
         else:
-            schedule = self.merge_table(schedule, schedule.LakehouseTableName, df_bq)
+            schedule,df_bq = self.merge_table(schedule, schedule.LakehouseTableName, df_bq)
 
-            if df_bq_flattened:
-                self.merge_table(schedule, f"{schedule.LakehouseTableName}_flattened", df_bq)
+        return (schedule,df_bq)
 
-        if not table_maint:
-            table_maint = DeltaTableMaintenance(self.Context, schedule.LakehouseTableName)
-
-        src_cnt, schedule.MaxWatermark = self.get_source_metrics(schedule, df_bq)
-
-        schedule.UpdateRowCounts(src=src_cnt)    
-        schedule.SparkAppId = self.Context.sparkContext.applicationId
-        schedule.DeltaVersion = table_maint.CurrentTableVersion
-        schedule.EndTime = datetime.now(timezone.utc)
-        schedule.Status = SyncStatus.COMPLETE
+    def flatten(self, schedule:SyncSchedule, df:DataFrame) -> tuple:
+        if schedule.Load_Type == str(LoadType.MERGE) and schedule.ExplodeArrays:
+            raise SyncConfigurationError("Invalid load configuration: Merge is not supported when Explode Arrays is enabed")
+                
+        if schedule.FlattenInPlace:
+            df = SyncUtil.flatten_df(schedule.ExplodeArrays, df)
+            flattend = None
+        else:
+            flattened = SyncUtil.flatten_df(schedule.ExplodeArrays, df)
         
-        df_bq.unpersist()
+        return (df, flattened)
 
-        return schedule
+    def save_to_lakehouse(self, schedule:SyncSchedule, df:DataFrame, mode:str=None, partition_by:list=None, options:dict=None):
+        if not mode:
+            mode = schedule.Mode
 
-    def format_watermark(self, max_watermark):
-        if type(max_watermark) is date:
-            return max_watermark.strftime("%Y-%m-%d")
-        elif type(max_watermark) is datetime:
-            return max_watermark.strftime("%Y-%m-%d %H:%M:%S%z")
-        else:
-            return str(max_watermark)
+        if schedule.FlattenTable:
+            df, flattened = self.flatten(schedule=schedule, df=df)
+
+            if flattened:
+                SyncUtil.self.save_dataframe(table_name=f"{schedule.LakehouseTableName}_flattened", df=flattened, 
+                        mode=mode, partition_by=partition_by, options=options)
+        
+        SyncUtil.save_dataframe(table_name=schedule.LakehouseTableName, df=df, mode=mode, partition_by=partition_by, options=options)
+
+        return df
 
     def get_source_metrics(self, schedule:SyncSchedule, df_bq:DataFrame, observation:Observation = None):
         row_count = 0
@@ -286,14 +245,14 @@ class BQScheduleLoader(ConfigBase):
             row_count = observations["row_count"]
 
             if "watermark" in observations:
-                watermark = self.format_watermark(observations["watermark"])
+                watermark = SyncUtil.format_watermark(observations["watermark"])
         else:
             if schedule.Load_Strategy == str(LoadStrategy.WATERMARK):
                 df = df_bq.select(max(col(schedule.WatermarkColumn)).alias("watermark"), count("*").alias("row_count"))
 
                 row = df.first()
                 row_count = row["row_count"]
-                watermark = self.format_watermark(row["watermark"])
+                watermark = SyncUtil.format_watermark(row["watermark"])
             else:
                 df = df_bq.select(count("*").alias("row_count"))
 
@@ -308,52 +267,19 @@ class BQScheduleLoader(ConfigBase):
         else:
             return schedule.FabricPartitionColumns
 
-    def transform(self, schedule:SyncSchedule, df_bq:DataFrame):
-        df_bq = self.map_columns(schedule, df_bq)
+    def transform(self, schedule:SyncSchedule, df:DataFrame):
+        df = self.map_columns(schedule, df)
 
-        return (schedule, df_bq)
+        return (schedule, df)
 
-    def map_columns(self, schedule:SyncSchedule, df_bq:DataFrame) -> DataFrame:
+    def map_columns(self, schedule:SyncSchedule, df:DataFrame) -> DataFrame:
         maps = schedule.get_column_map()
 
         if maps:
             for m in maps:
-                df_bq = self.map_column(m, df_bq)
+                df = SyncUtil.map_column(m, df)
         
-        return df_bq 
-
-    def map_column(self, map:MappedColumn, df:DataFrame) -> DataFrame:
-        if map.IsTypeConversion:
-            type_map = f"{map.Source.Type}_TO_{map.Destination.Type}"
-
-            supported_conversion = False
-
-            try:
-                type_conversion = SupportedTypeConversion[type_map]
-                supported_conversion = True
-            except KeyError:
-                self.Logger.sync_status(f"WARNING: Skipped Unsupported Type Conversion ({map.Source.Name}): {map.Source.Type} to {map.Destination.Type}")
-                supported_conversion = False
-
-            if supported_conversion:
-                match type_conversion:
-                    case SupportedTypeConversion.STRING_TO_DATE:
-                        df = df.withColumn(map.Destination.Name, to_date(col(map.Source.Name), map.Format))
-                    case SupportedTypeConversion.STRING_TO_TIMESTAMP:
-                        df = df.withColumn(map.Destination.Name, to_timestamp(col(map.Source.Name), map.Format))
-                    case SupportedTypeConversion.STRING_TO_DECIMAL:
-                        df = df.withColumn(map.Destination.Name, try_to_number(col(map.Source.Name), lit(map.Format)))
-                    case SupportedTypeConversion.DATE_TO_STRING | SupportedTypeConversion.TIMESTAMP_TO_STRING:
-                        df = df.withColumn(map.Destination.Name, date_format(col(map.Source.Name), map.Format))
-                    case _:
-                        df = df.withColumn(map.Destination.Name, col(map.Source.Name).cast(map.Destination.Type.lower()))
-                
-                if map.DropSource:
-                    df = df.drop(map.Source.Name)
-        elif map.IsRename:
-            df = df.withColumnRenamed(map.Source.Name, map.Destination.Name)
-
-        return df
+        return df 
 
     def sync_bq_table(self, schedule:SyncSchedule, lock:Lock = None):
         """
@@ -398,7 +324,30 @@ class BQScheduleLoader(ConfigBase):
                 
             #Save BQ table to Lakehouse
             try:
-                schedule = self.save_bq_dataframe(schedule, df_bq, lock, observation)
+                table_maint = DeltaTableMaintenance(self.Context, schedule.LakehouseTableName)
+                write_config = { }
+
+                #Schema Evolution
+                if not schedule.InitialLoad:
+                    if schedule.AllowSchemaEvolution:                        
+                        table_maint.evolve_schema(df_bq)
+                        write_config["mergeSchema"] = True
+
+                schedule,df_bq = self.save_bq_dataframe(schedule, df_bq, lock, observation, write_config)
+
+                if schedule.InitialLoad:
+                    with lock:
+                        table_maint.set_default_table_properties()
+
+                src_cnt, schedule.MaxWatermark = self.get_source_metrics(schedule, df_bq)
+
+                schedule.UpdateRowCounts(src=src_cnt)    
+                schedule.SparkAppId = self.Context.sparkContext.applicationId
+                schedule.DeltaVersion = table_maint.CurrentTableVersion
+                schedule.EndTime = datetime.now(timezone.utc)
+                schedule.Status = SyncStatus.COMPLETE
+                
+                df_bq.unpersist()
             except Exception as e:
                 raise FabricLakehouseError(msg="Error writing BQ table to Lakehouse", data=schedule) from e
 
@@ -476,8 +425,9 @@ class BQScheduleLoader(ConfigBase):
 
         return schedule
 
-    def schedule_sync_wrapper(self, value, lock=None) -> SyncSchedule:
+    def schedule_sync_wrapper(self, value) -> SyncSchedule:
         schedule = value[2]
+        lock = self.TableLocks.get_or_set(schedule.TableName, Lock())
         return self.schedule_sync(schedule, lock)
 
     def thread_exception_handler(self, value):

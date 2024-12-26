@@ -13,7 +13,7 @@ from .Metadata import BQMetadataLoader
 from .Schedule import BQScheduler
 from .Logging import *
 from .Exceptions import *
-from ..Setup.FabricSetup import *
+from .Expiration import BQDataRetention
 
 class BQSync(SyncBase):
     def __init__(self, context:SparkSession, config_path:str):
@@ -31,20 +31,18 @@ class BQSync(SyncBase):
             if self.UserConfig.Autodetect:
                 self.MetadataLoader.auto_detect_config()
         except SyncBaseError as e:
-            self.Logger.sync_status("BQ Metadata Update Failed!")
-            self.Logger.error(e)
+            self.Logger.error(f"BQ Metadata Update Failed: {e}")
     
     def build_schedule(self, schedule_type:str = str(ScheduleType.AUTO), sync_metadata:bool = True):
         try:
             if sync_metadata:
                 self.sync_metadata()
             else:
-                self.MetadataLoader.create_proxy_views()
+                self.Metastore.create_proxy_views()
 
             self.Scheduler.build_schedule(schedule_type=ScheduleType[schedule_type])
         except SyncBaseError as e:
-            self.Logger.sync_status("BQ Scheduler Failed!")
-            self.Logger.error(e)
+            self.Logger.error(f"BQ Scheduler Failed: {e}")
 
     @Telemetry.Delta_Maintenance(maintainence_type="SYNC_METADATA")
     def optimize_metadata_tbls(self):
@@ -79,33 +77,4 @@ class BQSync(SyncBase):
             
             self.Logger.sync_status("Run Schedule Done!!")
         except SyncBaseError as e:
-            self.Logger.sync_status("Run Schedule  Failed!")
-            self.Logger.error(e)
-    
-    def check_for_updates(self, download:bool=False):
-        update_available, update_version = SetupUtils.check_for_update(self.Context, self.UserConfig.Version)
-
-        if update_available:
-            self.Logger.sync_status(f"A newer version ({update_version}) of BQ Sync is available..your version is {self.UserConfig.Version}...")
-
-            if download:
-                random_int = random.randint(1, 1000)
-                randomizer = f"0000{random_int}"
-                git_notebooks = [ \
-                            {"name": f"BQ-Sync-Upgrade-v{update_version}-{randomizer[-4:]}", 
-                                "url": f"{Installer.GIT_URL}/Notebooks/v{update_version}/Upgrade.ipynb",
-                                "file_name": "Upgrade.ipynb"}]
-                
-                workspace_id = self.UserConfig.Fabric.WorkspaceID
-
-                if not workspace_id:
-                    workspace_id = self.Context.conf.get("trident.workspace.id")
-
-                try:
-                    SetupUtils.download_notebooks(workspace_id, git_notebooks)
-                    self.Logger.sync_status(f"The BQ Sync Upgrade notebook has been downloaded to your workspace...")
-                except SyncInstallError as e:
-                    self.Logger.error(e)
-                    self.Logger.sync_status(f"Failed to download the BQ Sync Upgrade notebook...")
-        else:
-             self.Logger.sync_status(f"BQ Sync is up-to-data (Version: {self.UserConfig.Version})...") 
+            self.Logger.error(f"Run Schedule Failed: {e}") 

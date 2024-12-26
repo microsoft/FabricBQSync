@@ -4,7 +4,8 @@
     "version": "2.0.0",
     "enable_data_expiration": false,
     "optimization": {
-        "use_approximate_row_counts": false
+        "use_approximate_row_counts": false,
+        "disable_dataframe_cache": false
     },
     "autodiscover": {
         "autodetect": true,

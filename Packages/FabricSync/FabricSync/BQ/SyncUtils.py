@@ -1,52 +1,86 @@
+from pyspark.sql import SparkSession
 from pyspark.sql.functions import *
 from pyspark.sql.types import *
 from delta.tables import *
-from datetime import datetime
+from datetime import datetime, date
+import warnings
 
 from .Model.Config import *
 from .Core import *
-from .Admin.DeltaTableUtility import *
 from .Enum import *
 from .Model.Schedule import SyncSchedule
 from .Constants import SyncConstants
-
-class BQDataRetention(ConfigBase):
-    """
-    Class responsible for BQ Table and Partition Expiration
-    """
-    def __init__(self, context:SparkSession, user_config, gcp_credential:str):
-        """
-        Calls parent init to load User Config from JSON file
-        """
-        super().__init__(context, user_config, gcp_credential)
-    
-    def execute(self):        
-        self.Logger.Sync_Status("Enforcing Data Expiration/Retention Policy...")
-        self._enforce_retention_policy()
-        self.Logger.Sync_Status("Updating Data Expiration/Retention Policy...")
-        self.Metastore.sync_retention_config(self.UserConfig.ID)
-
-    def _enforce_retention_policy(self):
-        df = self.Metastore.get_bq_retention_policy(self.UserConfig.ID)
-
-        for d in df.collect():
-            if d["use_lakehouse_schema"]:
-                table_name = f"{d['lakehouse']}.{d['lakehouse_schema']}.{d['lakehouse_table_name']}"
-            else:
-                table_name = f"{d['lakehouse']}.{d['lakehouse_table_name']}"
-
-            table_maint = DeltaTableMaintenance(self.Context, table_name)
-
-            if d["partition_id"]:
-                self.Logger.Sync_Status(f"Expiring Partition: {table_name}${d['partition_id']}")
-                predicate = SyncUtil.resolve_fabric_partition_predicate(d["partition_type"], d["partition_column"], 
-                    d["partition_grain"], d["partition_id"])
-                table_maint.drop_partition(predicate)
-            else:
-                self.Logger.Sync_Status(f"Expiring Table: {table_name}")
-                table_maint.drop_table()  
+from .Admin.DeltaTableUtility import *
+from .Warnings import SyncUnsupportedConfigurationWarning
 
 class SyncUtil():
+    @staticmethod
+    def build_filter_predicate(filter:ConfigObjectFilter):
+        if filter:
+            if filter.type and filter.pattern:
+                if filter.type == ObjectFilterType.INCLUDE.value:
+                    return f"table_name LIKE '{filter.pattern}'"
+                else:
+                    return f"table_name NOT LIKE '{filter.pattern}'"
+        
+        return None
+    
+    @staticmethod
+    def map_column(map:MappedColumn, df:DataFrame) -> DataFrame:
+        if map.IsTypeConversion:
+            type_map = f"{map.Source.Type}_TO_{map.Destination.Type}"
+
+            supported_conversion = False
+
+            try:
+                type_conversion = SupportedTypeConversion[type_map]
+                supported_conversion = True
+            except KeyError:
+                warnings.warn(f"WARNING: Skipped Unsupported Type Conversion ({map.Source.Name}): {map.Source.Type} to {map.Destination.Type}", 
+                    SyncUnsupportedConfigurationWarning)
+                supported_conversion = False
+
+            if supported_conversion:
+                match type_conversion:
+                    case SupportedTypeConversion.STRING_TO_DATE:
+                        df = df.withColumn(map.Destination.Name, to_date(col(map.Source.Name), map.Format))
+                    case SupportedTypeConversion.STRING_TO_TIMESTAMP:
+                        df = df.withColumn(map.Destination.Name, to_timestamp(col(map.Source.Name), map.Format))
+                    case SupportedTypeConversion.STRING_TO_DECIMAL:
+                        df = df.withColumn(map.Destination.Name, try_to_number(col(map.Source.Name), lit(map.Format)))
+                    case SupportedTypeConversion.DATE_TO_STRING | SupportedTypeConversion.TIMESTAMP_TO_STRING:
+                        df = df.withColumn(map.Destination.Name, date_format(col(map.Source.Name), map.Format))
+                    case _:
+                        df = df.withColumn(map.Destination.Name, col(map.Source.Name).cast(map.Destination.Type.lower()))
+                
+                if map.DropSource:
+                    df = df.drop(map.Source.Name)
+        elif map.IsRename:
+            df = df.withColumnRenamed(map.Source.Name, map.Destination.Name)
+
+        return df
+    
+    @staticmethod
+    def format_watermark(max_watermark):
+        if type(max_watermark) is date:
+            return max_watermark.strftime("%Y-%m-%d")
+        elif type(max_watermark) is datetime:
+            return max_watermark.strftime("%Y-%m-%d %H:%M:%S%z")
+        else:
+            return str(max_watermark)
+
+    @staticmethod
+    def save_dataframe(table_name:str, df:DataFrame, mode:str, partition_by:list=None, options:dict=None):
+        writer = df.write.mode(mode)
+
+        if partition_by:
+            writer = writer.partitionBy(partition_by)
+        
+        if options:
+            writer = writer.options(options)
+        
+        writer.saveAsTable(table_name)
+
     @staticmethod
     def optimize_bq_sync_metastore(context):
         for tbl in SyncConstants.get_metadata_tables():

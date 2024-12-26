@@ -10,6 +10,7 @@ from .Admin.DeltaTableUtility import *
 from .Enum import *
 from .Exceptions import *
 from .Constants import SyncConstants
+from .SyncUtils import SyncUtil
 
 class BQMetadataLoader(ConfigBase):
     """
@@ -91,7 +92,7 @@ class BQMetadataLoader(ConfigBase):
                 case _:
                     pass
 
-            filter_pattern = self.build_filter_predicate(filter)
+            filter_pattern = SyncUtil.build_filter_predicate(filter)
 
             if filter_list:
                 tbls = ", ".join(f"'{t}'" for t in filter_list)
@@ -113,16 +114,6 @@ class BQMetadataLoader(ConfigBase):
             df = schema_model.get_empty_df(self.Context)
         
         df.write.mode(str(mode)).saveAsTable(f"{self.UserConfig.Fabric.MetadataLakehouse}.{schema_model.TableName}")
-
-    def build_filter_predicate(self, filter):
-        if filter:
-            if filter.type and filter.pattern:
-                if filter.type == ObjectFilterType.INCLUDE.value:
-                    return f"table_name LIKE '{filter.pattern}'"
-                else:
-                    return f"table_name NOT LIKE '{filter.pattern}'"
-        
-        return None
 
     def sync_bq_information_schema_table_dependent(self, project:str, dataset:str, view:SchemaView, mode:LoadType): 
         schema_model = self.schema_models[view]
@@ -150,7 +141,7 @@ class BQMetadataLoader(ConfigBase):
         query_model.add_predicate("t.table_name NOT LIKE '_bqc_%'")
 
         filter = self.UserConfig.autodiscover.tables.filter
-        filter_pattern = self.build_filter_predicate(filter)
+        filter_pattern = SyncUtil.build_filter_predicate(filter)
 
         filter_list = self.UserConfig.get_table_name_list(project, dataset, BigQueryObjectType.BASE_TABLE, True)
 
@@ -232,11 +223,11 @@ class BQMetadataLoader(ConfigBase):
 
         if processor.has_exceptions:
             self.has_exception = True            
-            self.Logger.error(msg="ERROR: Async metadata failed....please resolve errors and try again...")
+            self.Logger.error("ERROR: Async metadata failed....please resolve errors and try again...")
         else:
             self.has_exception = False
 
-    def metadata_sync(self, value, lock):
+    def metadata_sync(self, value):
         view = SchemaView[value[1]]
         self.Logger.sync_status(f"Syncing metadata for {view}...")
 
@@ -270,19 +261,10 @@ class BQMetadataLoader(ConfigBase):
             self.async_bq_metadata()
 
         if not self.has_exception:
-            self.create_proxy_views()
+            self.Metastore.create_proxy_views()
             self.Logger.sync_status(f"BQ Metadata Update completed in {str(t)}...")
         else:
-            raise MetadataSyncError(msg="BQ Metadata sync failed. Please check the logs.")
-
-    def create_proxy_views(self):
-        """
-        Create the user config and covering BQ information schema views
-        """
-        self.Metastore.create_userconfig_tables_proxy_view()        
-        self.Metastore.create_userconfig_tables_cols_proxy_view()
-
-        self.Metastore.create_autodetect_view()      
+            raise MetadataSyncError(msg="BQ Metadata sync failed. Please check the logs.")  
 
     @Telemetry.Auto_Discover
     def auto_detect_config(self):

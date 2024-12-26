@@ -28,8 +28,6 @@ from .Exceptions import *
 from .Constants import SyncConstants
 from .Validation import SqlValidator
 
-warnings.filterwarnings('ignore', category=UserWarning)
-
 @dataclass
 class SyncTimer(ContextDecorator):
     _start_time: Optional[float] = field(default=None, init=False, repr=False)
@@ -82,7 +80,49 @@ class ThreadSafeList():
     def length(self):
         with self._lock:
             return len(self._list)
-            
+
+class ThreadSafeDict:
+    def __init__(self):
+        self._dict = {}
+        self._lock = Lock()
+
+    def get_or_set(self, key, value):
+        with self._lock:
+            if key in self._dict:
+                return self._dict.get(key)
+            else:
+                self._dict[key] = value
+                return value
+
+    def set(self, key, value):
+        with self._lock:
+            self._dict[key] = value
+
+    def get(self, key):
+        with self._lock:
+            return self._dict.get(key)
+
+    def remove(self, key):
+        with self._lock:
+            return self._dict.pop(key, None)
+
+    def contains(self, key):
+        with self._lock:
+            return key in self._dict
+
+    def items(self):
+        with self._lock:
+            return list(self._dict.items())
+
+    def keys(self):
+        with self._lock:
+            return list(self._dict.keys())
+
+    def values(self):
+        with self._lock:
+            return list(self._dict.values())
+
+
 class QueueProcessor:
     def __init__(self, num_threads):
         self.num_threads = num_threads
@@ -91,28 +131,25 @@ class QueueProcessor:
         self.exception_hook = None
 
     def process(self, sync_function, exception_hook=None):
-        lock = Lock() 
         self.exception_hook = exception_hook
 
         for i in range(self.num_threads):
-            t=Thread(target=self._task_runner, args=(sync_function, self.workQueue, lock))
+            t=Thread(target=self._task_runner, args=(sync_function, self.workQueue))
             t.name = f"{SyncConstants.THREAD_PREFIX}_{i}"
             t.daemon = True
             t.start() 
             
         self.workQueue.join()
 
-    def _task_runner(self, sync_function, workQueue:PriorityQueue, lock:Lock):
+    def _task_runner(self, sync_function, workQueue:PriorityQueue):
         while not workQueue.empty():
             value = workQueue.get()
 
             try:
-                sync_function(value, lock)
+                sync_function(value)
             except Exception as e:
                 self.exceptions.append(e)  
-                #msg = traceback.format_exc()
-                msg=""
-                logging.error(msg=f"QUEUE PROCESS THREAD ERROR: {e} - {msg}")
+                logging.error(msg=f"QUEUE PROCESS THREAD ERROR: {e}")
 
                 if self.exception_hook:
                     self.exception_hook(value)
