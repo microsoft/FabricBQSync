@@ -5,18 +5,19 @@ Welcome to the technical documents for Fabric BQ Sync project. Please check back
 ### Documentation Navigation
 
 ##### Getting Started
-- GCP Requirements
-- Fabric Workspace & Spark
-- Installs & Upgrades
+- [BigQuery & GCP Requirements](BigQuery.md)
+- [Fabric Workspace & Spark](Fabric.md)
+- [Installs & Upgrades](Installation.md)
 
 ##### Technical Overview
 - [Autodiscovery](Autodiscovery.md)
+- [BigQuery Object Types](ObjectTypes.md) 
 - [Configuration](Configuration.md)
+    - [Table Configuration](TableConfiguration.md)
     - [Configuration Settings](ConfigurationSettings.md)
 - [Scheduling](Scheduling.md)
     - [Load Groups](LoadGroups.md)
 - [Synchronization](Synchronization.md)
-- Tables/Views/Materialized Views
 
 
 ##### Administration
