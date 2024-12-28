@@ -150,9 +150,9 @@ class BQScheduleLoader(ConfigBase):
 
         if self.UserConfig.Optimization.UseApproximateRowCounts:
             query_model.Cached = False
-
             observation = Observation(name="BQSyncMetricsObservation")
         else:
+            query_model.Cached = (self.UserConfig.Optimizations.DisableDataframeCache == False)
             observation = None
 
         df_bq = self.read_bq_to_dataframe(query_model)
@@ -282,26 +282,6 @@ class BQScheduleLoader(ConfigBase):
         return df 
 
     def sync_bq_table(self, schedule:SyncSchedule, lock:Lock = None):
-        """
-        Sync the data for a table from BigQuery to the target Fabric Lakehouse based on configuration
-
-        1. Determines how to retrieve the data from BigQuery
-            a. PARTITION & TIME_INGESTION
-                - Data is loaded by partition using the partition filter option of the spark connector
-            b. FULL & WATERMARK
-                - Loaded using the table name or source query and any relevant predicates
-        2. Resolve BigQuery to Fabric partition mapping
-            a. BigQuery supports TIME and RANGE based partitioning
-                - TIME based partitioning support YEAR, MONTH, DAY & HOUR grains
-                    - When the grain doesn't exist or a psuedo column is used, a proxy column is added
-                        on the Fabric Lakehouse side
-                - RANGE partitioning is a backlog feature
-        3. Write data to the Fabric Lakehouse
-            a. PARTITION write use replaceWhere to overwrite the specific Delta partition
-            b. All other writes respect the configure MODE against the write destination
-        4. Collect and save telemetry
-        """
-        
         with SyncTimer() as t:
             schedule.SummaryLoadType = schedule.DefaultSummaryLoadType
             self.show_sync_status(schedule, message=schedule.SummaryLoadType)
@@ -329,16 +309,10 @@ class BQScheduleLoader(ConfigBase):
 
                 #Schema Evolution
                 if not schedule.InitialLoad:
-                    if schedule.AllowSchemaEvolution:                        
-                        table_maint.evolve_schema(df_bq)
+                    if schedule.AllowSchemaEvolution:
                         write_config["mergeSchema"] = True
 
                 schedule,df_bq = self.save_bq_dataframe(schedule, df_bq, lock, observation, write_config)
-
-                if schedule.InitialLoad:
-                    with lock:
-                        table_maint.set_default_table_properties()
-
                 src_cnt, schedule.MaxWatermark = self.get_source_metrics(schedule, df_bq)
 
                 schedule.UpdateRowCounts(src=src_cnt)    

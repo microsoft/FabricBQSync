@@ -320,6 +320,12 @@ class SyncBase():
         self.Context.sql(f"USE {self.UserConfig.Fabric.MetadataLakehouse}")
 
     def configure_session_context(self):
+        #Delta Settings
+        self.Context.conf.set("spark.databricks.delta.retentionDurationCheck.enabled", "false")
+        self.Context.conf.set("spark.databricks.delta.properties.defaults.minWriterVersion", "7")
+        self.Context.conf.set("spark.databricks.delta.properties.defaults.minReaderVersion", "3")
+
+        #Sync Settings
         self.Context.conf.set(f"{SyncConstants.SPARK_CONF_PREFIX}.application_id", str(self.UserConfig.ApplicationID))
         self.Context.conf.set(f"{SyncConstants.SPARK_CONF_PREFIX}.name", self.UserConfig.ID)
         self.Context.conf.set(f"{SyncConstants.SPARK_CONF_PREFIX}.log_path", self.UserConfig.Logging.LogPath)
@@ -327,7 +333,7 @@ class SyncBase():
         self.Context.conf.set(f"{SyncConstants.SPARK_CONF_PREFIX}.log_telemetry", str(self.UserConfig.Logging.Telemetry))
         self.Context.conf.set(f"{SyncConstants.SPARK_CONF_PREFIX}.telemetry_endpoint", 
             f"{self.UserConfig.Logging.TelemetryEndPoint}.azurewebsites.net")
-
+        
     def load_user_config_from_json(self, config_path:str) -> Tuple[DataFrame, str]:
         """
         Loads and caches the user config json file
