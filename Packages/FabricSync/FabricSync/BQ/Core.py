@@ -28,7 +28,7 @@ from .Exceptions import *
 from .Constants import SyncConstants
 from .Validation import SqlValidator
 
-warnings.filterwarnings('ignore', category=UserWarning)
+warnings.filterwarnings("ignore", category=UserWarning)
 
 @dataclass
 class SyncTimer(ContextDecorator):
@@ -82,7 +82,49 @@ class ThreadSafeList():
     def length(self):
         with self._lock:
             return len(self._list)
-            
+
+class ThreadSafeDict:
+    def __init__(self):
+        self._dict = {}
+        self._lock = Lock()
+
+    def get_or_set(self, key, value):
+        with self._lock:
+            if key in self._dict:
+                return self._dict.get(key)
+            else:
+                self._dict[key] = value
+                return value
+
+    def set(self, key, value):
+        with self._lock:
+            self._dict[key] = value
+
+    def get(self, key):
+        with self._lock:
+            return self._dict.get(key)
+
+    def remove(self, key):
+        with self._lock:
+            return self._dict.pop(key, None)
+
+    def contains(self, key):
+        with self._lock:
+            return key in self._dict
+
+    def items(self):
+        with self._lock:
+            return list(self._dict.items())
+
+    def keys(self):
+        with self._lock:
+            return list(self._dict.keys())
+
+    def values(self):
+        with self._lock:
+            return list(self._dict.values())
+
+
 class QueueProcessor:
     def __init__(self, num_threads):
         self.num_threads = num_threads
@@ -91,28 +133,25 @@ class QueueProcessor:
         self.exception_hook = None
 
     def process(self, sync_function, exception_hook=None):
-        lock = Lock() 
         self.exception_hook = exception_hook
 
         for i in range(self.num_threads):
-            t=Thread(target=self._task_runner, args=(sync_function, self.workQueue, lock))
+            t=Thread(target=self._task_runner, args=(sync_function, self.workQueue))
             t.name = f"{SyncConstants.THREAD_PREFIX}_{i}"
             t.daemon = True
             t.start() 
             
         self.workQueue.join()
 
-    def _task_runner(self, sync_function, workQueue:PriorityQueue, lock:Lock):
+    def _task_runner(self, sync_function, workQueue:PriorityQueue):
         while not workQueue.empty():
             value = workQueue.get()
 
             try:
-                sync_function(value, lock)
+                sync_function(value)
             except Exception as e:
                 self.exceptions.append(e)  
-                #msg = traceback.format_exc()
-                msg=""
-                logging.error(msg=f"QUEUE PROCESS THREAD ERROR: {e} - {msg}")
+                logging.error(msg=f"QUEUE PROCESS THREAD ERROR: {e}")
 
                 if self.exception_hook:
                     self.exception_hook(value)
@@ -207,6 +246,7 @@ class ConfigBase():
             if query.Cached:
                 df.cache()
         except Exception as e:
+            print(e)
             raise BQConnectorError(msg="Read to dataframe failed.", query=query) from e
         
         return df
@@ -260,10 +300,8 @@ class SyncBase():
         """
         Init method loads the user JSON config from the supplied path.
         """
-        self._logger = None
-
         if config_path is None:
-            raise Exception("Missing Path to JSON User Config")
+            raise SyncConfigurationError("Missing Path to JSON User Config")
 
         self.Context = context
         self.ConfigPath = config_path
@@ -283,6 +321,13 @@ class SyncBase():
         self.Context.sql(f"USE {self.UserConfig.Fabric.MetadataLakehouse}")
 
     def configure_session_context(self):
+        #Delta Settings
+        self.Context.conf.set("spark.databricks.delta.retentionDurationCheck.enabled", "false")
+        self.Context.conf.set("spark.databricks.delta.properties.defaults.minWriterVersion", "7")
+        self.Context.conf.set("spark.databricks.delta.properties.defaults.minReaderVersion", "3")
+        self.Context.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
+
+        #Sync Settings
         self.Context.conf.set(f"{SyncConstants.SPARK_CONF_PREFIX}.application_id", str(self.UserConfig.ApplicationID))
         self.Context.conf.set(f"{SyncConstants.SPARK_CONF_PREFIX}.name", self.UserConfig.ID)
         self.Context.conf.set(f"{SyncConstants.SPARK_CONF_PREFIX}.log_path", self.UserConfig.Logging.LogPath)
@@ -308,7 +353,7 @@ class SyncBase():
             config_df.createOrReplaceTempView("user_config_json")
             config_df.cache()
         except Exception as e:
-            raise SyncConfigurationError("Failed to load user configuration") from e
+            raise SyncConfigurationError(f"Failed to load user configuration: {e}") from e
 
         return cfg
 
@@ -320,7 +365,7 @@ class SyncBase():
                 file_contents = self.read_credential_file()
                 return self.convert_to_base64string(file_contents)
             except Exception as e:
-                raise SyncConfigurationError("Failed to GCP credential file") from e
+                raise SyncConfigurationError(f"Failed to parse GCP credential file: {e}") from e
 
     def read_credential_file(self) -> str:
         """
@@ -329,7 +374,7 @@ class SyncBase():
         credential = f"{self.UserConfig.GCP.GCPCredential.CredentialPath}"
 
         if not os.path.exists(credential):
-           raise ValueError(f"GCP Credential file does not exists at the path supplied:{credential}")
+           raise SyncConfigurationError(f"GCP Credential file does not exists at the path supplied:{credential}")
         
         txt = Path(credential).read_text()
         txt = txt.replace("\n", "").replace("\r", "")
@@ -357,7 +402,7 @@ class SyncBase():
             elif isinstance(val, bytes):
                 sb_bytes = val
             else:
-                raise ValueError("Argument must be string or bytes")
+                raise SyncConfigurationError("Credential provided must be string or bytes")
 
             return b64.b64encode(b64.b64decode(sb_bytes)) == sb_bytes
         except Exception as e:

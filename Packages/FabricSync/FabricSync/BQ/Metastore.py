@@ -89,7 +89,7 @@ class FabricMetastore():
         try:
             self.Context.sql(sql)
         except Exception as e:
-            raise SchedulerError() from e
+            raise SchedulerError(f"{e}") from e
         
     def save_schedule_telemetry(self, rdd):
         """
@@ -104,7 +104,7 @@ class FabricMetastore():
         try:
             df.write.mode("APPEND").saveAsTable(tbl)
         except Exception as e:
-            raise SyncLoadError("Error Saving Schedule Telemetry") from e
+            raise SyncLoadError(f"Error Saving Schedule Telemetry: {e}") from e
 
     def get_schedule(self, sync_id:str, schedule_type:str):
         """
@@ -167,7 +167,7 @@ class FabricMetastore():
             CASE WHEN (c.source_query='') THEN NULL ELSE c.source_query END AS source_query, 
             CASE WHEN (c.source_predicate='') THEN NULL ELSE c.source_predicate END AS source_predicate,
             CASE WHEN (c.watermark_column='') THEN NULL ELSE c.watermark_column END AS watermark_column,
-            c.is_partitioned, 
+            COALESCE(c.is_partitioned, FALSE) AS is_partitioned, 
             CASE WHEN (c.partition_column='') THEN NULL ELSE c.partition_column END AS partition_column, 
             CASE WHEN (c.partition_grain='') THEN NULL ELSE c.partition_grain END AS partition_grain, 
             CASE WHEN (c.partition_range='') THEN NULL ELSE c.partition_range END AS partition_range,
@@ -211,7 +211,7 @@ class FabricMetastore():
         try:
             return df
         except Exception as e:
-            raise SchedulerError("Failed to retrieve BQ Sync schedule") from e
+            raise SchedulerError(f"Failed to retrieve BQ Sync schedule: {e}") from e
 
     def process_load_group_telemetry(self, sync_id:str, schedule_type:str):
         """
@@ -276,7 +276,7 @@ class FabricMetastore():
         try:
             self.Context.sql(sql)
         except Exception as e:
-            raise SyncLoadError("Error processing Load Group telemetry") from e
+            raise SyncLoadError(f"Error processing Load Group telemetry: {e}") from e
 
     def commit_table_configuration(self, sync_id:str, schedule_type:str):
         """
@@ -314,21 +314,20 @@ class FabricMetastore():
             AS
             SELECT
                 sync_id,
-                COALESCE(tbl.project_id,default_project_id) as project_id,
-                COALESCE(tbl.dataset,default_dataset) AS dataset,
+                tbl.project_id as project_id,
+                tbl.dataset AS dataset,
                 tbl.table_name,
-                COALESCE(tbl.object_type,default_object_type) AS object_type,
-
-                COALESCE(tbl.enabled,default_enabled) AS enabled,
-                COALESCE(tbl.priority,default_priority) AS priority,
-                COALESCE(tbl.interval,default_interval) AS interval,
-                COALESCE(tbl.enforce_expiration,default_enforce_expiration) AS enforce_expiration,
-                COALESCE(tbl.allow_schema_evolution,default_allow_schema_evolution) AS allow_schema_evolution,
-                COALESCE(tbl.flatten_table,default_flatten_table) AS flatten_table,
-                COALESCE(tbl.flatten_inplace,default_flatten_inplace) AS flatten_inplace,
-                COALESCE(tbl.explode_arrays,default_explode_arrays) AS explode_arrays,
-                COALESCE(tbl.table_maintenance.enabled,default_table_maintenance_enabled) AS table_maintenance_enabled,
-                COALESCE(tbl.table_maintenance.interval,default_table_maintenance_interval) AS table_maintenance_interval,
+                tbl.object_type AS object_type,
+                tbl.enabled AS enabled,
+                tbl.priority AS priority,
+                tbl.interval AS interval,
+                tbl.enforce_expiration AS enforce_expiration,
+                tbl.allow_schema_evolution AS allow_schema_evolution,
+                tbl.flatten_table AS flatten_table,
+                tbl.flatten_inplace AS flatten_inplace,
+                tbl.explode_arrays AS explode_arrays,
+                tbl.table_maintenance.enabled AS table_maintenance_enabled,
+                tbl.table_maintenance.interval AS table_maintenance_interval,
                 tbl.source_query,
                 tbl.predicate AS source_predicate,
                 tbl.load_strategy,
@@ -349,21 +348,6 @@ class FabricMetastore():
             FROM (
                 SELECT 
                     id AS sync_id,
-                    CASE WHEN table_defaults IS NULL THEN NULL ELSE table_defaults.project_id END AS default_project_id,
-                    CASE WHEN table_defaults IS NULL THEN NULL ELSE table_defaults.dataset END AS default_dataset,
-                    CASE WHEN table_defaults IS NULL THEN NULL ELSE table_defaults.object_type END AS default_object_type,
-                    CASE WHEN table_defaults IS NULL THEN NULL ELSE table_defaults.priority END AS default_priority,
-                    CASE WHEN table_defaults IS NULL THEN NULL ELSE table_defaults.enabled END AS default_enabled,
-                    CASE WHEN table_defaults IS NULL THEN NULL ELSE table_defaults.enforce_expiration END AS default_enforce_expiration,
-                    CASE WHEN table_defaults IS NULL THEN NULL ELSE table_defaults.allow_schema_evolution END AS default_allow_schema_evolution,
-                    CASE WHEN table_defaults IS NULL THEN NULL ELSE table_defaults.interval END AS default_interval,
-                    CASE WHEN table_defaults IS NULL THEN NULL ELSE table_defaults.flatten_table END AS default_flatten_table,
-                    CASE WHEN table_defaults IS NULL THEN NULL ELSE table_defaults.flatten_inplace END AS default_flatten_inplace,
-                    CASE WHEN table_defaults IS NULL THEN NULL ELSE table_defaults.explode_arrays END AS default_explode_arrays,
-                    CASE WHEN table_defaults IS NULL OR table_defaults.table_maintenance IS NULL THEN NULL 
-                        ELSE table_defaults.table_maintenance.enabled END AS default_table_maintenance_enabled,
-                    CASE WHEN table_defaults IS NULL OR table_defaults.table_maintenance IS NULL THEN NULL 
-                        ELSE table_defaults.table_maintenance.interval END AS default_table_maintenance_interval,
                     EXPLODE(tables) AS tbl 
                 FROM user_config_json)
         """
@@ -371,7 +355,7 @@ class FabricMetastore():
         try:
             self.Context.sql(sql)
         except Exception as e:
-            raise SyncConfigurationError("Error creating User Config table view proxy") from e
+            raise SyncConfigurationError(f"Error creating User Config table view proxy: {e}") from e
     
     def create_userconfig_tables_cols_proxy_view(self):
         """
@@ -517,7 +501,7 @@ class FabricMetastore():
         try:
             self.Context.sql(sql)
         except Exception as e:
-            raise AutoDiscoveryError("Error creating Autodiscovery proxy view") from e
+            raise AutoDiscoveryError(f"Error creating Autodiscovery proxy view: {e}") from e
 
     def auto_detect_profiles(self, sync_id:str):        
         sql = f"""
@@ -565,9 +549,9 @@ class FabricMetastore():
             SELECT
                 p.sync_id,
                 UUID() AS table_id,
-                a.table_catalog as project_id,
-                a.table_schema as dataset,
-                a.table_name as table_name,
+                p.table_catalog as project_id,
+                p.table_schema as dataset,
+                p.table_name as table_name,
                 p.object_type AS object_type,
 
                 CASE WHEN p.load_all THEN
@@ -579,7 +563,7 @@ class FabricMetastore():
                     COALESCE(u.lakehouse_schema, COALESCE(p.target_schema, a.table_schema))
                     ELSE NULL END AS lakehouse_schema,
                 CASE WHEN (COALESCE(u.lakehouse_target_table,'') ='') 
-                    THEN a.table_name ELSE u.lakehouse_target_table END AS lakehouse_table_name,
+                    THEN p.table_name ELSE u.lakehouse_target_table END AS lakehouse_table_name,
                 COALESCE(u.lakehouse_partition, '') AS lakehouse_partition,
                 COALESCE(u.source_query, '') AS source_query,
                 COALESCE(u.source_predicate, '') AS source_predicate,
@@ -622,17 +606,17 @@ class FabricMetastore():
                 'INIT' AS sync_state,
                 CURRENT_TIMESTAMP() as created_dt,
                 NULL as last_updated_dt
-            FROM bq_table_metadata_autodetect a
-            JOIN bq_objects p ON
+            FROM bq_objects p
+            LEFT JOIN bq_table_metadata_autodetect a ON
                 a.table_catalog = p.table_catalog AND
                 a.table_schema = p.table_schema AND
-                a.table_name = p.table_name
+                a.table_name = p.table_name AND 
+                p.object_type = 'BASE_TABLE'
             LEFT JOIN user_config_tables u ON 
-                a.table_catalog = u.project_id AND
-                a.table_schema = u.dataset AND
-                a.table_name = u.table_name AND
-                p.object_type = u.object_type
-            
+                p.table_catalog = u.project_id AND
+                p.table_schema = u.dataset AND
+                p.table_name = u.table_name AND
+                p.object_type = u.object_type            
         )
 
         MERGE INTO bq_sync_configuration t
@@ -663,7 +647,7 @@ class FabricMetastore():
         try:
             self.Context.sql(sql)
         except Exception as e:
-            raise AutoDiscoveryError("Autodiscovery failed.") from e
+            raise AutoDiscoveryError(f"Autodiscovery failed: {e}") from e
             
     
     def ensure_schemas(self, workspace:str, sync_id:str):
@@ -737,6 +721,7 @@ class FabricMetastore():
         USING expiration s
         ON t.sync_id=s.sync_id AND t.table_catalog=s.table_catalog 
             AND t.table_schema=s.table_schema AND t.table_name=s.table_name
+            AND t.partition_id=s.partition_id
         WHEN MATCHED AND t.expiration <> s.expiration THEN
             UPDATE SET
                 t.expiration = s.expiration
@@ -747,7 +732,7 @@ class FabricMetastore():
         try:
             self.Context.sql(sql)
         except Exception as e:
-            raise DataRetentionError("Error applying data expiration policy.") from e
+            raise DataRetentionError(f"Error applying data expiration policy: {e}") from e
     
     def get_bq_retention_policy(self, sync_id:str) -> DataFrame:
         sql = f"""
@@ -764,4 +749,10 @@ class FabricMetastore():
         try:
             return self.Context.sql(sql)
         except Exception as e:
-            raise SyncConfigurationError("Failed to retrieve BQ Sync retention policy.") from e
+            raise SyncConfigurationError(f"Failed to retrieve BQ Sync retention policy: {e}") from e
+    
+    def create_proxy_views(self):
+        self.create_userconfig_tables_proxy_view()        
+        self.create_userconfig_tables_cols_proxy_view()
+
+        self.create_autodetect_view()

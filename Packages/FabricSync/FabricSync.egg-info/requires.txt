@@ -1,0 +1,6 @@
+mlflow-skinny==2.19.0
+google-cloud-bigquery==3.27.0
+google-cloud-bigquery[pandas]==3.27.0
+pydantic==2.10.4
+semantic-link==0.8.4
+PyGithub==2.5.0

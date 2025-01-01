@@ -55,14 +55,13 @@ class SyncLogger:
 
     def sync_status(self, message, *args, **kwargs):
         if (self.logger.isEnabledFor(SyncLogLevel.SYNC_STATUS.value)):
-            if self.Telemetry:
-                self.logger._log(SyncLogLevel.SYNC_STATUS.value, message, args, **kwargs)
+            self.logger._log(SyncLogLevel.SYNC_STATUS.value, message, args, **kwargs)
 
     def telemetry(self, message, *args, **kwargs):
         if (self.logger.isEnabledFor(SyncLogLevel.TELEMETRY.value)):
             if self.Telemetry:
                 self.send_telemetry(message)
-                #self.logger._log(logging.DEBUG, f"Telemetry: {message}", args, **kwargs)
+                #self.logger._log(SyncLogLevel.SYNC_STATUS.value, f"Telemetry: {message}", args, **kwargs)
 
     def send_telemetry(self, payload):
         ct = threading.current_thread()
@@ -279,7 +278,11 @@ class Telemetry():
 
                 r =  func(*args, **kwargs)
 
-                Telemetry.log_telemetry("BQ Data Expiration Enforcement", result=True)
+                row = func_args["row"]
+                params = row.asDict()
+                print(params)
+
+                Telemetry.log_telemetry("BQ Data Expiration Enforcement", result=True, data=params)
 
                 return r
             return wrapper
