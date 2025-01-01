@@ -66,6 +66,7 @@ class BQMetadataLoader(ConfigBase):
             query_model = BQQueryModel(**qm)
 
             predicate_type = PredicateType.OR
+            load_all = True
 
             match type:
                 case BigQueryObjectType.BASE_TABLE:
@@ -73,18 +74,21 @@ class BQMetadataLoader(ConfigBase):
                     query_model.add_predicate("table_name NOT LIKE '_bqc_%'")
 
                     if not self.UserConfig.LoadAllTables:
+                        load_all = False
                         predicate_type = PredicateType.AND
                         
                     filter_list = self.UserConfig.get_table_name_list(project, dataset, BigQueryObjectType.BASE_TABLE, True)
                     filter = self.UserConfig.autodiscover.tables.filter
                 case BigQueryObjectType.VIEW:
                     if not self.UserConfig.LoadAllViews:
+                        load_all = False
                         predicate_type = PredicateType.AND                   
                     
                     filter_list = self.UserConfig.get_table_name_list(project, dataset, BigQueryObjectType.VIEW, True)
                     filter = self.UserConfig.autodiscover.views.filter
                 case BigQueryObjectType.MATERIALIZED_VIEW:
                     if not self.UserConfig.LoadAllMaterializedViews:
+                        load_all = False
                         predicate_type = PredicateType.AND                    
                     
                     filter_list = self.UserConfig.get_table_name_list(project, dataset, BigQueryObjectType.MATERIALIZED_VIEW, True)
@@ -94,8 +98,11 @@ class BQMetadataLoader(ConfigBase):
 
             filter_pattern = SyncUtil.build_filter_predicate(filter)
 
-            if filter_list:
-                tbls = ", ".join(f"'{t}'" for t in filter_list)
+            if not load_all:
+                if filter_list:
+                    tbls = ", ".join(f"'{t}'" for t in filter_list)
+                else:
+                    tbls = "''"
 
                 if filter_pattern:
                     query_model.add_predicate(f"((table_name IN ({tbls})) OR ({filter_pattern}))", PredicateType.AND)
@@ -145,8 +152,11 @@ class BQMetadataLoader(ConfigBase):
 
         filter_list = self.UserConfig.get_table_name_list(project, dataset, BigQueryObjectType.BASE_TABLE, True)
 
-        if filter_list:
-            tbls = ", ".join(f"'{t}'" for t in filter_list)
+        if not self.UserConfig.LoadAllTables:
+            if filter_list:
+                tbls = ", ".join(f"'{t}'" for t in filter_list)
+            else:
+                tbls = "''"
 
             if filter_pattern:
                 query_model.add_predicate(f"((t.table_name IN ({tbls})) OR (t.{filter_pattern}))", PredicateType.AND)          

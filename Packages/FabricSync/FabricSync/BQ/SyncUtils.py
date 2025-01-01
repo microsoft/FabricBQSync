@@ -24,7 +24,7 @@ class SyncUtil():
                     return f"table_name NOT LIKE '{filter.pattern}'"
         
         return None
-    
+
     @staticmethod
     def map_column(map:MappedColumn, df:DataFrame) -> DataFrame:
         if map.IsTypeConversion:
@@ -59,7 +59,7 @@ class SyncUtil():
             df = df.withColumnRenamed(map.Source.Name, map.Destination.Name)
 
         return df
-    
+
     @staticmethod
     def format_watermark(max_watermark):
         if type(max_watermark) is date:
@@ -77,7 +77,7 @@ class SyncUtil():
             writer = writer.partitionBy(partition_by)
         
         if options:
-            writer = writer.options(options)
+            writer = writer.options(**options)
         
         writer.saveAsTable(table_name)
 
@@ -248,8 +248,7 @@ class SyncUtil():
     def get_partition_range_predicate(schedule:SyncSchedule) -> str:
         partition_range = SyncUtil.get_bq_range_map(schedule.PartitionRange)
         r = [x for x in partition_range if str(x[1]) == schedule.PartitionId]
-
         if not r:
-            raise Exception(f"Unable to match range partition id {schedule.PartitionId} to range map.")
+            raise SyncConfigurationError(f"Unable to match range partition id {schedule.PartitionId} to range map.")
 
         return f"{schedule.PartitionColumn} >= {r[0][1]} AND {schedule.PartitionColumn} < {r[0][2]}"

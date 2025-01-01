@@ -49,8 +49,6 @@ class ConfigTableMaintenance(SyncBaseModel):
 class ConfigAsync(SyncBaseModel):
     Enabled:bool = Field(alias="enabled", default=True)
     Parallelism:int = Field(alias="parallelism", default=10)
-    NotebookTimeout:int = Field(alias="notebook_timeout", default=3600)
-    CellTimeout:int = Field(alias="cell_timeout", default=1800)
 
 class ConfigLakehouseTarget(SyncBaseModel):
     Lakehouse:Optional[str] = Field(alias="lakehouse", default=None)

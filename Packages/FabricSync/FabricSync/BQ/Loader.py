@@ -152,7 +152,7 @@ class BQScheduleLoader(ConfigBase):
             query_model.Cached = False
             observation = Observation(name="BQSyncMetricsObservation")
         else:
-            query_model.Cached = (self.UserConfig.Optimizations.DisableDataframeCache == False)
+            query_model.Cached = (self.UserConfig.Optimization.DisableDataframeCache == False)
             observation = None
 
         df_bq = self.read_bq_to_dataframe(query_model)
@@ -184,7 +184,6 @@ class BQScheduleLoader(ConfigBase):
         if not schedule.Load_Type == str(LoadType.MERGE) or schedule.InitialLoad:
             if schedule.IsPartitionedSyncLoad:
                 has_lock = False
-
                 if schedule.InitialLoad or schedule.LakehousePartition:
                     has_lock = True
                     lock.acquire()
@@ -193,8 +192,7 @@ class BQScheduleLoader(ConfigBase):
                 
                 try:
                     partition_cols = self.get_lakehouse_partitions(schedule)
-                    df_bq = self.save_to_lakehouse(schedule, df=df_bq, moder=str(LoadType.OVERWRITE), 
-                        partition_by=partition_cols, options=write_config)
+                    df_bq = self.save_to_lakehouse(schedule, df=df_bq, mode=str(LoadType.OVERWRITE), partition_by=partition_cols, options=write_config)
                 finally:
                     if has_lock:
                         lock.release()
@@ -215,7 +213,7 @@ class BQScheduleLoader(ConfigBase):
                 
         if schedule.FlattenInPlace:
             df = SyncUtil.flatten_df(schedule.ExplodeArrays, df)
-            flattend = None
+            flattened = None
         else:
             flattened = SyncUtil.flatten_df(schedule.ExplodeArrays, df)
         
@@ -229,9 +227,9 @@ class BQScheduleLoader(ConfigBase):
             df, flattened = self.flatten(schedule=schedule, df=df)
 
             if flattened:
-                SyncUtil.self.save_dataframe(table_name=f"{schedule.LakehouseTableName}_flattened", df=flattened, 
+                SyncUtil.save_dataframe(table_name=f"{schedule.LakehouseTableName}_flattened", df=flattened, 
                         mode=mode, partition_by=partition_by, options=options)
-        
+
         SyncUtil.save_dataframe(table_name=schedule.LakehouseTableName, df=df, mode=mode, partition_by=partition_by, options=options)
 
         return df
@@ -290,21 +288,20 @@ class BQScheduleLoader(ConfigBase):
             try:
                 schedule, df_bq, observation = self.get_bq_table(schedule)
             except Exception as e:
-                raise SyncLoadError(msg="Failed to retrieve table from BQ", data=schedule) from e
+                raise SyncLoadError(msg=f"Failed to retrieve table from BQ: {e}", data=schedule) from e
 
             #Transform
             try:
                 schedule, df_bq = self.transform(schedule, df_bq)
             except Exception as e:
-                raise SyncLoadError(msg="Transformation failed during sync", data=schedule) from e
+                raise SyncLoadError(msg=f"Transformation failed during sync: {e}", data=schedule) from e
 
             #On initial load, force drop the table to ensure a clean load
             if schedule.InitialLoad and not schedule.IsPartitionedSyncLoad:
                 self.Context.sql(f"DROP TABLE IF EXISTS {schedule.LakehouseTableName}")
-                
+
             #Save BQ table to Lakehouse
-            try:
-                table_maint = DeltaTableMaintenance(self.Context, schedule.LakehouseTableName)
+            try:              
                 write_config = { }
 
                 #Schema Evolution
@@ -314,16 +311,17 @@ class BQScheduleLoader(ConfigBase):
 
                 schedule,df_bq = self.save_bq_dataframe(schedule, df_bq, lock, observation, write_config)
                 src_cnt, schedule.MaxWatermark = self.get_source_metrics(schedule, df_bq)
-
+                
+                table_maint = DeltaTableMaintenance(self.Context, schedule.LakehouseTableName)
                 schedule.UpdateRowCounts(src=src_cnt)    
                 schedule.SparkAppId = self.Context.sparkContext.applicationId
                 schedule.DeltaVersion = table_maint.CurrentTableVersion
                 schedule.EndTime = datetime.now(timezone.utc)
-                schedule.Status = SyncStatus.COMPLETE
+                schedule.Status = str(SyncStatus.COMPLETE)
                 
                 df_bq.unpersist()
             except Exception as e:
-                raise FabricLakehouseError(msg="Error writing BQ table to Lakehouse", data=schedule) from e
+                raise FabricLakehouseError(msg=f"Error writing BQ table to Lakehouse: {e}", data=schedule) from e
 
         self.show_sync_status(schedule, message="FINISHED", status=f"in {str(t)}")
 
@@ -446,7 +444,7 @@ class BQScheduleLoader(ConfigBase):
                         if s.InitialLoad:
                             initial_loads = True
 
-                        priority = s.Priority + tbl["size_priority"]
+                        priority = s.LoadPriority
                         processor.put((priority, nm, s))
 
                     if not processor.empty():

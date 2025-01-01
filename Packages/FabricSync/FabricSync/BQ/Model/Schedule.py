@@ -12,7 +12,7 @@ class SyncSchedule(SyncBaseModel):
     SourceRows:int = Field(alias="source_rows", default=0)
     InsertedRows:int = Field(alias="inserted_rows", default=0)
     UpdatedRows:int = Field(alias="updated_rows", default=0)
-    DeltaVersion:Optional[str] = Field(alias="delta_version", default=None)
+    DeltaVersion:Optional[int] = Field(alias="delta_version", default=None)
     SparkAppId:Optional[str] = Field(alias="spark_app_id", default=None)
     Status:Optional[str] = Field(alias="sync_status", default=None)
     FabricPartitionColumns:list[str] = Field(alias="fabric_partition_columns", default=[])
@@ -139,6 +139,10 @@ class SyncSchedule(SyncBaseModel):
                 return True
         return False
 
+    @property
+    def LoadPriority(self) -> int:
+        return self.Priority + self.SizePriority
+
     def UpdateRowCounts(self, src:int = 0, insert:int = 0, update:int = 0):
         self.SourceRows += src
 
@@ -148,3 +152,9 @@ class SyncSchedule(SyncBaseModel):
         else:
             self.InsertedRows += insert
             self.UpdatedRows += update
+    
+    def __lt__(self, other):
+        return self.LoadPriority < other.LoadPriority
+
+    def __gt__(self, other):
+        return self.LoadPriority > other.LoadPriority

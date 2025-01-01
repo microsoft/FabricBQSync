@@ -5,8 +5,6 @@ import warnings
 from ..Model.Config import *
 from ..Core import *
 from ..Logging import *
-from ..Exceptions import SuncLoadError
-from ..Warnings import SyncTableRequiresOptimizeWarning
 
 class DeltaTableMaintenance:
     __detail:Row = None

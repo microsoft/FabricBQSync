@@ -1,7 +1,7 @@
 {
-    "correlation_id": "<<<System Assigned UUID>>>",
-    "id": "<<<User-defined name>>>",
-    "version": "2.0.0",
+    "correlation_id": "",
+    "id": "BQ_SYNC_LOADER",
+    "version": "2.0.4",
     "enable_data_expiration": false,
     "optimization": {
         "use_approximate_row_counts": false,
@@ -62,17 +62,15 @@
     },
     "async": {
         "enabled": true,
-        "parallelism": 10,
-        "notebook_timeout": 3600,
-        "cell_timeout": 1800
+        "parallelism": 10
     },
     "table_defaults": {
         "project_id": null,
         "dataset": null,
-        "object_type": "<<<BASE_TABLE | VIEW | MATERIALIZED_VIEW>>>",
+        "object_type": "BASE_TABLE",
         "priority": 100,
-        "load_strategy": "<<<FULL | WATERMARK | PARTITION>>>",
-        "load_type": "<<<OVERWRITE | APPEND | MERGE>>>",
+        "load_strategy": "FULL",
+        "load_type": "OVERWRITE",
         "interval": "AUTO",
         "enabled": true,
         "enforce_expiration": false,
@@ -82,17 +80,17 @@
         "explode_arrays": true,
         "table_maintenance": {
             "enabled": false,
-            "interval": "<<<DAY | WEEK | MONTH>>>"
+            "interval": "MONTH"
         }
     },
     "tables": [
         {
             "project_id": null,
             "dataset": null,
-            "object_type": "<<<BASE_TABLE | VIEW | MATERIALIZED_VIEW>>>",
+            "object_type": "BASE_TABLE",
             "priority": 100,
-            "load_strategy": "<<<FULL | WATERMARK | PARTITION>>>",
-            "load_type": "<<<OVERWRITE | APPEND | MERGE>>>",
+            "load_strategy": "FULL",
+            "load_type": "OVERWRITE",
             "interval": "AUTO",
             "enabled": true,
             "enforce_expiration": false,
@@ -102,7 +100,7 @@
             "explode_arrays": true,
             "table_maintenance": {
                 "enabled": false,
-                "interval": "<<<DAY | WEEK | MONTH>>>"
+                "interval": "MONTH"
             },
             "table_name": null,
             "source_query": null,

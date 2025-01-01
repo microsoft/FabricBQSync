@@ -1,6 +1,6 @@
 Metadata-Version: 2.1
 Name: FabricSync
-Version: 2.0.3
+Version: 2.0.4
 Summary: Fabric BigQuery Data Sync Utility
 Author-email: Microsoft GBBs North America <chriprice@microsoft.com>
 License: MIT License
@@ -65,50 +65,6 @@ The installer performs the following actions:
 For many of our customers, the native mirroring capabilities in Fabric are one of the most exciting features of the platform. While Fabric currently supports a growing number of different mirroring sources, BigQuery is not yet supported. This current gap in capabilities is the foundation of this accelerator.
 
 The goal of this accelerator is to simplify the process of synchronizing data from Google BigQuery to Microsoft Fabric with an emphasis on reliability, performance, and cost optimization. The accelerator is implemented using Spark (PySpark) using many concepts common to an ETL framework. The accelerator is more than just an ETL framework however in that it uses BigQuery metadata to solve for the most optimal way to synchronize data between the two platforms.
-
-To best understand the accelerator, we can break it down into three logical parts: Configuration, Scheduling & Synchronization
-
-# Configuration
-
-The core of the accelerator is metadata, and this metadata drives the synchronization configuration and the overall approach for the BQ Sync process. Accelerator configuration happens first through auto-discovery using metadata from BigQuery and second through user-supplied configuration which allows for overriding or refining of the discovered configuration.
-
-The auto-discovery process starts with a snapshot of the existing dataset metadata from the BigQuery INFORMATION_SCHEMA tables. This metadata defines each table’s structure, schema and BigQuery configuration. This accelerator defines a set of heuristics that when are applied, discover a probable best approach to table load strategy and load type.
-
-While auto-discovery intends to simplify the process, we recognize that in some cases it’s not possible to optimize the synchronization process without domain knowledge of the dataset. To accommodate these scenarios, the discovery process can be overridden through user-supplied configuration.
-
-The load strategies supported by the accelerator that can be either auto discovered or user-configured are:
-- Full Load – Default load strategy where the entire table is synchronized from BigQuery. This strategy, while being least optimal, is used only when an alternate more optimal strategy can’t be resolved.
-- Watermark – When a table is defined with a single primary-key that is either date/time or integer-derived data-typed, data can be loaded incrementally using the column as a watermark to determine the differential delta. This strategy can be combined with the partitioning strategy below to super-charge how data is incrementally synced in well optimized BigQuery environments.
-- Partition – Partition tables can be loaded by partition with inactive (archived) partitions or partitions where no changes have occurred are skipped and not evaluated. The accelerator is capable of handle all types of partitioning that BigQuery supports. This includes Time and range and has special partitioning capabilities like time ingestion.
-
-The accelerator also resolves load type based largely based on load strategy. The Load type defines how newly arriving data is added to previously synchronized data. These types are:
-- Overwrite – Data for each table or partition, overwrites any existing data in the destination. This type is only used for Full and Partition load strategies.
-- Append – Data is appended to existing data in the destination. This type is the default for the Watermark load strategy but can be applied to the Partition load strategy through user-configuration.
-- Merge – The “upsert” pattern is used to either insert new data or update existing data in the destination based on a set of matching criteria. This type is only supported through user-configuration and is never auto discovered.
-
-This configuration, whether auto discovered or user configuration, happens on the initial run and whenever new tables are added to the dataset if the accelerator is configured for auto discovery. Table configuration can be changed at any point prior to the initial data load. Once data has been loaded, the accelerator locks the table configuration going forward. If configuration changes are required after data synchronization has started, manual intervention is required.
-
-# Scheduling
-
-Longer term the accelerator will support robust scheduling capabilities that allow table-level schedule definition. Currently, only AUTO scheduling is supported. AUTO scheduling is evaluated on every active (enabled) table and looks at the BigQuery metadata to determine if there have been any changes to either the table or partition since the last successful synchronization. If the table or partition has not changed or it is using long-term (archived) BigQuery storage the scheduled run for the table/partition is skipped.
-
-The schedule is driven by a user-configured table priority which determines the order in which tables are synchronized. Tables are synchronized in ascending order of priority starting with zero. Tables that have the same priority (i.e. the default priority which is 100) are grouped together into synchronization groups that control the flow of synchronization and allow for parallelism within the asynchronous synchronization process.
-Load groups function as a mechanism to create dependencies when data is synchronized. An example of this using traditional data warehouse constructs would be to ensure that all dimensions are synchronized prior to loading any fact tables.
-
-# Synchronization
-
-Synchronization runs at object-level. Where an object can be a table, view, materialized view or even a table partition depending on previously described configuration process. Currently both sequential and asynchronous options are available for the synchronization process.
-The sequential option synchronizes table-by-table, individually and is primarily provided as dev/test mechanism or when the process is run in an environment where data or resources are extremely constrained.
-
-The asynchronous option allows for parallelism within the synchronization process, where multiple objects (tables, view, partitions, etc) can be synchronized concurrently. The degree of parallelism that can be achieved is largely dictated by Spark environment configuration but can be constrained or controlled through user-configuration.
-
-Regardless of the approach used, the synchronization process follows these steps:
-- Loads data from BigQuery using the BigQuery Storage API based on the configured load strategy.
-- For partitioned tables, the partitioning strategy is mapped from the BigQuery support partitioning strategy to one optimized for the Lakehouse using Delta-Parquet as the underlying store.
-- Writes the data to the configured Lakehouse based on both the defined load strategy and load type.
-- Collects and stores telemetry about the synchronization process for visibility and auditability.
-
-Once the data is synchronized, it is immediately available for downstream consumption in PowerBI and by any compute engine capable of talking directly to OneLake.
 
 # Features & Capabilities
 

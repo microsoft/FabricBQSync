@@ -28,6 +28,8 @@ from .Exceptions import *
 from .Constants import SyncConstants
 from .Validation import SqlValidator
 
+warnings.filterwarnings("ignore", category=UserWarning)
+
 @dataclass
 class SyncTimer(ContextDecorator):
     _start_time: Optional[float] = field(default=None, init=False, repr=False)
@@ -244,6 +246,7 @@ class ConfigBase():
             if query.Cached:
                 df.cache()
         except Exception as e:
+            print(e)
             raise BQConnectorError(msg="Read to dataframe failed.", query=query) from e
         
         return df
@@ -297,10 +300,8 @@ class SyncBase():
         """
         Init method loads the user JSON config from the supplied path.
         """
-        self._logger = None
-
         if config_path is None:
-            raise Exception("Missing Path to JSON User Config")
+            raise SyncConfigurationError("Missing Path to JSON User Config")
 
         self.Context = context
         self.ConfigPath = config_path
@@ -324,6 +325,7 @@ class SyncBase():
         self.Context.conf.set("spark.databricks.delta.retentionDurationCheck.enabled", "false")
         self.Context.conf.set("spark.databricks.delta.properties.defaults.minWriterVersion", "7")
         self.Context.conf.set("spark.databricks.delta.properties.defaults.minReaderVersion", "3")
+        self.Context.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
 
         #Sync Settings
         self.Context.conf.set(f"{SyncConstants.SPARK_CONF_PREFIX}.application_id", str(self.UserConfig.ApplicationID))
@@ -333,7 +335,7 @@ class SyncBase():
         self.Context.conf.set(f"{SyncConstants.SPARK_CONF_PREFIX}.log_telemetry", str(self.UserConfig.Logging.Telemetry))
         self.Context.conf.set(f"{SyncConstants.SPARK_CONF_PREFIX}.telemetry_endpoint", 
             f"{self.UserConfig.Logging.TelemetryEndPoint}.azurewebsites.net")
-        
+
     def load_user_config_from_json(self, config_path:str) -> Tuple[DataFrame, str]:
         """
         Loads and caches the user config json file
@@ -351,7 +353,7 @@ class SyncBase():
             config_df.createOrReplaceTempView("user_config_json")
             config_df.cache()
         except Exception as e:
-            raise SyncConfigurationError("Failed to load user configuration") from e
+            raise SyncConfigurationError(f"Failed to load user configuration: {e}") from e
 
         return cfg
 
@@ -363,7 +365,7 @@ class SyncBase():
                 file_contents = self.read_credential_file()
                 return self.convert_to_base64string(file_contents)
             except Exception as e:
-                raise SyncConfigurationError("Failed to GCP credential file") from e
+                raise SyncConfigurationError(f"Failed to parse GCP credential file: {e}") from e
 
     def read_credential_file(self) -> str:
         """
@@ -372,7 +374,7 @@ class SyncBase():
         credential = f"{self.UserConfig.GCP.GCPCredential.CredentialPath}"
 
         if not os.path.exists(credential):
-           raise ValueError(f"GCP Credential file does not exists at the path supplied:{credential}")
+           raise SyncConfigurationError(f"GCP Credential file does not exists at the path supplied:{credential}")
         
         txt = Path(credential).read_text()
         txt = txt.replace("\n", "").replace("\r", "")
@@ -400,7 +402,7 @@ class SyncBase():
             elif isinstance(val, bytes):
                 sb_bytes = val
             else:
-                raise ValueError("Argument must be string or bytes")
+                raise SyncConfigurationError("Credential provided must be string or bytes")
 
             return b64.b64encode(b64.b64decode(sb_bytes)) == sb_bytes
         except Exception as e:
