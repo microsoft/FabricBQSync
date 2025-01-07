@@ -14,7 +14,7 @@ from pathlib import Path
 import uuid
 import random
 
-from ..BQ.Admin.FabricAPI import FabricAPIUtil
+from ..BQ.Metadata import FabricMetastoreSchema
 from ..BQ.Logging import *
 from ..BQ.Model.Config import *
 from ..BQ.Core import *
@@ -25,6 +25,7 @@ from ..BQ.Constants import SyncConstants
 from ..Meta import Version
 
 class SetupUtils():
+    @staticmethod
     def read_file_to_string(path:str) -> str:
         contents = ""
 
@@ -33,6 +34,7 @@ class SetupUtils():
 
         return contents
 
+    @staticmethod
     def download_file(url:str, path:str):
         response = requests.get(url, stream=True)
 
@@ -42,6 +44,7 @@ class SetupUtils():
                     if chunk:
                         f.write(chunk)
 
+    @staticmethod
     def download_encoded_to_string(url:str) -> str:
         contents = ""
 
@@ -50,6 +53,13 @@ class SetupUtils():
         
         return contents
     
+    @staticmethod
+    def ensure_paths(paths):
+        for p in paths:
+            if not Path(p).is_dir():
+                os.mkdir(p)
+
+    @staticmethod
     def get_bq_spark_connector(spark_version, jar_path:str) -> str:
         g = Github()
         repo = g.get_repo("GoogleCloudDataproc/spark-bigquery-connector")
@@ -71,6 +81,7 @@ class SetupUtils():
         
         return jar_name
 
+    @staticmethod
     def get_latest_bq_spark_connector(releases):
         lr = None
         lv = None
@@ -89,14 +100,28 @@ class SetupUtils():
 
         return lr
     
+    @staticmethod
+    def initialize_logger(context:SparkSession, config:ConfigDataset):    
+        context.conf.set(f"{SyncConstants.SPARK_CONF_PREFIX}.application_id", config.ApplicationID)
+        context.conf.set(f"{SyncConstants.SPARK_CONF_PREFIX}.name", config.ID)
+        context.conf.set(f"{SyncConstants.SPARK_CONF_PREFIX}.log_path", config.Logging.LogPath)
+        context.conf.set(f"{SyncConstants.SPARK_CONF_PREFIX}.log_level", config.Logging.LogLevel)
+        context.conf.set(f"{SyncConstants.SPARK_CONF_PREFIX}.log_telemetry", config.Logging.Telemetry)
+        context.conf.set(f"{SyncConstants.SPARK_CONF_PREFIX}.telemetry_endpoint", 
+            f"{config.Logging.TelemetryEndPoint}.azurewebsites.net")
+
+        return SyncLogger(context).get_logger()
+
+    @staticmethod
     def generate_base_config(config_path:str, data:str):
         json_obj = json.dumps(data, indent=4)
 
         with open(config_path, "w") as outfile:
             outfile.write(json_obj)
     
-    def download_notebooks(workspace_id, git_notebooks, data=None, notebooks_path=None, use_local=False):
-        fabric_api = FabricAPIUtil()
+    @staticmethod
+    def download_notebooks(workspace_id:str, token:str, git_notebooks, data=None, notebooks_path=None, use_local=False):
+        fabric_api = FabricAPI(workspace_id=workspace_id, api_token=token)
 
         for notebook in git_notebooks:
             try:
@@ -111,39 +136,41 @@ class SetupUtils():
                     nb_data = nb_data.replace("<<<METADATA_LAKEHOUSE_ID>>>", data["metadata_lakehouse_id"])
                     nb_data = nb_data.replace("<<<METADATA_LAKEHOUSE_NAME>>>", data["metadata_lakehouse"])
                     nb_data = nb_data.replace("<<<PATH_SPARK_BQ_JAR>>>", data["spark_jar_path"])
-                    nb_data = nb_data.replace("<<<PATH_TO_BQ_SYNC_PACKAGE>>>", data["wheel_path"])
                     nb_data = nb_data.replace("<<<PATH_TO_USER_CONFIG>>>", data["user_config_file_path"])
                     nb_data = nb_data.replace("<<<VERSION>>>", data["version"])
 
-                fabric_api.upload_fabric_notebook(workspace_id, notebook["name"], nb_data)
+                fabric_api.upload_fabric_notebook(notebook["name"], nb_data)
             except Exception as e:
-                error_msg = f"Failed to deploye BQ Sync notebook to workspace: {notebook['name']}"
-                raise SyncInstallError(msg="error_msg") from e
+                print(e)
+                error_msg = f"Failed to deploy BQ Sync notebook to workspace: {notebook['name']}"
+                raise SyncInstallError(msg=error_msg) from e
 
 class MetaStoreDataUpdates():
-    def process(self, context:SparkSession, version):
+    def process(context:SparkSession, version):
         sv = pv.parse(version)
 
         match sv.major:
             case 2:
-                self.process_v2(context)
+                MetaStoreDataUpdates.process_v2(context)
             case _:
                 pass
 
     
-    def process_v2(self, context:SparkSession):
+    def process_v2(context:SparkSession):
         deltaTable = DeltaTable.forName(context, "bq_sync_configuration")
 
         deltaTable.update(
+            condition = "table_id IS NULL",
             set = { 'table_id': lit(str(uuid.uuid4())) }
         )
 
 class Installer():
     GIT_URL = "https://raw.githubusercontent.com/microsoft/FabricBQSync/main"
 
-    def __init__(self, context:SparkSession): 
+    def __init__(self, context:SparkSession, api_token:str): 
         self.data = {}
         self.Context = context
+        self.token = api_token
         self.correlation_id = str(uuid.uuid4())
 
         self.working_path = "Files/BQ_Sync_Process"
@@ -170,24 +197,6 @@ class Installer():
         else:
             return False
 
-    def _initialize_installer(self, data):    
-        self.data = data 
-
-        cfg = ConfigDataset()
-
-        if "version" not in data:
-            data["version"] = cfg.Version
-        
-        self.Context.conf.set(f"{SyncConstants.SPARK_CONF_PREFIX}.application_id", self.correlation_id)
-        self.Context.conf.set(f"{SyncConstants.SPARK_CONF_PREFIX}.name", self.data["loader_name"])
-        self.Context.conf.set(f"{SyncConstants.SPARK_CONF_PREFIX}.log_path", f"{self.logs_path}/fabric_sync.log")
-        self.Context.conf.set(f"{SyncConstants.SPARK_CONF_PREFIX}.log_level", cfg.Logging.LogLevel)
-        self.Context.conf.set(f"{SyncConstants.SPARK_CONF_PREFIX}.log_telemetry", "True")
-        self.Context.conf.set(f"{SyncConstants.SPARK_CONF_PREFIX}.telemetry_endpoint", 
-            f"{cfg.Logging.TelemetryEndPoint}.azurewebsites.net")
-
-        self.Logger = SyncLogger(self.Context).get_logger()
-
     def _ensure_paths(self):
         installer_pathes = [self.base_path, self.local_path, self.config_path, 
             self.libs_path, self.logs_path, self.notebooks_path]
@@ -198,9 +207,7 @@ class Installer():
 
     def _get_sql_source_from_git(self, local_path:str):
         git_content = [
-            {"name": "bq_sync_metadata.csv", "url": f"{Installer.GIT_URL}/Setup/v{self.data['asset_version']}/SQL/bq_sync_metadata.csv"},
-            {"name": "bq_data_types.csv", "url": f"{Installer.GIT_URL}/Setup/v{self.data['asset_version']}/Data/bq_data_types.csv"},
-            {"name": "MetadataRepo.sql", "url":f"{Installer.GIT_URL}/Setup/v{self.data['asset_version']}/SQL/MetadataRepo.sql"}
+            {"name": "bq_data_types.csv", "url": f"{Installer.GIT_URL}/Setup/v{self.data['asset_version']}/Data/bq_data_types.csv"}
             ]
 
         for c in git_content:
@@ -208,24 +215,17 @@ class Installer():
                 SetupUtils.download_file(c["url"], f"{local_path}/{c['name']}")
             except Exception as e:
                 error_msg = f"Unabled to download from git: {c['name']}"
-                self.Logger.error(error_msg)
-                raise SyncInstallError(msg="error_msg") from e
+                raise SyncInstallError(msg=error_msg) from e
 
     def _create_sql_metadata_from_source(self, metadata_lakehouse, local_path:str):
         if not self.use_local_artifacts:
             self._get_sql_source_from_git(local_path)
 
-        sql_contents = SetupUtils.read_file_to_string(f"{local_path}/MetadataRepo.sql")
-
         self.Context.sql(f"USE {metadata_lakehouse}")
-        query = ""
-
-        for line in sql_contents:
-            query += line
-
-            if ';' in line:
-                self.Context.sql(query)
-                query = ""
+        
+        for tbl in SyncConstants.get_metadata_tables():
+            schema = getattr(FabricMetastoreSchema(), tbl)
+            self._create_metastore_table_from_schema(tbl, schema)
         
         self._load_sql_metadata(local_path)
 
@@ -238,8 +238,7 @@ class Installer():
         df.write.mode("OVERWRITE").saveAsTable("bq_data_type_map")
     
     def _build_new_config(self):
-        #Create default config file
-        config_data = {
+        minimal_config_data = {
             "correlation_id": self.correlation_id,
             "id": self.data["loader_name"],
             "version": self.data["version"],
@@ -276,18 +275,12 @@ class Installer():
             }
         }
 
-        return config_data
+        return minimal_config_data
 
     def _download_bq_connector(self):
         self.data["spark_jar"] = SetupUtils.get_bq_spark_connector(self.Context.version, self.libs_path)
         self.data["spark_jar_path"] = f"abfss://{self.data['workspace_id']}@onelake.dfs.fabric.microsoft.com/" + \
             f"{self.data['metadata_lakehouse_id']}/{self.working_path}/libs/{self.data['spark_jar']}"
-
-    def _download_sync_wheel(self):
-        self.data["wheel_name"] = f"FabricSync-{self.data['version']}-py3-none-any.whl"
-        wheel_url = f"{Installer.GIT_URL}/dist/{self.data['wheel_name']}"
-
-        SetupUtils.download_file(wheel_url, f"{self.libs_path}/{self.data['wheel_name']}")
 
     def _generate_config(self, path, config_data):
         SetupUtils.generate_base_config(path, config_data)
@@ -413,18 +406,38 @@ class Installer():
                         "file_name": "BQ-Sync.ipynb"}]
         
         try:
-            SetupUtils.download_notebooks(self.data["workspace_id"], git_notebooks, self.data, self.notebooks_path, self.use_local_artifacts)
+            SetupUtils.download_notebooks(self.data["workspace_id"], self.token, git_notebooks, self.data, self.notebooks_path, self.use_local_artifacts)
             self.Logger.sync_status(f"Notebook successfully copied to workspace, it may take a moment to appear...")
         except SyncInstallError as e:
-            self.Logger.error(e)
             raise e
         
         if self.cleanup_artifacts:
             shutil.rmtree(self.notebooks_path)
 
+    def _initialize_installer(self, data, initialize_existing:bool = False):    
+        self.data = data 
+
+        if not initialize_existing:
+            self.data["workspace_id"] = self.Context.conf.get("trident.workspace.id")
+            self.data["version"] = Version.CurrentVersion
+
+        cfg = ConfigDataset()
+        
+        cfg.ApplicationID = self.correlation_id
+        cfg.ID = self.data["loader_name"]
+        cfg.Logging.LogPath = f"{self.logs_path}/fabric_sync.log"
+        
+        self.Context.conf.set("spark.databricks.delta.vacuum.parallelDelete.enabled", "true")
+        self.Context.conf.set("spark.databricks.delta.retentionDurationCheck.enabled", "false")
+        self.Context.conf.set("spark.databricks.delta.properties.defaults.minWriterVersion", "7")
+        self.Context.conf.set("spark.databricks.delta.properties.defaults.minReaderVersion", "3")
+        self.Context.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
+        
+        self.Logger = SetupUtils.initialize_logger(self.Context, cfg)
+
     def _initialize_existing(self, data):
-        data["version"] = Version.CurrentVersion
         data["workspace_id"] = self.Context.conf.get("trident.workspace.id")
+        data["version"] = Version.CurrentVersion
 
         config_data = self._parse_user_config(data)
 
@@ -455,10 +468,13 @@ class Installer():
         else:
             return f"ALTER TABLE {table_name} ADD COLUMN {field.name} {field.dataType.simpleString()}"
 
-    def _sync_schema(self, table_name, table_schema):
+    def _create_metastore_table_from_schema(self, table_name, schema):
+        df = self.Context.createDataFrame(
+            data=self.Context.sparkContext.emptyRDD(),schema=schema)
+        df.write.mode("OVERWRITE").saveAsTable(f"{table_name}")
+
+    def _sync_schema(self, table_name, target_schema):
         cmds = []
-        table_schema = table_schema.replace("'", '"')
-        target_schema = StructType.fromJson(json.loads(table_schema))
 
         df = self.Context.table(table_name)
         source_schema = df.schema
@@ -480,15 +496,15 @@ class Installer():
         return cmds
 
     def _upgrade_metastore(self, metadata_lakehouse, local_path:str):
-        self._get_sql_source_from_git(local_path)
-
-        df = pd.read_csv(f"{local_path}/bq_sync_metadata.csv")
-        df = df.query("version=='2.0.0'")
-
         cmds = [f"USE {metadata_lakehouse}"]
 
-        for idx, row in df.iterrows():
-            cmds = cmds + self._sync_schema(row["table_name"], row["schema"])
+        for tbl in SyncConstants.get_metadata_tables():
+            schema = getattr(FabricMetastoreSchema(), tbl)
+
+            if self.Context.catalog.tableExists(tbl):
+                cmds = cmds + self._sync_schema(tbl, schema)
+            else:
+                self._create_metastore_table_from_schema(tbl, schema)
 
         if cmds:
             [self.Context.sql(c) for c in cmds]
@@ -511,7 +527,7 @@ class Installer():
     def _run_upgrade(self, data):
         with SyncTimer() as t:
             config_data, data = self._initialize_existing(data)
-            self._initialize_installer(data)
+            self._initialize_installer(data, initialize_existing=True)
 
             av = pv.parse(data["version"])
             self.data["asset_version"] = f"{av.major}.0.0"
@@ -519,10 +535,10 @@ class Installer():
             self.Logger.sync_status(f"Starting BQ Sync Upgrade to v{self.data['version']}...")
 
             self.Logger.sync_status("Get lakehouse metadata...")
-            fabric_api = FabricAPIUtil()
+            fabric_api = FabricAPI(workspace_id=self.data["workspace_id"], api_token=self.token)
             self.data["workspace_name"] = fabric_api.get_workspace_name()
-            self.data["metadata_lakehouse_id"] = fabric_api.get_or_create_lakehouse(self.data["workspace_id"], self.data["metadata_lakehouse"])
-            self.data["target_lakehouse_id"] = fabric_api.get_or_create_lakehouse(self.data["workspace_id"], self.data["target_lakehouse"])
+            self.data["metadata_lakehouse_id"] = fabric_api.get_or_create_lakehouse(self.data["metadata_lakehouse"])
+            self.data["target_lakehouse_id"] = fabric_api.get_or_create_lakehouse(self.data["target_lakehouse"])
 
             config_data["fabric"]["workspace_id"] = self.data["workspace_id"]
 
@@ -537,8 +553,7 @@ class Installer():
                 self.Logger.sync_status("Updating metadata objects...")
                 self._upgrade_metastore(self.data["metadata_lakehouse"], self.local_path)
 
-                metastore_update = MetaStoreDataUpdates()
-                metastore_update.process(self.Context, data["version"])
+                MetaStoreDataUpdates.process(self.Context, data["version"])
 
                 self.Logger.sync_status("Optimizing BQ Sync Metastore...")
                 self._optimize_metastore()
@@ -546,11 +561,6 @@ class Installer():
                 #Download the appropriate jar for the current spark runtime
                 self.Logger.sync_status("Updating BigQuery Spark connector libraries..")
                 self._download_bq_connector()
-
-                #Download the sync python package from Git
-                self.Logger.sync_status("Updating BQ Sync libraries...")
-                self._download_sync_wheel()
-                data["wheel_path"] = f"{self.libs_path}/{self.data['wheel_name']}"
 
                 #Get sync notebooks from Git, customize and install into the workspace
                 self.Logger.sync_status("Copying updated BQ Sync artifacts to Fabric workspace...")
@@ -582,11 +592,10 @@ class Installer():
 
             #Create Lakehouses
             self.Logger.sync_status("Creating metadata and mirror lakehouses (if not exists)...")
-            fabric_api = FabricAPIUtil()
-            self.data["workspace_id"] = self.Context.conf.get("trident.workspace.id")
+            fabric_api = FabricAPI(workspace_id=self.data["workspace_id"], api_token=self.token)
             self.data["workspace_name"] = fabric_api.get_workspace_name()
-            self.data["metadata_lakehouse_id"] = fabric_api.get_or_create_lakehouse(self.data["workspace_id"], self.data["metadata_lakehouse"])
-            self.data["target_lakehouse_id"] = fabric_api.get_or_create_lakehouse(self.data["workspace_id"], self.data["target_lakehouse"])
+            self.data["metadata_lakehouse_id"] = fabric_api.get_or_create_lakehouse(self.data["metadata_lakehouse"])
+            self.data["target_lakehouse_id"] = fabric_api.get_or_create_lakehouse(self.data["target_lakehouse"])
 
             #Create metadata tables and required metadata
             self.Logger.sync_status("Creating required metadata objects...")
@@ -596,18 +605,13 @@ class Installer():
             self.Logger.sync_status("Downloading BigQuery Spark connector libraries..")
             self._download_bq_connector()
 
-            #Download the sync python package from Git
-            self.Logger.sync_status("Downloading BQ Sync libraries...")
-            self._download_sync_wheel()
-            data["wheel_path"] = f"{self.libs_path}/{self.data['wheel_name']}"
-
             #Encode for embedding in config file
             self.Logger.sync_status("Generating initial configuration file...")
             credential_data = SetupUtils.read_file_to_string(self.data["gcp_credential_path"])
             credential_data = [l.strip() for l in credential_data]
             credential_data = ''.join(credential_data)
 
-            encoded_credential = fabric_api.encode_base64(credential_data)
+            encoded_credential = Util.encode_base64(credential_data)
             self.data["encoded_credential"] = encoded_credential
 
             config_data = self._build_new_config()

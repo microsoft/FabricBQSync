@@ -77,4 +77,4 @@ class BQSync(SyncBase):
             
             self.Logger.sync_status("Run Schedule Done!!")
         except SyncBaseError as e:
-            self.Logger.error(f"Run Schedule Failed: {e}")  
+            self.Logger.error(f"Run Schedule Failed: {e}")     

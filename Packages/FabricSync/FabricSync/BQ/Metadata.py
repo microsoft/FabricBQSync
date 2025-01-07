@@ -6,7 +6,7 @@ import traceback
 
 from .Model.Config import *
 from .Core import *
-from .Admin.DeltaTableUtility import *
+from .DeltaTableUtility import *
 from .Enum import *
 from .Exceptions import *
 from .Constants import SyncConstants

@@ -248,6 +248,24 @@ class Telemetry():
         elif func_ is None:
             return _decorator
 
+    def Lakehouse_Inventory(func_=None):
+        def _decorator(func):
+            @functools.wraps(func)
+            def wrapper(*args, **kwargs):
+                func_args = inspect.signature(func).bind(*args, **kwargs).arguments
+
+                r =  func(*args, **kwargs)
+
+                Telemetry.log_telemetry("Lakehouse Inventory", result=True)
+
+                return r
+            return wrapper
+
+        if callable(func_):
+            return _decorator(func_)
+        elif func_ is None:
+            return _decorator
+
     def Delta_Maintenance(func_=None, maintainence_type:str=None):
         def _decorator(func):
             @functools.wraps(func)

@@ -2,9 +2,9 @@ from delta.tables import *
 from pyspark.sql import SparkSession, DataFrame
 import warnings
 
-from ..Model.Config import *
-from ..Core import *
-from ..Logging import *
+from .Model.Config import *
+from .Core import *
+from .Logging import *
 
 class DeltaTableMaintenance:
     __detail:Row = None
