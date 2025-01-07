@@ -9,7 +9,7 @@ from threading import Lock
 
 from .Model.Config import *
 from .Core import *
-from .Admin.DeltaTableUtility import *
+from .DeltaTableUtility import *
 from .Enum import *
 from .Model.Schedule import SyncSchedule
 from .Model.Query import *
@@ -123,8 +123,7 @@ class BQScheduleLoader(ConfigBase):
 
         if schedule.IsTimePartitionedStrategy and schedule.PartitionId is not None:
             part_format = SyncUtil.get_bq_partition_id_format(schedule.PartitionGrain)
-
-            if schedule.PartitionDataType == str(BQDataType.TIMESTAMP):                  
+            if schedule.PartitionDataType == str(BQDataType.TIMESTAMP):        
                 part_filter = f"timestamp_trunc({schedule.PartitionColumn}, {schedule.PartitionGrain}) = PARSE_TIMESTAMP('{part_format}', '{schedule.PartitionId}')"
             else:
                 part_filter = f"date_trunc({schedule.PartitionColumn}, {schedule.PartitionGrain}) = PARSE_DATETIME('{part_format}', '{schedule.PartitionId}')"
@@ -297,8 +296,8 @@ class BQScheduleLoader(ConfigBase):
                 raise SyncLoadError(msg=f"Transformation failed during sync: {e}", data=schedule) from e
 
             #On initial load, force drop the table to ensure a clean load
-            if schedule.InitialLoad and not schedule.IsPartitionedSyncLoad:
-                self.Context.sql(f"DROP TABLE IF EXISTS {schedule.LakehouseTableName}")
+            #if schedule.InitialLoad and not schedule.IsPartitionedSyncLoad:
+            #    self.Context.sql(f"DROP TABLE IF EXISTS {schedule.LakehouseTableName}")
 
             #Save BQ table to Lakehouse
             try:              
@@ -365,30 +364,6 @@ class BQScheduleLoader(ConfigBase):
 
         self.Metastore.save_schedule_telemetry(rdd)
 
-    def run_sequential_schedule(self, sync_id:str, schedule_type:str) -> bool:
-        self.Logger.sync_status(f"Sequential schedule sync starting...")
-
-        initial_loads = False
-
-        with SyncTimer() as t:
-            df_schedule = self.Metastore.get_schedule(sync_id, schedule_type)           
-
-            for row in df_schedule.collect():
-                d = row.asDict()
-                schedule = SyncSchedule(**d)
-                schedule.StartTime = datetime.now(timezone.utc)
-
-                if schedule.InitialLoad:
-                    initial_loads = True
-
-                self.schedule_sync(schedule)
-
-            self.Logger.sync_status("Processing Sync Telemetry...")
-            self.Metastore.process_load_group_telemetry(sync_id, schedule_type)
-
-        self.Logger.sync_status(f"Sequential schedule sync completed in {str(t)}...")
-        return initial_loads
-
     @Telemetry.Sync_Load    
     def schedule_sync(self, schedule:SyncSchedule, lock=None) -> SyncSchedule:
         schedule.StartTime = datetime.now(timezone.utc)
@@ -406,25 +381,36 @@ class BQScheduleLoader(ConfigBase):
         schedule = value[2]
 
         schedule.Status = SyncStatus.FAILED
-        schedule.SummaryLoadType = f"ERROR: {e}"
+        schedule.SummaryLoadType = f"ERROR"
         self.save_schedule_telemetry(schedule) 
-        logging.error(msg=f"ERROR with {schedule.ProjectId}.{schedule.Dataset}.{schedule.TableName}: {e}")
+        #self.Logger.error(msg=f"ERROR with {schedule.ProjectId}.{schedule.Dataset}.{schedule.TableName}")
 
     def run_schedule(self, sync_id:str, schedule_type:str) -> bool:
         if self.UserConfig.Async.Enabled:
-            return self.run_async_schedule(sync_id, schedule_type)
+            return self.run_async_schedule(sync_id, schedule_type, num_threads=self.UserConfig.Async.Parallelism)
         else:
-            return self.run_sequential_schedule(sync_id, schedule_type)
+            return self.run_async_schedule(sync_id, schedule_type, num_threads=1)
 
-    def run_async_schedule(self, sync_id:str, schedule_type:str) -> bool:
+    def initialize_initial_loads(self, schedule:DataFrame) -> bool:
+        initial_loads = [i for i in schedule.collect() if i["initial_load"] == True]
+
+        if initial_loads:
+            self.Logger.sync_status(f"Initializing tables for initial load...")
+            tbls = [SyncSchedule(**(tbl.asDict())).LakehouseTableName for tbl in initial_loads]
+            SparkProcessor(self.Context).drop(tbls)
+
+            return True
+        else:
+            return False
+
+    def run_async_schedule(self, sync_id:str, schedule_type:str, num_threads:int) -> bool:
         self.Logger.sync_status(f"Async schedule started with parallelism of {self.UserConfig.Async.Parallelism}...")
 
-        initial_loads = False
-
         with SyncTimer() as t:
-            processor = QueueProcessor(num_threads=self.UserConfig.Async.Parallelism)
+            processor = QueueProcessor(num_threads=num_threads)
 
             schedule = self.Metastore.get_schedule(sync_id, schedule_type)
+            initial_loads = self.initialize_initial_loads(schedule)
 
             load_grps = [i["priority"] for i in schedule.select("priority").distinct().orderBy("priority").collect()]
 
@@ -434,15 +420,11 @@ class BQScheduleLoader(ConfigBase):
                     grp_df = schedule.where(f"priority = '{grp}'")
 
                     for tbl in grp_df.collect():
-                        d = tbl.asDict()
-                        s = SyncSchedule(**d)
+                        s = SyncSchedule(**(tbl.asDict()))
                         nm = "{0}.{1}".format(s.Dataset, s.TableName)        
 
                         if s.PartitionId is not None:
                             nm = "{0}${1}".format(nm, s.PartitionId)        
-
-                        if s.InitialLoad:
-                            initial_loads = True
 
                         priority = s.LoadPriority
                         processor.put((priority, nm, s))

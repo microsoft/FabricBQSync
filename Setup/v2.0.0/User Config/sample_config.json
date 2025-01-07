@@ -1,11 +1,24 @@
 {
-    "correlation_id": "",
+    "correlation_id": "3b8cabef-9666-420d-8434-089eef2b3d74",
     "id": "BQ_SYNC_LOADER",
     "version": "2.0.4",
     "enable_data_expiration": false,
     "optimization": {
         "use_approximate_row_counts": false,
         "disable_dataframe_cache": false
+    },
+    "maintenance": {
+        "enabled": false,
+        "track_history": false,
+        "retention_hours": 0,
+        "strategy": "SCHEDULED",
+        "thresholds": {
+            "rows_changed": 0.1,
+            "table_size_growth": 0.1,
+            "file_fragmentation": 0.1,
+            "out_of_scope_size": 0.1
+        },
+        "interval": "AUTO"
     },
     "autodiscover": {
         "autodetect": true,
@@ -27,6 +40,8 @@
     },
     "logging": {
         "log_level": "SYNC_STATUS",
+        "telemetry": true,
+        "telemetry_endpoint": "prdbqsyncinsights",
         "log_path": "/lakehouse/default/Files/BQ_Sync_Process/logs/fabric_sync.log"
     },
     "fabric": {
@@ -80,7 +95,7 @@
         "explode_arrays": true,
         "table_maintenance": {
             "enabled": false,
-            "interval": "MONTH"
+            "interval": "AUTO"
         }
     },
     "tables": [
@@ -100,7 +115,7 @@
             "explode_arrays": true,
             "table_maintenance": {
                 "enabled": false,
-                "interval": "MONTH"
+                "interval": "AUTO"
             },
             "table_name": null,
             "source_query": null,

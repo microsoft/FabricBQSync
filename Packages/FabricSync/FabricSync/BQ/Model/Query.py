@@ -1,7 +1,8 @@
 from pydantic import Field
-from typing import List, Optional
+from typing import List, Optional, Any
 from pyspark.sql.types import *
 from pyspark.sql import DataFrame, SparkSession
+from dataclasses import dataclass, field
 import json
 
 from .Config import *
@@ -62,3 +63,18 @@ class InformationSchemaModel(SyncBaseModel):
 
     def get_empty_df(self, context:SparkSession) -> DataFrame:
         return context.createDataFrame(data = context.sparkContext.emptyRDD(), schema = self.get_df_schema())
+
+@dataclass(order=True)
+class CommandSet:
+    Priority:int
+    Commands:Any=field(compare=False)
+
+    def __init__(self, cmd=None):
+        self.Priority=1
+        if isinstance(cmd, list):
+            self.Commands = cmd
+        elif isinstance(cmd, str):
+            self.Commands = []
+            self.Commands.append(cmd)
+        else:
+            self.Commands = []

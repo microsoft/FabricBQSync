@@ -41,10 +41,24 @@ class ConfigLogging(SyncBaseModel):
 
 class ConfigGCPDataset(SyncBaseModel):
     Dataset:Optional[str] = Field(alias="dataset", default=None)
-                   
+
+class ConfigIntelligentMaintenance(SyncBaseModel):
+    RowsChanged:float = Field(alias="rows_changed", default=float(0.10))
+    TableSizeGrowth:float = Field(alias="table_size_growth", default=float(0.10))
+    FileFragmentation:float = Field(alias="file_fragmentation", default=float(0.10))
+    OutOfScopeSize:float = Field(alias="out_of_scope_size", default=float(0.10))
+
+class ConfigMaintenance(SyncBaseModel):
+    Enabled:bool = Field(alias="enabled", default=False)
+    TrackHistory:bool = Field(alias="track_history", default=False)
+    RetentionHours:int = Field(alias="retention_hours", default=0)
+    Strategy:str = Field(alias="strategy", default="SCHEDULED")
+    Thresholds:ConfigIntelligentMaintenance = Field(alias="thresholds", default=ConfigIntelligentMaintenance())
+    Interval:str = Field(alias="interval", default="AUTO")
+
 class ConfigTableMaintenance(SyncBaseModel):
     Enabled:bool = Field(alias="enabled", default=False)
-    Interval:Optional[str] = Field(alias="interval", default="MONTH")
+    Interval:Optional[str] = Field(alias="interval", default=None)
                 
 class ConfigAsync(SyncBaseModel):
     Enabled:bool = Field(alias="enabled", default=True)
@@ -57,7 +71,7 @@ class ConfigLakehouseTarget(SyncBaseModel):
     PartitionBy:Optional[str] = Field(alias="partition_by", default=None)
                 
 class ConfigPartition(SyncBaseModel):
-    Enabled:bool = Field(alias="enabled", default=False)
+    Enabled:Optional[bool] = Field(alias="enabled", default=None)
     PartitionType:Optional[str] = Field(alias="type", default=None)
     PartitionColumn:Optional[str] = Field(alias="column", default=None)
     Granularity:Optional[str] = Field(alias="partition_grain", default=None)
@@ -106,7 +120,7 @@ class MappedColumn(SyncBaseModel):
     Source:Optional[TypedColumn] = Field(alias="source", default=None)
     Destination:Optional[TypedColumn] = Field(alias="destination", default=None)
     Format:Optional[str] = Field(alias="format", default=None)
-    DropSource:bool = Field(alias="drop_source", default=False)
+    DropSource:Optional[bool] = Field(alias="drop_source", default=None)
 
     @property
     def IsTypeConversion(self):
@@ -119,11 +133,11 @@ class MappedColumn(SyncBaseModel):
 class ConfigBQTableDefault (SyncBaseModel):
     ProjectID:Optional[str] = Field(alias="project_id", default=None)
     Dataset:Optional[str] = Field(alias="dataset", default=None)
-    ObjectType:Optional[str] = Field(alias="object_type", default="BASE_TABLE")
+    ObjectType:Optional[str] = Field(alias="object_type", default=None)
     Priority:int = Field(alias="priority", default=100)
-    LoadStrategy:Optional[str] = Field(alias="load_strategy", default="FULL")
-    LoadType:Optional[str] = Field(alias="load_type", default="OVERWRITE")
-    Interval:Optional[str] = Field(alias="interval", default="AUTO")
+    LoadStrategy:Optional[str] = Field(alias="load_strategy", default=None)
+    LoadType:Optional[str] = Field(alias="load_type", default=None)
+    Interval:Optional[str] = Field(alias="interval", default=None)
     Enabled:bool = Field(alias="enabled", default=True)
     EnforceExpiration:bool = Field(alias="enforce_expiration", default=False)
     AllowSchemaEvolution:bool = Field(alias="allow_schema_evolution", default=False)
@@ -186,9 +200,10 @@ class ConfigAutodiscover(SyncBaseModel):
 class ConfigDataset(SyncBaseModel):
     ApplicationID:UUID = Field(alias="correlation_id", default=uuid4())
     ID:str = Field(alias='id', default="BQ_SYNC_LOADER")    
-    Version:str = Field(alias='version', default=Version.CurrentVersion) 
+    Version:str = Field(alias='version', default=Version.CurrentVersion)    
     EnableDataExpiration:bool = Field(alias="enable_data_expiration", default=False)
     Optimization:ConfigOptimization = Field(alias="optimization", default=ConfigOptimization())
+    Maintenance:ConfigMaintenance = Field(alias="maintenance", default=ConfigMaintenance())
 
     AutoDiscover:ConfigAutodiscover = Field(alias="autodiscover", default=ConfigAutodiscover())
     Logging:ConfigLogging = Field(alias="logging", default=ConfigLogging())

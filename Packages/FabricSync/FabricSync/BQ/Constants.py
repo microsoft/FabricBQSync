@@ -23,4 +23,11 @@ class SyncConstants:
     
     def get_metadata_tables() -> List[str]:
         return ["bq_sync_configuration", "bq_sync_schedule", 
-            "bq_sync_schedule_telemetry", "bq_sync_data_expiration"]
+            "bq_sync_schedule_telemetry", "bq_sync_data_expiration", "bq_sync_maintenance"]
+
+    def get_inventory_temp_tables() -> List[str]:
+        return  ["tmpFiles", "tmpHistory"]
+    
+    def get_inventory_tables() -> List[str]:
+        return ["storage_inventory_tables","storage_inventory_table_files","storage_inventory_table_partitions",
+            "storage_inventory_table_history","storage_inventory_table_snapshot"]

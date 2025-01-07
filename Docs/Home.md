@@ -1,6 +1,6 @@
-# Fabric BQ Sync Documentation
+# Fabric Sync Documentation
 
-Welcome to the technical documents for Fabric BQ Sync project. Please check back regularly as these docs are regularly updated with the latest updates.
+Welcome to the technical documents for Fabric Sync project. Please check back regularly as these docs are regularly updated with the latest updates.
 
 ### Documentation Navigation
 
@@ -22,14 +22,15 @@ Welcome to the technical documents for Fabric BQ Sync project. Please check back
 
 ##### Administration
 - [Optimization](Optimizations.md)
-- Logging, Metrics & Telemetry
-- Data Maintenance
-- Data Expiration
+- [Logging & Telemetry](Logging.md)
+- [Data Maintenance](DataMaintenance.md)
+- [Data Expiration](DataExpiration.md)
 
 
 ### Common Scenarios
 
-    *Coming Soon*
+1. Initial Loading Historical Data
+2. Switch a Load Strategy from Full to Watermark
 
 ### Example Configurations
 

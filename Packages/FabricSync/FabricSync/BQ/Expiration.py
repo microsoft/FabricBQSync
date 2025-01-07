@@ -5,7 +5,7 @@ from delta.tables import *
 
 from .Model.Config import *
 from .Core import *
-from .Admin.DeltaTableUtility import *
+from .DeltaTableUtility import *
 from .SyncUtils import SyncUtil
 from .Logging import *
 

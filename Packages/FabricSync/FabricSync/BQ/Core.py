@@ -1,6 +1,5 @@
 from pyspark.sql.functions import *
 from pyspark.sql.types import *
-from delta.tables import *
 from pyspark.sql import SparkSession, DataFrame
 from delta.tables import *
 import json
@@ -83,6 +82,11 @@ class ThreadSafeList():
         with self._lock:
             return len(self._list)
 
+    @property
+    def unsafe_list(self):
+        with self._lock:
+            return self._list
+
 class ThreadSafeDict:
     def __init__(self):
         self._dict = {}
@@ -123,8 +127,60 @@ class ThreadSafeDict:
     def values(self):
         with self._lock:
             return list(self._dict.values())
+    
+    def len(self):
+        with self._lock:
+            return len(self._dict)
 
+class SparkProcessor():
+    def __init__(self, context):
+        self.Context = context
 
+    def _processor(self, cmd, num_threads=5):
+        processor = QueueProcessor(num_threads)
+
+        for c in cmd:
+            if isinstance(c, CommandSet):
+                processor.put((c.Priority, c))
+            else:
+                processor.put((1, CommandSet(c)))
+        
+        processor.process(self._process_command)
+
+    def process_command_list(self, commands):
+        commands = [CommandSet(c) for c in commands]
+        self._processor(commands)
+
+    def delete_from(self, tables, schema=None):
+        if not schema:
+            commands = [CommandSet(f"DELETE FROM {t};") for t in tables]
+        else:
+            commands = [CommandSet(f"DELETE FROM {schema}.{t};") for t in tables]
+
+        self._processor(commands)
+
+    def drop(self, tables, schema=None):
+        if not schema:
+            commands = [CommandSet(f"DROP TABLE IF EXISTS {t};") for t in tables]
+        else:
+            commands = [CommandSet(f"DROP TABLE IF EXISTS {schema}.{t};") for t in tables]
+
+        self._processor(commands)
+
+    def optimize_vacuum(self, tables, schema=None):
+        if not schema:
+            commands=[CommandSet([f"OPTIMIZE {t};",f"VACUUM {t};"]) for t in tables]
+        else:
+            commands=[CommandSet([f"OPTIMIZE {schema}.{t};",f"VACUUM {schema}.{t};"]) for t in tables]
+
+        self._processor(commands)
+
+    def _process_command(self, value):
+        cmd = value[1]
+
+        for c in cmd.Commands:
+            self.Context.sql(c)
+            
 class QueueProcessor:
     def __init__(self, num_threads):
         self.num_threads = num_threads
@@ -246,8 +302,7 @@ class ConfigBase():
             if query.Cached:
                 df.cache()
         except Exception as e:
-            print(e)
-            raise BQConnectorError(msg="Read to dataframe failed.", query=query) from e
+            raise BQConnectorError(msg=f"Read to dataframe failed: {e}", query=query) from e
         
         return df
 
@@ -322,6 +377,7 @@ class SyncBase():
 
     def configure_session_context(self):
         #Delta Settings
+        self.Context.conf.set("spark.databricks.delta.vacuum.parallelDelete.enabled", "true")
         self.Context.conf.set("spark.databricks.delta.retentionDurationCheck.enabled", "false")
         self.Context.conf.set("spark.databricks.delta.properties.defaults.minWriterVersion", "7")
         self.Context.conf.set("spark.databricks.delta.properties.defaults.minReaderVersion", "3")

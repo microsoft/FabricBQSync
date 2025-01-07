@@ -1,0 +1,270 @@
+{
+    "correlation_id": "",
+    "id": "integration_test_2",
+    "enable_data_expiration": true,
+    "autodiscover": {
+        "autodetect": true,
+        "tables": {
+            "enabled": true,
+            "load_all": false
+        },
+        "views": {
+            "enabled": true,
+            "load_all": false
+        },
+        "materialized_views": {
+            "enabled": true,
+            "load_all": false
+        }
+    },
+    "fabric": {
+      "metadata_lakehouse": "",
+      "target_lakehouse": ""
+    },
+    "gcp": {
+      "projects": [
+        {
+          "project_id": "",
+          "datasets": [
+            {
+              "dataset": "IntegrationTest"
+            },
+            {
+              "dataset": "IntegrationTest_2"
+            }
+          ]
+        }
+      ],
+      "api": {
+          "materialization_project_id": "",
+          "materialization_dataset": "IntegrationTest",
+          "billing_project_id": "",
+          "use_standard_api": false
+      },
+      "gcp_credentials": { 
+          "credential": ""
+        }
+    },
+    "async": {
+      "enabled": true,
+      "parallelism": 10
+    },
+    "logging": {
+        "log_level": "SYNC_STATUS",
+        "log_path": "/lakehouse/default/Files/BQ_Sync_Process/logs/fabric_sync.log"
+    },
+    "table_defaults": {
+      "priority": 100,
+      "project_id": "",
+      "dataset": "IntegrationTest",
+      "object_type": "BASE_TABLE",
+      "enabled": true,
+      "enforce_expiration": false,
+      "allow_schema_evolution": false,
+      "interval": "AUTO",
+      "flatten_table": false,
+      "flatten_inplace": false,
+      "explode_arrays": false,
+      "table_maintenance": {      
+        "interval": "AUTO"
+      }
+    },
+    "tables": [
+          {
+              "table_name": "Base_Table_Heap1",
+              "object_type": "BASE_TABLE",
+              "load_strategy": "FULL",
+              "load_type": "OVERWRITE"
+          },
+          {
+              "table_name": "Base_View_1",
+              "object_type": "VIEW",
+              "load_strategy": "FULL",
+              "load_type": "OVERWRITE"
+          },
+          {
+              "table_name": "Base_Materialized_View_1",
+              "object_type": "MATERIALIZED_VIEW",
+              "load_strategy": "FULL",
+              "load_type": "OVERWRITE"
+          },
+          
+          {
+              "table_name": "Base_Table_PK",
+              "object_type": "BASE_TABLE",
+              "load_strategy": "WATERMARK",
+              "load_type": "APPEND",
+              "watermark": {
+                  "column": "SaleKey"
+              }
+          },
+          {
+              "table_name": "Base_View_2",
+              "object_type": "VIEW",
+              "load_strategy": "WATERMARK",
+              "load_type": "APPEND",
+              "watermark": {
+                  "column": "SaleKey"
+              }
+          },
+          {
+              "table_name": "Base_Materialized_View_2",
+              "object_type": "MATERIALIZED_VIEW",
+              "load_strategy": "WATERMARK",
+              "load_type": "APPEND",
+              "watermark": {
+                  "column": "SaleKey"
+              }
+          },		
+          {
+              "table_name": "Base_Table_Partitioned_TS",
+              "object_type": "BASE_TABLE",
+              "load_strategy": "PARTITION",
+              "load_type": "OVERWRITE",
+              "bq_partition": {
+                  "enabled": true,
+                  "type": "TIME",
+                  "column": "InvoiceDateKey",
+                  "partition_grain": "DAY",
+                  "partition_data_type": "TIMESTAMP"
+              }
+          },
+          {
+              "table_name": "Base_Table_Partitioned_DT",
+              "object_type": "BASE_TABLE",
+              "load_strategy": "PARTITION",
+              "load_type": "OVERWRITE",
+              "bq_partition": {
+                  "enabled": true,
+                  "type": "TIME",
+                  "column": "InvoiceDateKey",
+                  "partition_grain": "DAY",
+                  "partition_data_type": "DATE"
+              }
+          },
+          {
+              "table_name": "Base_Table_Partitioned_Range",
+              "object_type": "BASE_TABLE",
+              "load_strategy": "PARTITION",
+              "load_type": "OVERWRITE",
+              "bq_partition": {
+                  "enabled": true,
+                  "type": "RANGE",
+                  "column": "CustomerKey",
+                  "partition_data_type": "INT64",
+                  "partition_range": "0, 500, 25"
+              }
+          },
+          {
+              "table_name": "Base_Table_Time_Ingestion",
+              "object_type": "BASE_TABLE",
+              "load_strategy": "TIME_INGESTION",
+              "load_type": "OVERWRITE",
+              "bq_partition": {
+                  "enabled": true,
+                  "type": "TIME",
+                  "column": "_PARTITIONTIME",
+                  "partition_grain": "DAY",
+                  "partition_data_type": "TIMESTAMP"
+              }
+          },
+          {
+              "table_name": "Base_Table_Heap2",
+              "load_strategy": "WATERMARK",
+              "load_type": "MERGE",
+              "keys": [{
+                  "column": "SaleKey"
+              }],
+              "watermark": {
+                  "column": "SaleKey"
+              }
+          },
+          {
+              "table_name": "Base_Table_Partitioned_Req_Filter",
+              "enabled": false
+          },
+          {
+              "table_name": "Base_Table_Heap3",
+              "source_query": "SELECT * FROM `fabric-poc-416917.IntegrationTest.Base_Table_Heap3` WHERE Profit>5",
+              "predicate": "Profit<=10"
+          },
+          {
+              "table_name": "Base_View_3",
+              "object_type": "VIEW",
+              "predicate": "Profit>5 AND Profit<=10"
+          },
+          {
+              "table_name": "Base_View_Schema_Evolution",
+              "object_type": "VIEW",
+              "allow_schema_evolution": true
+          },
+          {
+              "dataset": "IntegrationTest_2",
+              "table_name": "Alt_Base_Table_Heap1"
+          },
+          {
+              "table_name": "Base_Table_Expiring",
+              "enforce_expiration": true
+          },
+          {
+              "table_name": "Base_Table_Partitioned_Expiration",
+              "enforce_expiration": true
+          },
+          {
+              "table_name": "Complex_Types_Struct",
+              "flatten_table": true,
+              "flatten_inplace": true,
+              "explode_arrays": false
+          },
+          {
+              "table_name": "Complex_Types_Array",
+              "flatten_table": true,
+              "flatten_inplace": false,
+              "explode_arrays": true
+          },
+          {
+              "table_name": "Base_Table_Heap5",
+              "lakehouse_target": 
+              {
+                  "partition_by": "EmployeeNumber"
+              },
+              "column_map": [
+                  {
+                      "source": {
+                          "name":"SalespersonKey",
+                          "type":"INT"
+                      },
+                      "destination": {
+                          "name":"EmployeeNumber",
+                          "type":"STRING"
+                      },
+                      "drop_source": true
+                  },
+                  {
+                      "source": {
+                          "name":"DeliveryDateKey",
+                          "type":"TIMESTAMP"
+                      },
+                      "destination": {
+                          "name":"DeliveryDateKey",
+                          "type":"STRING"
+                      },
+                      "format": "yyyy-MM-dd HH:mm",
+                      "drop_source": false
+                  },
+                  {
+                      "source": {
+                          "name":"DeliveryDateKey",
+                          "type":"TIMESTAMP"
+                      },
+                      "destination": {
+                          "name":"DeliveredOn",
+                          "type":"TIMESTAMP"
+                      },
+                      "format": "yyyy-MM-dd HH:mm:ss",
+                      "drop_source": false
+                  }
+              ]
+          }
+      ]
+  }

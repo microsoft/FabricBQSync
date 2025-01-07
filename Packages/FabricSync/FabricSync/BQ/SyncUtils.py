@@ -10,7 +10,7 @@ from .Core import *
 from .Enum import *
 from .Model.Schedule import SyncSchedule
 from .Constants import SyncConstants
-from .Admin.DeltaTableUtility import *
+from .DeltaTableUtility import *
 from .Warnings import SyncUnsupportedConfigurationWarning
 
 class SyncUtil():
@@ -83,9 +83,7 @@ class SyncUtil():
 
     @staticmethod
     def optimize_bq_sync_metastore(context):
-        for tbl in SyncConstants.get_metadata_tables():
-            table_maint = DeltaTableMaintenance(context, tbl)
-            table_maint.optimize_and_vacuum()
+        SparkProcessor(context).optimize_vacuum(SyncConstants.get_metadata_tables())
 
     @staticmethod
     def flatten_structs(nested_df:DataFrame) -> DataFrame:

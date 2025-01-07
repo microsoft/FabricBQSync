@@ -1,5 +1,8 @@
 from .Model.Config import SyncBaseModel
 
+class SyncTimerError(Exception):
+    pass
+
 class SyncBaseError(Exception):
     def __init__(self, msg:str = None, data:SyncBaseModel = None):
         super().__init__()
@@ -15,14 +18,11 @@ class SyncBaseError(Exception):
         else:
             return f"{ex_msg}"
 
-class SyncTimerError(Exception):
-    pass
-
 class SyncInstallError(SyncBaseError):
     def __init__(self, msg:str = None, data:SyncBaseModel = None):
         super().__init__(msg=msg, data=data)
         self.title = "BQ Sync Configuration Error" 
-        
+
 class SyncConfigurationError(SyncBaseError):
     def __init__(self, msg:str = None, data:SyncBaseModel = None):
         super().__init__(msg=msg, data=data)
@@ -62,3 +62,8 @@ class BQConnectorError(SyncBaseError):
     def __init__(self, msg:str = None, query:SyncBaseModel = None):
         super().__init__(msg=msg, data=query)
         self.title = "BigQuery Connector Error"
+
+class SyncDataMaintenanceError(SyncBaseError):
+    def __init__(self, msg:str = None, query:SyncBaseModel = None):
+        super().__init__(msg=msg, data=query)
+        self.title = "Data Maintenance Error"

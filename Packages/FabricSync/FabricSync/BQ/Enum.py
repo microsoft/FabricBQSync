@@ -12,6 +12,10 @@ class BaseEnum(Enum):
     def __str__(self):
         return str(self.value)
 
+class MaintenanceStrategy(BaseEnum):
+    SCHEDULED="SCHEDULED"
+    INTELLIGENT="INTELLIGENT"
+
 class SupportedTypeConversion(BaseEnum):
     """
     Enum class for supported type conversions.
