@@ -10,6 +10,7 @@ from pyspark.sql import SparkSession
 from .Enum import *
 from .Constants import SyncConstants
 from .Utils import *
+from ..Meta import Version as SyncVersion
 
 class SyncLogger:
     def __init__(self, context:SparkSession):
@@ -60,7 +61,10 @@ class SyncLogger:
     def telemetry(self, message, *args, **kwargs):
         if (self.logger.isEnabledFor(SyncLogLevel.TELEMETRY.value)):
             if self.Telemetry:
-                self.send_telemetry(message)
+                message["correlation_id"] = self.ApplicationID
+                message["sync_version"] = SyncVersion.CurrentVersion 
+
+                self.send_telemetry(json.dumps(message))
                 #self.logger._log(SyncLogLevel.SYNC_STATUS.value, f"Telemetry: {message}", args, **kwargs)
 
     def send_telemetry(self, payload):
@@ -78,10 +82,7 @@ class SyncLogger:
     async def send_telemetry_to_api(self, payload):
         try:
             api_proxy = RestAPIProxy(base_url=f"https://{self.TelemetryEndpoint}")
-            #response = api_proxy.post(endpoint="telemetry", data=payload)
-
             bound = functools.partial(api_proxy.post, endpoint="telemetry", data=payload)
-            #loop = asyncio.get_event_loop()
             await self.loop.run_in_executor(None, bound)
         except Exception as e:
             self.logger.error("Telemetry Send Failure")
@@ -135,9 +136,9 @@ class Telemetry():
         }
 
         if data:
-            payload = payload | data
+            payload["operation_data"] = data
 
-        logging.Logger.telemetry(json.dumps(payload))
+        logging.Logger.telemetry(payload)
 
     def Install(func_=None):
         def _decorator(func):
