@@ -14,7 +14,7 @@ from pathlib import Path
 import uuid
 import random
 
-from ..BQ.Metadata import FabricMetastoreSchema
+from ..BQ.Metastore import *
 from ..BQ.Logging import *
 from ..BQ.Model.Config import *
 from ..BQ.Core import *
