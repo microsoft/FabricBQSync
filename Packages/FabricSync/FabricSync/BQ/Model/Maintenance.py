@@ -23,6 +23,10 @@ class MaintenanceSchedule(SyncBaseModel):
     LakehouseSchema:Optional[str] = Field(alias="lakehouse_schema", default=None)
     LakehouseTable:Optional[str] = Field(alias="lakehouse_table_name", default=None)
     LakehousePartition:Optional[str] = Field(alias="lakehouse_partition", default=None)
+
+    RowCount:Optional[int] = Field(alias="row_count", default=None)
+    TablePartitionSize:Optional[int] = Field(alias="table_partition_size", default=None)
+
     Strategy:Optional[str] = Field(alias="last_maintenance_type", default=None)
     TrackHistory:Optional[bool] = Field(alias="track_history", default=None)
     RetentionHours:Optional[int] = Field(alias="retention_hours", default=None)

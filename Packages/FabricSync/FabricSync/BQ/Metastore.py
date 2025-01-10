@@ -12,7 +12,7 @@ class FabricMetastoreSchema():
     bq_data_type_map = StructType([StructField('data_type', StringType(), True), StructField('partition_type', StringType(), True), StructField('is_watermark', StringType(), True)])
     bq_sync_configuration = StructType([StructField('sync_id', StringType(), True), StructField('table_id', StringType(), True), StructField('project_id', StringType(), True), StructField('dataset', StringType(), True), StructField('table_name', StringType(), True), StructField('object_type', StringType(), True), StructField('enabled', BooleanType(), True), StructField('lakehouse', StringType(), True), StructField('lakehouse_schema', StringType(), True), StructField('lakehouse_table_name', StringType(), True), StructField('lakehouse_partition', StringType(), True), StructField('source_query', StringType(), True), StructField('source_predicate', StringType(), True), StructField('priority', IntegerType(), True), StructField('load_strategy', StringType(), True), StructField('load_type', StringType(), True), StructField('interval', StringType(), True), StructField('primary_keys', ArrayType(StringType(), True), True), StructField('is_partitioned', BooleanType(), True), StructField('partition_column', StringType(), True), StructField('partition_type', StringType(), True), StructField('partition_grain', StringType(), True), StructField('partition_data_type', StringType(), True), StructField('partition_range', StringType(), True), StructField('watermark_column', StringType(), True), StructField('autodetect', BooleanType(), True), StructField('use_lakehouse_schema', BooleanType(), True), StructField('enforce_expiration', BooleanType(), True), StructField('allow_schema_evolution', BooleanType(), True), StructField('table_maintenance_enabled', BooleanType(), True), StructField('table_maintenance_interval', StringType(), True), StructField('flatten_table', BooleanType(), True), StructField('flatten_inplace', BooleanType(), True), StructField('explode_arrays', BooleanType(), True), StructField('column_map', StringType(), True), StructField('config_override', BooleanType(), True), StructField('sync_state', StringType(), True), StructField('created_dt', TimestampType(), True), StructField('last_updated_dt', TimestampType(), True)])
     bq_sync_data_expiration = StructType([StructField('sync_id', StringType(), True), StructField('table_catalog', StringType(), True), StructField('table_schema', StringType(), True), StructField('table_name', StringType(), True), StructField('partition_id', StringType(), True), StructField('expiration', TimestampType(), True)])
-    bq_sync_maintenance = StructType([StructField('sync_id', StringType(), True), StructField('table_id', StringType(), True), StructField('project_id', StringType(), True), StructField('dataset', StringType(), True), StructField('table_name', StringType(), True), StructField('partition_id', StringType(), True), StructField('lakehouse', StringType(), True), StructField('lakehouse_schema', StringType(), True), StructField('lakehouse_table_name', StringType(), True), StructField('lakehouse_partition', StringType(), True), StructField('last_maintenance_type', StringType(), True), StructField('last_maintenance_interval', StringType(), True), StructField('last_maintenance', TimestampType(), True), StructField('last_optimize', TimestampType(), True), StructField('last_vacuum', TimestampType(), True), StructField('last_maintenance_status', StringType(), True), StructField('created_dt', TimestampType(), True), StructField('last_updated_dt', TimestampType(), True)])
+    bq_sync_maintenance = StructType([StructField('sync_id', StringType(), True), StructField('table_id', StringType(), True), StructField('project_id', StringType(), True), StructField('dataset', StringType(), True), StructField('table_name', StringType(), True), StructField('partition_id', StringType(), True), StructField('lakehouse', StringType(), True), StructField('lakehouse_schema', StringType(), True), StructField('lakehouse_table_name', StringType(), True), StructField('lakehouse_partition', StringType(), True), StructField('row_count', LongType(), True), StructField('table_partition_size', LongType(), True), StructField('last_maintenance_type', StringType(), True), StructField('last_maintenance_interval', StringType(), True), StructField('last_maintenance', TimestampType(), True), StructField('last_optimize', TimestampType(), True), StructField('last_vacuum', TimestampType(), True), StructField('last_maintenance_status', StringType(), True), StructField('created_dt', TimestampType(), True), StructField('last_updated_dt', TimestampType(), True)])
     bq_sync_schedule = StructType([StructField('group_schedule_id', StringType(), True), StructField('schedule_id', StringType(), True), StructField('sync_id', StringType(), True), StructField('project_id', StringType(), True), StructField('dataset', StringType(), True), StructField('table_name', StringType(), True), StructField('schedule_type', StringType(), True), StructField('scheduled', TimestampType(), True), StructField('status', StringType(), True), StructField('started', TimestampType(), True), StructField('completed', TimestampType(), True), StructField('completed_activities', IntegerType(), True), StructField('failed_activities', IntegerType(), True), StructField('max_watermark', StringType(), True), StructField('priority', IntegerType(), True)])
     bq_sync_schedule_telemetry = StructType([StructField('schedule_id', StringType(), True), StructField('sync_id', StringType(), True), StructField('project_id', StringType(), True), StructField('dataset', StringType(), True), StructField('table_name', StringType(), True), StructField('partition_id', StringType(), True), StructField('status', StringType(), True), StructField('started', TimestampType(), True), StructField('completed', TimestampType(), True), StructField('src_row_count', LongType(), True), StructField('inserted_row_count', LongType(), True), StructField('updated_row_count', LongType(), True), StructField('delta_version', LongType(), True), StructField('spark_application_id', StringType(), True), StructField('max_watermark', StringType(), True), StructField('summary_load', StringType(), True), StructField('source_query', StringType(), True), StructField('source_predicate', StringType(), True)])
 
@@ -557,7 +557,6 @@ class FabricMetastore():
                 p.table_schema as dataset,
                 p.table_name as table_name,
                 p.object_type AS object_type,
-
                 CASE WHEN p.load_all THEN
                     COALESCE(u.enabled, TRUE) ELSE
                     COALESCE(u.enabled, FALSE) END AS enabled,
@@ -792,44 +791,47 @@ class FabricMetastore():
 
         self.Context.sql(sql)
     
-    def get_scheduled_maintenance_schedule(self, sync_id:str) -> DataFrame:
+    def create_maintenance_views(self, sync_id:str):
         sql = f"""
+        CREATE OR REPLACE TEMPORARY VIEW maintenance_snap
+            AS
             WITH 
                 base_config AS (
                     SELECT
-                        maintenance.enabled AS maintenance_enabled,
-                        maintenance.strategy AS last_maintenance_type,
-                        maintenance.track_history,
-                        maintenance.retention_hours,
-                        maintenance.thresholds.rows_changed,
-                        maintenance.thresholds.table_size_growth,
-                        maintenance.thresholds.file_fragmentation,
-                        maintenance.thresholds.out_of_scope_size
+                        maintenance.enabled AS maintenance_enabled,maintenance.strategy AS maintenance_strategy,
+                        maintenance.track_history,maintenance.retention_hours,
+                        maintenance.thresholds.rows_changed,maintenance.thresholds.table_size_growth,
+                        maintenance.thresholds.file_fragmentation,maintenance.thresholds.out_of_scope_size
                     FROM user_config_json
                 ),
                 sync_config AS (
                     SELECT
-                        c.sync_id, c.table_id, c.project_id, c.dataset, c.table_name, 
-                        c.table_maintenance_interval AS last_maintenance_interval,
+                        LOWER(c.sync_id) AS sync_id, LOWER(c.table_id) AS table_id, 
+                        LOWER(c.project_id) AS project_id, LOWER(c.dataset) AS dataset, 
+                        LOWER(c.table_name) AS table_name, 
+                        c.table_maintenance_interval AS last_maintenance_interval, c.table_maintenance_enabled,
                         CASE WHEN (c.table_maintenance_interval = 'DAY') THEN 1
                             WHEN (c.table_maintenance_interval= 'WEEK') THEN 7
                             WHEN (c.table_maintenance_interval= 'MONTH') THEN 30
                             WHEN (c.table_maintenance_interval= 'QUARTER') THEN 90
                             WHEN (c.table_maintenance_interval= 'YEAR') THEN 365
                             ELSE 0 END AS maintenance_interval_days,
-                        c.lakehouse, c.lakehouse_schema, c.lakehouse_table_name, 
+                        LOWER(c.lakehouse) AS lakehouse, LOWER(c.lakehouse_schema) AS lakehouse_schema, 
+                        LOWER(c.lakehouse_table_name) AS lakehouse_table_name,
                         c.partition_column, c.partition_type, c.partition_grain,
                         b.*
                     FROM bq_sync_configuration c
                     CROSS JOIN base_config b
-                    WHERE c.sync_state='COMMIT'
-                    AND c.table_maintenance_enabled=TRUE
+                    WHERE c.sync_state='COMMIT'                    
                 ),
                 tbl_partitions AS (
                     SELECT
-                        t.table_catalog, t.table_schema, t.table_name, p.last_modified_time,
-                        COALESCE(p.partition_id,'') AS partition_id,
+                        LOWER(t.table_catalog) AS table_catalog, LOWER(t.table_schema) AS table_schema, 
+                        LOWER(t.table_name) AS table_name, p.last_modified_time,
+                        COALESCE(p.partition_id,'') AS partition_id, p.total_rows, p.total_logical_bytes,
                         m.last_maintenance, m.last_optimize, m.last_vacuum,
+                        m.row_count AS last_row_count,
+                        m.table_partition_size AS last_table_partition_size,
                         SUM(
                             CASE 
                                 WHEN (m.last_maintenance IS NULL) THEN 0 
@@ -843,36 +845,188 @@ class FabricMetastore():
                     LEFT JOIN bq_sync_maintenance m ON t.table_catalog=m.project_id 
                         AND t.table_schema=m.dataset AND t.table_name=m.table_name
                         AND COALESCE(p.partition_id,'')=m.partition_id
+                        AND m.sync_id = '{sync_id}'
                     WHERE COALESCE(p.partition_id,'') != '__NULL__'
-                ),
-                tbl_partition_maint AS (
-                    SELECT
-                        m.*, p.partition_id, p.last_modified_time,
-                        p.last_maintenance, p.last_optimize, p.last_vacuum,
-                        ROW_NUMBER() OVER(PARTITION BY p.table_catalog, p.table_schema, p.table_name ORDER BY p.partition_id) AS partition_index,
-                        CASE WHEN ((p.partition_maintenance/p.partition_count) <= 0.5f) THEN TRUE
-                            ELSE FALSE END AS full_table_maintenance,
-                        CASE WHEN (p.last_maintenance IS NULL) THEN CURRENT_DATE()
-                            ELSE DATE_ADD(p.last_maintenance, m.maintenance_interval_days) END AS next_maintenance
-                    FROM tbl_partitions p
-                    JOIN sync_config m ON p.table_catalog=m.project_id AND p.table_schema=m.dataset AND p.table_name=m.table_name
                 )
 
+                SELECT
+                    m.*, p.partition_id, p.last_modified_time,
+                    p.total_rows AS row_count, p.total_logical_bytes AS table_partition_size,
+                    p.last_maintenance, p.last_optimize, p.last_vacuum,
+                    p.last_row_count, p.last_table_partition_size,
+                    ROW_NUMBER() OVER(PARTITION BY p.table_catalog, p.table_schema, p.table_name 
+                        ORDER BY p.partition_id) AS partition_index,
+                    CASE WHEN ((p.partition_maintenance/p.partition_count) <= 0.5f) THEN TRUE
+                        ELSE FALSE END AS full_table_maintenance,
+                    CASE WHEN last_maintenance_interval='AUTO' THEN NULL  
+                        WHEN p.last_maintenance IS NULL THEN CURRENT_DATE()
+                        ELSE DATE_ADD(p.last_maintenance, m.maintenance_interval_days) END AS next_scheduled_maintenance,
+                    CASE WHEN (p.last_maintenance IS NULL OR m.maintenance_strategy='INTELLIGENT' 
+                        OR last_maintenance_interval='AUTO') THEN CURRENT_DATE()
+                        ELSE DATE_ADD(p.last_maintenance, m.maintenance_interval_days) END AS next_maintenance
+                FROM tbl_partitions p
+                JOIN sync_config m ON p.table_catalog=m.project_id AND p.table_schema=m.dataset AND p.table_name=m.table_name
+                WHERE m.table_maintenance_enabled=TRUE
+                    AND m.maintenance_enabled=TRUE
+                    AND m.sync_id = '{sync_id}'
+        """
+
+        self.Context.sql(sql)
+
+    def get_scheduled_maintenance_schedule(self, sync_id:str) -> DataFrame:
+        sql = f"""
+            WITH scheduled AS (
+                SELECT 
+                    *,
+                    CURRENT_TIMESTAMP() AS created_dt,
+                    CASE WHEN (last_modified_time IS NULL OR last_maintenance IS NULL) THEN TRUE
+                        WHEN  (last_modified_time >= last_maintenance) THEN TRUE ELSE
+                            FALSE END AS run_optimize,
+                    CASE WHEN (last_modified_time IS NULL OR last_maintenance IS NULL) THEN TRUE
+                        WHEN  (last_modified_time >= last_maintenance) THEN TRUE ELSE
+                            FALSE END AS run_vacuum,
+                    COUNT(*) OVER(PARTITION BY sync_id, lakehouse, lakehouse_schema, lakehouse_table_name) as table_parts
+                FROM maintenance_snap
+            )
+
             SELECT 
-                *,
-                CURRENT_TIMESTAMP() AS created_dt,
-                CASE WHEN (last_modified_time IS NULL OR last_maintenance IS NULL) THEN TRUE
-                    WHEN  (last_modified_time >= last_maintenance) THEN TRUE ELSE
-                        FALSE END AS run_optimize,
-                CASE WHEN (last_modified_time IS NULL OR last_maintenance IS NULL) THEN TRUE
-                    WHEN  (last_modified_time >= last_maintenance) THEN TRUE ELSE
-                        FALSE END AS run_vacuum
-            FROM tbl_partition_maint
-            WHERE sync_id='{sync_id}'
-            AND last_maintenance_type='SCHEDULED'
-            AND last_maintenance_interval != 'AUTO'
-            AND next_maintenance = CURRENT_DATE()     
-        """;
+                *
+            FROM scheduled
+            WHERE sync_id='{sync_id}' 
+            AND maintenance_strategy='SCHEDULED' 
+            AND (
+                next_maintenance <= CURRENT_DATE() OR 
+                (full_table_maintenance=TRUE AND table_parts > 1)
+            )    
+        """
+
+        return self.Context.sql(sql)
+
+    def get_inventory_based_maintenance_schedule(self, sync_id:str) -> DataFrame:
+        sql = f"""
+            WITH lh_partitions AS (
+                    SELECT
+                        lakehouse,lakehouse_schema,lakehouse_table,delta_partition,
+                        POSEXPLODE(SPLIT(delta_partition, '/'))
+                    FROM storage_inventory_table_partitions
+                    WHERE sync_id='{sync_id}' AND delta_partition != '<default>'
+                ),
+                lh_partition_parts AS (
+                    SELECT
+                        *,
+                        if(INSTR(col, '=') > 0, 
+                            SUBSTRING(col, INSTR(col, '=')+1, LEN(col) - INSTR(col, '=')),
+                            NULL) as part
+                    FROM lh_partitions
+                ),
+                lh_partition_struct AS (
+                    SELECT
+                        lakehouse,lakehouse_schema,lakehouse_table,delta_partition,
+                        STRUCT(pos, part) as pt
+                    FROM lh_partition_parts
+                    WHERE part IS NOT NULL
+                ),
+                lh_sorted_struct AS (
+                    SELECT
+                        lakehouse,lakehouse_schema,lakehouse_table,delta_partition,
+                        ARRAY_SORT(
+                            ARRAY_AGG(pt),
+                            (left, right) -> case left.pos < right.pos -1 when left.pos > right.pos then 1 else 0 end
+                        ) AS sorted_struct_array
+                    FROM lh_partition_struct
+                    GROUP BY lakehouse,lakehouse_schema,lakehouse_table,delta_partition
+                ),
+                lh_partition_map AS (
+                    SELECT
+                        lakehouse,lakehouse_schema,lakehouse_table,delta_partition,
+                        CONCAT_WS('', TRANSFORM(
+                            sorted_struct_array,
+                            sorted_struct -> sorted_struct.part
+                        )) AS partition_id
+                    FROM lh_sorted_struct
+                ),
+                inventory_files AS (
+                    SELECT
+                        lakehouse, lakehouse_schema, lakehouse_table,
+                        substring(data_file, 1, len(data_file) - locate('/', reverse(data_file))) as delta_partition,
+                        file_info['file_size'] as file_size 
+                    FROM  storage_inventory_table_files
+                    WHERE sync_id='{sync_id}' AND file_info['operation'] = 'ADD'
+                ),
+                table_files AS (
+                    SELECT
+                        lakehouse, lakehouse_schema, lakehouse_table, 
+                        CASE WHEN (CONTAINS(delta_partition, '.parquet')) THEN '<default>' ELSE delta_partition END AS delta_partition,
+                        CASE WHEN ((file_size/(1000*1000*1000)) < 1) THEN 1 ELSE 0 END as partial_file
+                    FROM inventory_files
+                ),
+                partition_files AS (
+                    SELECT
+                        lakehouse, lakehouse_schema, lakehouse_table, delta_partition,
+                        SUM(partial_file) AS partial_files,
+                        COUNT(*) AS table_partition_file_count
+                    FROM table_files
+                    GROUP BY lakehouse, lakehouse_schema, lakehouse_table, delta_partition
+                ),
+                partition_inventory AS (
+                    SELECT p.*, COALESCE(m.partition_id, p.delta_partition) AS partition_id,
+                    f.partial_files, f.table_partition_file_count
+                    FROM storage_inventory_table_partitions p 
+                    JOIN partition_files f ON p.lakehouse=f.lakehouse AND p.lakehouse_schema=f.lakehouse_schema
+                        AND p.lakehouse_table=f.lakehouse_table AND p.delta_partition=f.delta_partition
+                    LEFT JOIN lh_partition_map m ON p.lakehouse=m.lakehouse AND p.lakehouse_schema=m.lakehouse_schema
+                        AND p.lakehouse_table=m.lakehouse_table AND p.delta_partition=m.delta_partition
+                    WHERE p.sync_id='{sync_id}' 
+                ),
+                inventory_maintenance_snap AS (
+                    SELECT
+                        COALESCE(m.last_row_count/p.row_count, 1) AS rows_changed_ratio,
+                        COALESCE(p.removed_file_size/p.file_size, 0) AS out_of_scope_size_ratio,
+                        COALESCE(m.last_table_partition_size/p.file_size, 1) AS table_size_growth_ratio,
+
+                        CASE WHEN (p.table_partition_file_count <= 1) THEN 0
+                            ELSE p.partial_files/p.table_partition_file_count END AS file_fragmentation_ratio,
+
+                        m.sync_id, m.project_id, m.dataset, m.table_id, m.table_name, m.partition_id, m.lakehouse, m.lakehouse_schema,
+                        m.lakehouse_table_name, p.row_count, p.file_size AS table_partition_size, 
+                        m.track_history, m.retention_hours, m.rows_changed, m.table_size_growth, m.file_fragmentation, m.out_of_scope_size, 
+                        m.last_maintenance_interval, m.maintenance_strategy, m.next_scheduled_maintenance,
+                        m.next_maintenance, m.last_optimize, m.last_vacuum, m.full_table_maintenance,
+                        m.partition_index, m.partition_type, m.partition_grain, m.partition_column,
+                        CURRENT_TIMESTAMP AS created_dt
+                    FROM maintenance_snap m
+                    JOIN partition_inventory p ON p.sync_id=m.sync_id AND p.lakehouse=m.lakehouse
+                        AND p.lakehouse_schema=COALESCE(m.lakehouse_schema,'')
+                        AND p.lakehouse_table=m.lakehouse_table_name
+                        AND p.partition_id=CASE WHEN (m.partition_id = '') THEN '<default>' ELSE m.partition_id END
+                ),
+                inventory_maintenance AS(
+                    SELECT
+                        *,
+                        CASE WHEN (next_scheduled_maintenance <= CURRENT_DATE()) THEN TRUE ELSE FALSE END AS is_scheduled_maint,
+                        CASE WHEN ((rows_changed_ratio > rows_changed) OR 
+                            (table_size_growth_ratio > table_size_growth) OR 
+                            (file_fragmentation_ratio > file_fragmentation)) THEN TRUE
+                            ELSE FALSE END AS run_optimize,
+                        CASE WHEN (out_of_scope_size_ratio > out_of_scope_size) THEN TRUE ELSE FALSE END as run_vacuum
+                    FROM inventory_maintenance_snap            
+                )
+
+            SELECT
+                rows_changed_ratio, out_of_scope_size_ratio,table_size_growth_ratio,file_fragmentation_ratio,
+                sync_id, project_id, dataset, table_id, table_name, partition_id, lakehouse, lakehouse_schema,
+                lakehouse_table_name, row_count, table_partition_size, maintenance_strategy AS last_maintenance_type, 
+                track_history, retention_hours, rows_changed, table_size_growth, file_fragmentation, out_of_scope_size, 
+                last_maintenance_interval, maintenance_strategy, next_scheduled_maintenance,
+                next_maintenance, last_optimize, last_vacuum, full_table_maintenance,
+                partition_index, partition_type, partition_grain, partition_column, created_dt,
+                CASE WHEN (is_scheduled_maint=TRUE) THEN TRUE ELSE run_optimize END AS run_optimize, 
+                CASE WHEN (is_scheduled_maint=TRUE) THEN TRUE ELSE run_vacuum END AS run_vacuum
+            FROM inventory_maintenance
+            WHERE sync_id='{sync_id}' AND maintenance_strategy='INTELLIGENT'
+            AND next_maintenance <= CURRENT_DATE()
+            AND ((run_optimize=TRUE OR run_vacuum=TRUE) OR (is_scheduled_maint=TRUE))
+        """
 
         return self.Context.sql(sql)
 
@@ -881,10 +1035,7 @@ class FabricMetastore():
         data = []
 
         if schedules:
-            for s in schedules:
-                d = s.model_dump()
-                #for k in keys: del d[k]
-                data.append(d)
+            for s in schedules: data.append(s.model_dump())
 
             maint_tbl = DeltaTable.forName(self.Context, "bq_sync_maintenance")
             df = self.Context.createDataFrame(data=data, schema=FabricMetastoreSchema.bq_sync_maintenance)
@@ -897,12 +1048,14 @@ class FabricMetastore():
                 .whenNotMatchedInsertAll() \
                 .whenMatchedUpdate(set =
                 {
+                    "row_count": "u.row_count",
+                    "table_partition_size": "u.table_partition_size",
                     "last_maintenance_type": "u.last_maintenance_type",
                     "last_maintenance_interval": "u.last_maintenance_interval",
                     "last_maintenance": "u.last_maintenance",
                     "last_optimize": "u.last_optimize",
                     "last_vacuum": "u.last_vacuum",
-                    "last_updated_dt": 'u.last_updated_dt'
+                    "last_updated_dt": "u.last_updated_dt"
                 }
                 ).execute()
 
@@ -910,4 +1063,4 @@ class FabricMetastore():
         self.create_userconfig_tables_proxy_view()        
         self.create_userconfig_tables_cols_proxy_view()
 
-        self.create_autodetect_view()
+        self.create_autodetect_view() 

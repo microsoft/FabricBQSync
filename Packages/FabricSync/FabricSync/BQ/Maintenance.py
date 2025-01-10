@@ -91,6 +91,15 @@ class DeltaInventory(ConfigBase):
     def _get_clean_tbl_path_(self, tbl:str) -> str:        
         return f"{self.storage_prefix}{tbl}"
 
+    def _get_delta_operation_(self, df, operation):
+        df = df.where(f"operation='{operation}'") \
+            .select(max(col("version")).alias("delta_version"))
+
+        v = [r["delta_version"] for r in df.collect()]
+
+        if v:
+            return v[0]
+    
     def _process_delta_log_(self, val):
         if isinstance(val, str):
             tbl = val
@@ -110,6 +119,12 @@ class DeltaInventory(ConfigBase):
                 StructField('path', StringType(), True), \
                 StructField('stats', StringType(), True), \
                 StructField('size', LongType(), True)])
+
+            deltaTbl = DeltaTable.forPath(self.Context, f"{tbl_path}")
+            h = deltaTbl.history()
+
+            lvv = self._get_delta_operation_(h, "VACUUM END")
+            last_vacuum_version = 0 if not lvv else lvv
 
             df = self.Context.read.format("json").load(f"{tbl_path}/_delta_log/????????????????????.json")
 
@@ -155,6 +170,9 @@ class DeltaInventory(ConfigBase):
                 .withColumn("deletionVectorSize", coalesce("r.dv_sizeInBytes", "a.dv_sizeInBytes", lit(0))) \
                 .withColumn("file_info", \
                     struct(*[col("operation"), col("file_size"), col("row_count"), col("delta_version"), col("deletionVectorSize")])) \
+                .where(
+                    ((col("delta_version") > last_vacuum_version) & (col("operation")=="REMOVE")) |
+                        (col("operation")=="ADD")) \
                 .select("data_file", "file_info")
 
             f = f.withColumn("lakehouse", lit(self.lakehouse)) \
@@ -162,8 +180,7 @@ class DeltaInventory(ConfigBase):
                 .withColumn("lakehouse_table", lit(tbl.lower()))
             f.write.mode("APPEND").saveAsTable(f"{self.UserConfig.Fabric.MetadataLakehouse}.tmpFiles")
 
-            deltaTbl = DeltaTable.forPath(self.Context, f"{tbl_path}")
-            h = deltaTbl.history().withColumn("lakehouse", lit(self.lakehouse)) \
+            h = h.withColumn("lakehouse", lit(self.lakehouse)) \
                 .withColumn("lakehouse_schema", lit(self.lakehouse_schema)) \
                 .withColumn("lakehouse_table", lit(tbl.lower()))
             h.write.mode("APPEND").saveAsTable(f"{self.UserConfig.Fabric.MetadataLakehouse}.tmpHistory")
@@ -235,7 +252,7 @@ class DeltaInventory(ConfigBase):
     def _get_lookup_table_(self) -> DataFrame:
         if not self.lkp:
             self.lkp = self.Context.table(f"{self.UserConfig.Fabric.MetadataLakehouse}.storage_inventory_tables") \
-                .select("inventory_id", "lakehouse", "lakehouse_schema", "lakehouse_table") \
+                .select("sync_id", "inventory_id", "lakehouse", "lakehouse_schema", "lakehouse_table") \
                 .alias("lkp")
         
         return self.lkp
@@ -243,13 +260,15 @@ class DeltaInventory(ConfigBase):
     def _lookup_inventory_id_(self, df:DataFrame) -> DataFrame:
         lkp = self._get_lookup_table_()
 
-        df = df.join(lkp, (df["lakehouse"]==lkp["lakehouse"]) & \
+        df = df.join(lkp, (df["sync_id"]==lkp["sync_id"]) & (df["lakehouse"]==lkp["lakehouse"]) & \
             (df["lakehouse_schema"]==lkp["lakehouse_schema"]) & (df["lakehouse_table"]==lkp["lakehouse_table"])) \
                 .select(df["*"], col("lkp.inventory_id"))
             
         return df
 
     def _save_dataframe_(self, df:DataFrame, delta_table:str, merge_criteria:list[str] = [], temporal:bool = True):
+        df = df.withColumn("sync_id", lit(self.UserConfig.ID))
+
         if "lakehouse_table" in df.columns:
             if not "inventory_id" in df.columns:
                 df = self._lookup_inventory_id_(df)
@@ -258,7 +277,7 @@ class DeltaInventory(ConfigBase):
             df = df.withColumn("inventory_date", lit(self.inventory_dt))
         
         if self.Context.catalog.tableExists(delta_table):
-            merge_criteria = merge_criteria + ["lakehouse", "lakehouse_schema"]
+            merge_criteria = merge_criteria + ["sync_id", "lakehouse", "lakehouse_schema"]
 
             if "lakehouse_table" not in merge_criteria:
                 merge_criteria.append("inventory_id")
@@ -276,15 +295,12 @@ class DeltaInventory(ConfigBase):
                 .whenNotMatchedInsertAll() \
                 .execute()
         else:
-            if not temporal:
-                df.write.mode("OVERWRITE").saveAsTable(f"{self.UserConfig.Fabric.MetadataLakehouse}.{delta_table}")
+            writer = df.write.mode("OVERWRITE")
+            if temporal:
+                writer = writer.partitionBy("sync_id", "inventory_date")
             else:
-                if not self.UserConfig.Fabric.TargetLakehouseSchema:
-                    df.write.mode("OVERWRITE").partitionBy("lakehouse", "inventory_date") \
-                        .saveAsTable(f"{self.UserConfig.Fabric.MetadataLakehouse}.{delta_table}")
-                else:
-                    df.write.mode("OVERWRITE").partitionBy("lakehouse", "lakehouse_schema", "inventory_date") \
-                        .saveAsTable(f"{self.UserConfig.Fabric.MetadataLakehouse}.{delta_table}")
+                writer = writer.partitionBy("sync_id")            
+            writer.saveAsTable(f"{self.UserConfig.Fabric.MetadataLakehouse}.{delta_table}")
 
     def _process_delta_inventory_(self, delta_tables:list[str], tables:DataFrame):
         self.Logger.sync_status(f"Processing delta table logs ...")
@@ -320,19 +336,30 @@ class DeltaInventory(ConfigBase):
     def _clear_temp_tables_(self):
         SparkProcessor(self.Context).drop(SyncConstants.get_inventory_temp_tables(), self.UserConfig.Fabric.MetadataLakehouse)
 
+    def _check_tables_exists(self, tbls) -> []:
+        return [t for t in tbls if self.Context.catalog.tableExists(f"{self.UserConfig.Fabric.MetadataLakehouse}.{t}")]
+
     def _clear_delta_inventory_schema_(self):
-        SparkProcessor(self.Context).drop(SyncConstants.get_inventory_tables(), self.UserConfig.Fabric.MetadataLakehouse)
+        tables = self._check_tables_exists(SyncConstants.get_inventory_tables())
+
+        if tables:
+            cmds = [f"""DELETE FROM {self.UserConfig.Fabric.MetadataLakehouse}.{tbl} 
+                        WHERE sync_id='{self.UserConfig.ID}'""" \
+                for tbl in tables]
+
+            SparkProcessor(self.Context).process_command_list(cmds)  
 
     def _clear_inventory_partition(self):
-        tables = ["storage_inventory_table_files", "storage_inventory_table_history", "storage_inventory_table_partitions"]
+        tables = self._check_tables_exists(SyncConstants.get_inventory_tables())
+        tables.remove("storage_inventory_tables")
+        tables = self._check_tables_exists(SyncConstants.get_inventory_tables())
 
-        cmds = [f"""DELETE FROM {self.UserConfig.Fabric.MetadataLakehouse}.{tbl} 
-                    WHERE lakehouse='{self.lakehouse}' 
-                    AND lakehouse_schema='{self.lakehouse_schema}' 
-                    AND inventory_date='{self.inventory_date}'""" \
-            for tbl in tables]
+        if tables:
+            cmds = [f"""DELETE FROM {self.UserConfig.Fabric.MetadataLakehouse}.{tbl} 
+                        WHERE sync_id='{self.UserConfig.ID}' AND inventory_date='{self.inventory_date}'""" \
+                for tbl in tables]
 
-        SparkProcessor(self.Context).process_command_list(cmds)   
+            SparkProcessor(self.Context).process_command_list(cmds)   
 
     def _initialize_delta_inventory_(self):
         self._clear_temp_tables_()
@@ -356,6 +383,10 @@ class DeltaInventory(ConfigBase):
 
             self._process_delta_inventory_(delta_tables, tables)
             self.Context.sql(f"USE {self.UserConfig.Fabric.MetadataLakehouse}")
+
+            self.Logger.sync_status(f"Optimizing Inventory Tables...")
+            SparkProcessor(self.Context).optimize_vacuum(
+                SyncConstants.get_inventory_tables(), self.UserConfig.Fabric.MetadataLakehouse)
 
         self.Logger.sync_status(f"Finished Lakehouse Inventory in {str(timer)}...")
 
@@ -395,7 +426,7 @@ class DeltaOneLakeInventory(DeltaInventory):
         
         self.Logger.sync_status(f"Loading tables to inventory for {self.lakehouse} ...")
         return self._load_onelake_tables_()
-
+    
 class FabricSyncMaintenance(SyncBase):
     def __init__(self, context:SparkSession, config_path:str, api_token:str):
         super().__init__(context, config_path, clean_session=True)
@@ -412,6 +443,7 @@ class FabricSyncMaintenance(SyncBase):
             return
         
         self.Metastore.create_proxy_views()
+        self.Metastore.create_maintenance_views(sync_id=self.UserConfig.ID)
 
         if sync_user_config:
             self.Logger.sync_status(f"Syncing User Config with Metadata metastore...")
@@ -420,14 +452,24 @@ class FabricSyncMaintenance(SyncBase):
         self.Logger.sync_status(f"Async {self.UserConfig.Maintenance.Strategy} Maintenance started with parallelism of {self.UserConfig.Async.Parallelism}...")
 
         with SyncTimer() as t:
-            if self.UserConfig.Maintenance.Strategy == str(MaintenanceStrategy.SCHEDULED):
+            if self.UserConfig.Maintenance.Strategy == str(MaintenanceStrategy.INTELLIGENT):
+                self.run_lakehouse_inventory()
+                self._run_intelligent_maintenance_()
+            else:
                 self._run_scheduled_maintenance_()
         
         self.Logger.sync_status(f"{self.UserConfig.Maintenance.Strategy} Maintenance finished in {str(t)}...")
     
+    @Telemetry.Delta_Maintenance(maintainence_type="INTELLIGENT")
+    def _run_intelligent_maintenance_(self):
+        df = self.Metastore.get_inventory_based_maintenance_schedule(sync_id=self.UserConfig.ID)
+
+        schedule = [MaintenanceSchedule(**(r.asDict())) for r in df.collect()]
+        self._run_maintenance_(schedule)
+
     @Telemetry.Delta_Maintenance(maintainence_type="SCHEDULED")
     def _run_scheduled_maintenance_(self):
-        df = self.Metastore.get_scheduled_maintenance_schedule(self.UserConfig.ID)
+        df = self.Metastore.get_scheduled_maintenance_schedule(sync_id=self.UserConfig.ID)
 
         schedule = [MaintenanceSchedule(**(r.asDict())) for r in df.collect()]
         self._run_maintenance_(schedule)
@@ -478,11 +520,16 @@ class FabricSyncMaintenance(SyncBase):
     def _maintenance_job_(self, value) -> MaintenanceSchedule:
         schedule = value[2]
 
-        maint_type = "Full Table" if schedule.FullTableMaintenance else "Partition"
+        if schedule.FullTableMaintenance:
+            maint_type = "Full Table"
+            table_id = schedule.FabricLakehousePath
+        else:
+            maint_type = "Partition"
+            table_id = schedule.Id
         
         if (schedule.FullTableMaintenance and schedule.PartitionIndex == 1) or not schedule.FullTableMaintenance:
             with SyncTimer() as t:
-                self.Logger.sync_status(f"Starting {maint_type} Maintenance for {value[1]}...")
+                self.Logger.sync_status(f"Starting {maint_type} Maintenance for {table_id}...")
 
                 try:
                     if schedule.PartitionId:
@@ -495,10 +542,10 @@ class FabricSyncMaintenance(SyncBase):
 
                     schedule.LastStatus = f"SUCCESS - {maint_type}"
                 except Exception as e:
-                    self.Logger.sync_status(f"FAILED: {maint_type} Maintenance for {value[1]} failed with error: {str(e)}")
+                    self.Logger.sync_status(f"FAILED: {maint_type} Maintenance for {table_id} failed with error: {str(e)}")
                     raise SyncDataMaintenanceError(msg=str(e)) from e
             
-            self.Logger.sync_status(f"{maint_type} Maintenance for {value[1]} finished in {str(t)}...")
+            self.Logger.sync_status(f"{maint_type} Maintenance for {table_id} finished in {str(t)}...")
         else:
             schedule.LastStatus = f"SUCCESS - {maint_type}"
 
@@ -529,6 +576,7 @@ class FabricSyncMaintenance(SyncBase):
 
     def _vacuum_(self, schedule:MaintenanceSchedule) -> MaintenanceSchedule:
         if schedule.RunVacuum:
+            print(f"VACUUM {schedule.FabricLakehousePath} RETAIN {schedule.RetentionHours} HOURS")
             self.Context.sql(f"VACUUM {schedule.FabricLakehousePath} RETAIN {schedule.RetentionHours} HOURS")
             schedule.LastVacuum = datetime.now()
             schedule.LastMaintenance = datetime.now()

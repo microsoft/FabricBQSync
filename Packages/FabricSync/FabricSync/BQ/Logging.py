@@ -10,7 +10,7 @@ from pyspark.sql import SparkSession
 from .Enum import *
 from .Constants import SyncConstants
 from .Utils import *
-from ..Meta import Version as SyncVersion
+from ..Meta import *
 
 class SyncLogger:
     def __init__(self, context:SparkSession):
@@ -62,7 +62,7 @@ class SyncLogger:
         if (self.logger.isEnabledFor(SyncLogLevel.TELEMETRY.value)):
             if self.Telemetry:
                 message["correlation_id"] = self.ApplicationID
-                message["sync_version"] = SyncVersion.CurrentVersion 
+                message["sync_version"] = Version.CurrentVersion 
 
                 self.send_telemetry(json.dumps(message))
                 #self.logger._log(SyncLogLevel.SYNC_STATUS.value, f"Telemetry: {message}", args, **kwargs)

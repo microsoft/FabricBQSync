@@ -1,6 +1,6 @@
-Metadata-Version: 2.1
+Metadata-Version: 2.2
 Name: FabricSync
-Version: 2.0.7
+Version: 2.0.8
 Summary: Fabric BigQuery Data Sync Utility
 Author-email: Microsoft GBBs North America <chriprice@microsoft.com>
 License: MIT License
@@ -23,11 +23,11 @@ Classifier: Topic :: Utilities
 Requires-Python: >=3.8
 Description-Content-Type: text/markdown
 License-File: LICENSE
-Requires-Dist: pydantic==2.10.4
-Requires-Dist: PyGithub==2.5.0
-Requires-Dist: mlflow-skinny==2.19.0
-Requires-Dist: google-cloud-bigquery==3.27.0
-Requires-Dist: google-cloud-bigquery[pandas]==3.27.0
+Requires-Dist: pydantic
+Requires-Dist: PyGithub
+Requires-Dist: mlflow-skinny
+Requires-Dist: google-cloud-bigquery
+Requires-Dist: db-dtypes
 
 # Fabric BQ (BigQuery) Sync
 

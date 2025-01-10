@@ -20,30 +20,33 @@ To address these scenarios, Delta has built-in capabilites to <code>OPTIMIZE</co
 ### Data Maintenance for Fabric Lakehouse
 Theere are a number of options and approaches for manual or semi-automatic data maintenance at the table-level within Fabric. The Fabric Sync accelerator provides two built-in options for handling data maintenance as part of your BigQuery sync process.
 
-1. Time-based Maintenance
+1. Schedule Maintenance
     
-    Time-based maintenance is a simple schedule-driven maintenance where OPTIMIZE and VACUUM is run for your table at pre-defined intervals. The schedule-based intervals available are:
+    Scheduled maintenance is simple time-based maintenance where OPTIMIZE and VACUUM are run for your table at pre-defined intervals. The schedule-based intervals available are:
 
+        - AUTO - Every schedule run
         - DAY - 24 hours
         - WEEK - 7 days
         - MONTH - 30 days
         - QUARTER - 90 days
         - YEAR - 365 days
     
-    The intervals are time-period based and maintenance is calculated from the last time maitenance was performed. For example, if maintenance was last run on January 1st @ 8:00 AM then with a DAY scheduled it would be eligible to run again January 2nd @ 8:00am. If maintenance has never been run for a table, it will run immediately in the next maintenance window.
+    The intervals are time-period based and maintenance is calculated from the last time maintenance was performed. For example, if maintenance was last run on January 1st @ 8:00 AM then with a DAY scheduled it would be eligible to run again January 2nd @ 8:00am. If maintenance has never been run for a table, it will run immediately in the next maintenance window.
 
 2. Intelligent Maintenance
 
-    Intelligent maintenance utilizes the Delta log and configurable threshholds to determine if maintenance should be run for any given table. This adaptive process looks at data growth, number of files, file size overall table size including out-of-scope files to be more selective for maintenance operations. 
+    Intelligent maintenance utilizes an inventory of the Delta log and configurable threshholds to determine if maintenance should be run for any given table. 
     
-    Intelligent maintenance and can specify either an <code>OPTIMIZE</code>, a <code>VACUUM</code> or both as required. Thresholds that influence or trigger this smart maintenance process are:
+    This adaptive process looks at data growth, number of files, file size overall and table size including out-of-scope files to be more selective for maintenance operations. 
+    
+    Intelligent maintenance can specify either <code>OPTIMIZE</code>, <code>VACUUM</code> or both when configured thresholds are exceeded. Thresholds that influence or trigger this smart maintenance process are:
 
-    - <code>rows_changed</code> - ratio of rows that changed (inserted, updated or delete) versus the total table rows
-    - <code>table_size_growth</code> - percentage growth in overall table size
-    - <code>file_fragmentation</code> - ratio of files that are not optimally sized
-    - <code>out_of_scope_size</code>- ratio of out of scope data to total table size 
+    - <code>rows_changed</code> - ratio of rows that changed (inserted, updated or delete) versus the total table rows. This triggers an <code>OPTIMIZE</code>.
+    - <code>table_size_growth</code> - percentage growth in overall table size. This triggers an <code>OPTIMIZE</code>.
+    - <code>file_fragmentation</code> - ratio of files that are not optimally sized. This triggers an <code>OPTIMIZE</code>.
+    - <code>out_of_scope_size</code>- ratio of out of scope data to total table size. This triggers an <code>VACUUM</code>. 
     
-    Intelligent maintenance requires a storage inventory process to run and collect the Delta metadata for each table in you mirrored Lakehouse. This process runs as part of the larger Fabric Sync Data Maintenance process.
+    Intelligent maintenance runs a storage inventory process against the Delta Log to run and collect the Delta metadata for each table in you mirrored Lakehouse. This process runs as part of the Fabric Sync Data Maintenance process.
 
     <mark><b><u>Note:</u></b> The storage inventory data is collected in your Fabric Sync Metadata Lakehouse and can be used for further analysis about your OneLake storage usage.</mark>
 
@@ -83,3 +86,76 @@ The Fabric Sync accelerator uses a default <code>retention_hours</code> of <code
 If you want to leverage Delta Time Travel capabilities or has support for versioning and rollbacks, it is recommended that you adjust the <code>retention_hours</code> setting to <code>168</code> for 7 days for history.
 
 <mark><b><u>Note: </u></b> Defining a large retention peiod can significant degrade overall performance for large tables. It could also substantially increase the overall OneLake storage cost</mark>
+
+### Example Configurations
+#### Scheduled Maintenance
+
+Scheduled maintenance with Week default and a history retention default of 0 hours. Table 1 use the default configuration. Table 2 overrides the default to a Monthly period. Table 3 disables maintenance.
+
+```
+{
+  "maintenance": {
+	"enabled": true,
+	"interval": "WEEK",
+	"strategy": "SCHEDULED",
+	"retention_hours": 0,
+  },
+  "tables": [
+		{
+			"table_name": "<<TABLE 1>>"
+        },
+        {
+			"table_name": "<<TABLE 2>>",
+			"table_maintenance": { 
+			  "enabled": true,
+			  "interval": "MONTH"
+			}
+        },
+        {
+			"table_name": "<<TABLE 3>>",
+			"table_maintenance": { 
+			  "enabled": false
+			}
+        }
+	]
+}
+```
+#### Intelligent Maintenance
+
+Intelligent maintenance with history retention set for 7-days (168 hours). The thresholds are set to allow table rows, table size in MB and fragmentation to reach 50% before <code>OPTIMIZE</code> is triggered. <code>VACUUM</code> is triggered when the out-of-scope file size is 3x the table size.
+
+In this example, Table 2 ensures regular monthly maintenance is performed if the thresholds are never met.
+```
+{
+  "maintenance": {
+	"enabled": true,
+	"interval": "AUTO",
+	"strategy": "INTELLIGENT",
+	"retention_hours": 168,
+    "thresholds": {
+		"rows_changed": 0.5,
+        "table_size_growth": 0.5,
+        "file_fragmentation": 0.5,
+        "out_of_scope_size": 3.0
+    }
+  },
+  "table_defaults": {
+    "table_maintenance": { 
+	  "enabled": true,
+      "interval": "AUTO"
+    }
+  },
+  "tables": [
+		{
+			"table_name": "<<TABLE 1>>"
+        },
+        {
+			"table_name": "<<TABLE 2>>",
+			"table_maintenance": { 
+			  "enabled": true,
+			  "interval": "MONTH"
+			}
+        }
+	]
+}
+```
