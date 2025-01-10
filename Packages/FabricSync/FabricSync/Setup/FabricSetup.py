@@ -400,10 +400,14 @@ class Installer():
     def _download_sync_notebook(self):
         random_int = random.randint(1, 1000)
         randomizer = f"0000{random_int}"
-        git_notebooks = [ \
+        git_notebooks = [
                     {"name": f"BQ-Sync-Notebook-v{self.data['version']}-{randomizer[-4:]}", 
                         "url": f"{Installer.GIT_URL}/Notebooks/v{self.data['asset_version']}/BQ-Sync.ipynb",
-                        "file_name": "BQ-Sync.ipynb"}]
+                        "file_name": "BQ-Sync.ipynb"},
+                    {"name": f"BQ-Sync-Maintenance-v{self.data['version']}-{randomizer[-4:]}", 
+                        "url": f"{Installer.GIT_URL}/Notebooks/v{self.data['asset_version']}/BQ-Sync-Maintenance.ipynb",
+                        "file_name": "BQ-Sync-Maintenance.ipynb"}
+                    ]
         
         try:
             SetupUtils.download_notebooks(self.data["workspace_id"], self.token, git_notebooks, self.data, self.notebooks_path, self.use_local_artifacts)

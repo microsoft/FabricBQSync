@@ -1,4 +1,5 @@
-mlflow-skinny==2.19.0
-google-cloud-bigquery==3.27.0
-pydantic==2.10.4
-PyGithub==2.5.0
+pydantic
+mlflow-skinny
+google-cloud-bigquery
+PyGithub
+db-dtypes
