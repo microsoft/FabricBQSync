@@ -1,9 +1,11 @@
 from pydantic import Field
 from typing import Optional
-from pyspark.sql.types import *
 from datetime import datetime
 
-from .Config import *
+from FabricSync.BQ.Model.Config import SyncBaseModel
+from FabricSync.BQ.Enum import (
+    BQPartitionType, CalendarInterval, MaintenanceInterval
+)
 
 class MaintenanceSchedule(SyncBaseModel):
     SyncId:Optional[str] = Field(alias="sync_id", default=None)
@@ -15,10 +17,10 @@ class MaintenanceSchedule(SyncBaseModel):
     PartitionId:Optional[str] = Field(alias="partition_id", default=None)
     PartitionIndex:Optional[int] = Field(alias="partition_index", default=None)
     PartitionColumn:Optional[str] = Field(alias="partition_column", default=None)
-    PartitionType:Optional[str] = Field(alias="partition_type", default=None)
-    PartitionGrain:Optional[str] = Field(alias="partition_grain", default=None)
+    PartitionType:Optional[BQPartitionType] = Field(alias="partition_type", default=None)
+    PartitionGrain:Optional[CalendarInterval] = Field(alias="partition_grain", default=None)
 
-    TableMaintenanceInterval:Optional[str] = Field(alias="last_maintenance_interval", default=None)
+    TableMaintenanceInterval:Optional[MaintenanceInterval] = Field(alias="last_maintenance_interval", default=None)
     Lakehouse:Optional[str] = Field(alias="lakehouse", default=None)
     LakehouseSchema:Optional[str] = Field(alias="lakehouse_schema", default=None)
     LakehouseTable:Optional[str] = Field(alias="lakehouse_table_name", default=None)
@@ -50,16 +52,15 @@ class MaintenanceSchedule(SyncBaseModel):
     LastUpdatedDt:Optional[datetime] = Field(alias="last_updated_dt", default=None)
 
     @property
-    def FabricLakehousePath(self):
+    def FabricLakehousePath(self) -> str:
         if self.LakehouseSchema:
             return f"{self.Lakehouse}.{self.LakehouseSchema}.{self.LakehouseTable}"
         else:
             return f"{self.Lakehouse}.{self.LakehouseTable}"
 
     @property
-    def Id(self):
+    def Id(self) -> str:
         if self.PartitionId:
             return f"{self.FabricLakehousePath}${self.PartitionId}"
         else:
             return self.FabricLakehousePath
-    

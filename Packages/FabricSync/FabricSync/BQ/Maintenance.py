@@ -1,17 +1,43 @@
-from pyspark.sql.functions import *
 from datetime import datetime
-from delta.tables import *
-from pyspark.sql.types import *
-from pyspark.sql import SparkSession
-from datetime import datetime
+from delta.tables import DeltaTable
+from typing import List
+from pyspark.sql.types import (
+    StructType, StructField, StringType, LongType, 
+    IntegerType, BooleanType, TimestampType, MapType 
+)
+from pyspark.sql.functions import (
+    lit, col, max, expr, from_json, to_json, 
+    input_file_name, when, concat,
+    isnull, coalesce, count, sum, countDistinct,
+    struct, lower
+)
+from pyspark.sql import DataFrame
 
-from .Core import *
-from .Model.Maintenance import *
-from .SyncUtils import *
+from FabricSync.BQ.Threading import (
+    QueueProcessor, ThreadSafeDict, ThreadSafeList, SparkProcessor
+)
+from FabricSync.BQ.SyncCore import (
+    SyncBase, ConfigBase
+)
+from FabricSync.BQ.Auth import (
+    TokenProvider, Credentials
+)
+from FabricSync.BQ.Model.Maintenance import MaintenanceSchedule
+from FabricSync.BQ.SyncUtils import (
+    SyncUtil, SyncTimer
+)
+from FabricSync.BQ.Constants import SyncConstants
+from FabricSync.BQ.Logging import Telemetry
+from FabricSync.BQ.Metastore import FabricMetastore
+from FabricSync.BQ.Enum import MaintenanceStrategy
+from FabricSync.BQ.Exceptions import (
+    SyncConfigurationError, SyncDataMaintenanceError
+)
+from FabricSync.BQ.APIClient import FabricAPI
 
 class DeltaInventory(ConfigBase):
-    def __init__(self, context:SparkSession, user_config, gcp_credential:str, inventory_func:callable):
-        super().__init__(context, user_config, gcp_credential)
+    def __init__(self, user_config, inventory_func:callable):
+        super().__init__(user_config)
 
         self.lakehouse = self.UserConfig.Fabric.TargetLakehouse.lower()
         self.lakehouse_schema = "" if not self.UserConfig.Fabric.TargetLakehouseSchema else self.UserConfig.Fabric.TargetLakehouseSchema.lower()
@@ -334,9 +360,9 @@ class DeltaInventory(ConfigBase):
         self._clear_temp_tables_()
 
     def _clear_temp_tables_(self):
-        SparkProcessor(self.Context).drop(SyncConstants.get_inventory_temp_tables(), self.UserConfig.Fabric.MetadataLakehouse)
+        SparkProcessor.drop(SyncConstants.get_inventory_temp_tables(), self.UserConfig.Fabric.MetadataLakehouse)
 
-    def _check_tables_exists(self, tbls) -> []:
+    def _check_tables_exists(self, tbls) -> List[str]:
         return [t for t in tbls if self.Context.catalog.tableExists(f"{self.UserConfig.Fabric.MetadataLakehouse}.{t}")]
 
     def _clear_delta_inventory_schema_(self):
@@ -347,7 +373,7 @@ class DeltaInventory(ConfigBase):
                         WHERE sync_id='{self.UserConfig.ID}'""" \
                 for tbl in tables]
 
-            SparkProcessor(self.Context).process_command_list(cmds)  
+            SparkProcessor.process_command_list(cmds)  
 
     def _clear_inventory_partition(self):
         tables = self._check_tables_exists(SyncConstants.get_inventory_tables())
@@ -359,7 +385,7 @@ class DeltaInventory(ConfigBase):
                         WHERE sync_id='{self.UserConfig.ID}' AND inventory_date='{self.inventory_date}'""" \
                 for tbl in tables]
 
-            SparkProcessor(self.Context).process_command_list(cmds)   
+            SparkProcessor.process_command_list(cmds)   
 
     def _initialize_delta_inventory_(self):
         self._clear_temp_tables_()
@@ -375,7 +401,7 @@ class DeltaInventory(ConfigBase):
         if not self.inventory_func:
             return
         
-        with SyncTimer() as timer:
+        with SyncTimer() as t:
             self.Logger.sync_status(f"Starting Lakehouse Inventory...")
             self._initialize_delta_inventory_()
 
@@ -385,14 +411,14 @@ class DeltaInventory(ConfigBase):
             self.Context.sql(f"USE {self.UserConfig.Fabric.MetadataLakehouse}")
 
             self.Logger.sync_status(f"Optimizing Inventory Tables...")
-            SparkProcessor(self.Context).optimize_vacuum(
+            SparkProcessor.optimize_vacuum(
                 SyncConstants.get_inventory_tables(), self.UserConfig.Fabric.MetadataLakehouse)
 
-        self.Logger.sync_status(f"Finished Lakehouse Inventory in {str(timer)}...")
+        self.Logger.sync_status(f"Finished Lakehouse Inventory in {str(t)}...")
 
 class DeltaOneLakeInventory(DeltaInventory):
-    def __init__(self, context:SparkSession, user_config, gcp_credential:str, api_token:str):
-        super().__init__(context, user_config, gcp_credential, self._get_onelake_catalog_)
+    def __init__(self, user_config, api_token:str):
+        super().__init__(user_config, self._get_onelake_catalog_)
         self.token = api_token
 
         self.Context.conf.set("spark.databricks.delta.schema.autoMerge.enabled", "true")
@@ -417,7 +443,7 @@ class DeltaOneLakeInventory(DeltaInventory):
         workspace_id = self.Context.conf.get("trident.workspace.id")
         fabric_api = FabricAPI(workspace_id, self.token)
 
-        lakehouse_id = fabric_api.get_lakehouse_id(self.lakehouse)
+        lakehouse_id = fabric_api.Lakehouse.get_id(self.lakehouse)
 
         if not lakehouse_id:
             raise SyncConfigurationError("Target Lakehouse not valid.")
@@ -426,33 +452,34 @@ class DeltaOneLakeInventory(DeltaInventory):
         
         self.Logger.sync_status(f"Loading tables to inventory for {self.lakehouse} ...")
         return self._load_onelake_tables_()
-    
-class FabricSyncMaintenance(SyncBase):
-    def __init__(self, context:SparkSession, config_path:str, api_token:str):
-        super().__init__(context, config_path, clean_session=True)
 
-        self.InventoryManager = DeltaOneLakeInventory(context, self.UserConfig, self.GCPCredential, api_token)
+class FabricSyncMaintenance(SyncBase):
+    def __init__(self, config_path:str, credentials:Credentials) -> None:
+        super().__init__(config_path, credentials, clean_session=True)
+
+        self.InventoryManager = DeltaOneLakeInventory(self.UserConfig, 
+            self.GCPCredential, self.TokenProvider.get_token(TokenProvider.FABRIC_TOKEN_SCOPE))
 
     @Telemetry.Lakehouse_Inventory()
     def run_lakehouse_inventory(self):
         self.InventoryManager.run_inventory()
 
-    def run(self, sync_user_config:bool=False):
+    def run(self, sync_user_config:bool=False) -> None:
         if not self.UserConfig.Maintenance.Enabled:
             self.Logger.sync_status("Fabric Sync Maintenance is not enabled. Please update User Configuration to enable maintenance.")
             return
         
-        self.Metastore.create_proxy_views()
-        self.Metastore.create_maintenance_views(sync_id=self.UserConfig.ID)
+        FabricMetastore.create_proxy_views()
+        FabricMetastore.create_maintenance_views()
 
         if sync_user_config:
             self.Logger.sync_status(f"Syncing User Config with Metadata metastore...")
-            self.Metastore.update_maintenance_config(sync_id=self.UserConfig.ID)
+            FabricMetastore.update_maintenance_config()
 
         self.Logger.sync_status(f"Async {self.UserConfig.Maintenance.Strategy} Maintenance started with parallelism of {self.UserConfig.Async.Parallelism}...")
 
         with SyncTimer() as t:
-            if self.UserConfig.Maintenance.Strategy == str(MaintenanceStrategy.INTELLIGENT):
+            if self.UserConfig.Maintenance.Strategy == MaintenanceStrategy.INTELLIGENT:
                 self.run_lakehouse_inventory()
                 self._run_intelligent_maintenance_()
             else:
@@ -461,25 +488,26 @@ class FabricSyncMaintenance(SyncBase):
         self.Logger.sync_status(f"{self.UserConfig.Maintenance.Strategy} Maintenance finished in {str(t)}...")
     
     @Telemetry.Delta_Maintenance(maintainence_type="INTELLIGENT")
-    def _run_intelligent_maintenance_(self):
-        df = self.Metastore.get_inventory_based_maintenance_schedule(sync_id=self.UserConfig.ID)
+    def _run_intelligent_maintenance_(self) -> None:
+        df = FabricMetastore.get_inventory_based_maintenance_schedule()
 
         schedule = [MaintenanceSchedule(**(r.asDict())) for r in df.collect()]
         self._run_maintenance_(schedule)
 
     @Telemetry.Delta_Maintenance(maintainence_type="SCHEDULED")
-    def _run_scheduled_maintenance_(self):
-        df = self.Metastore.get_scheduled_maintenance_schedule(sync_id=self.UserConfig.ID)
+    def _run_scheduled_maintenance_(self) -> None:
+        df = FabricMetastore.get_scheduled_maintenance_schedule()
 
         schedule = [MaintenanceSchedule(**(r.asDict())) for r in df.collect()]
         self._run_maintenance_(schedule)
     
-    def _thread_exception_handler_(self, value):
+    def _thread_exception_handler_(self, value) -> None:
         schedule = value[2]
 
         schedule.LastStatus = "FAILED"
         self.results.append(schedule)
-        self.maintenance_failures(value[1], schedule)
+        self.maintenance_failures(schedule.Id, schedule)
+        self.Logger.sync_status(f"FAILED: Maintenance for {schedule.Id} failed with error: {value[3]}")
 
     def _get_failed_maintenance_(self, id) -> MaintenanceSchedule:
         if self.maintenance_failures:
@@ -488,7 +516,7 @@ class FabricSyncMaintenance(SyncBase):
         
         return None
 
-    def _run_maintenance_(self, schedule):
+    def _run_maintenance_(self, schedule) -> None:
         if schedule:
             self.results = ThreadSafeList()
             self.maintenance_failures = ThreadSafeDict()
@@ -515,7 +543,7 @@ class FabricSyncMaintenance(SyncBase):
                 s.LastUpdatedDt = datetime.now()
                 processed.append(s)
 
-            self.Metastore.update_maintenance_schedule(processed)
+            FabricMetastore.update_maintenance_schedule(processed)
     
     def _maintenance_job_(self, value) -> MaintenanceSchedule:
         schedule = value[2]
@@ -542,8 +570,8 @@ class FabricSyncMaintenance(SyncBase):
 
                     schedule.LastStatus = f"SUCCESS - {maint_type}"
                 except Exception as e:
-                    self.Logger.sync_status(f"FAILED: {maint_type} Maintenance for {table_id} failed with error: {str(e)}")
-                    raise SyncDataMaintenanceError(msg=str(e)) from e
+                    self.Logger.sync_status(f"FAILED: {maint_type} Maintenance for {table_id} failed with error: {e}")
+                    raise SyncDataMaintenanceError(str(e))
             
             self.Logger.sync_status(f"{maint_type} Maintenance for {table_id} finished in {str(t)}...")
         else:

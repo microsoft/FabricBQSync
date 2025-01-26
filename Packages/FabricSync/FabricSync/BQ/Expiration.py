@@ -1,35 +1,45 @@
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import *
-from pyspark.sql.types import *
-from delta.tables import *
+from pyspark.sql import Row
 
-from .Model.Config import *
-from .Core import *
-from .DeltaTableUtility import *
-from .SyncUtils import SyncUtil
-from .Logging import *
+from FabricSync.BQ.Metastore import FabricMetastore
+from FabricSync.BQ.SyncCore import ConfigBase
+from FabricSync.BQ.DeltaTableUtility import DeltaTableMaintenance
+from FabricSync.BQ.SyncUtils import SyncUtil
+from FabricSync.BQ.Logging import Telemetry
 
 class BQDataRetention(ConfigBase):
     """
-    Class responsible for BQ Table and Partition Expiration
+    Represents a class for enforcing BigQuerydata expiration/retention policy.
     """
-    def __init__(self, context:SparkSession, user_config, gcp_credential:str):
-        super().__init__(context, user_config, gcp_credential)
+    def __init__(self, user_config):
+        """
+        Initializes a new instance of the BQDataRetention class.
+        Args:
+            user_config (dict): The user configuration.
+        """
+        super().__init__(user_config)
     
-    def execute(self):        
-        self.Logger.sync_status("Enforcing Data Expiration/Retention Policy...")
-        self._enforce_retention_policy()
+    def execute(self) -> None:   
+        """
+        Executes the data expiration/retention policy.
+        """     
+        self.Logger.debug("Enforcing Data Expiration/Retention Policy...")
+        self.__enforce_retention_policy()
         self.Logger.sync_status("Updating Data Expiration/Retention Policy...")
-        self.Metastore.sync_retention_config(self.UserConfig.ID)
+        FabricMetastore.sync_retention_config()
 
     @Telemetry.Data_Expiration()
-    def expire_data(self, row):
+    def expire_data(self, row:Row) -> None:
+        """
+        Expires the data.
+        Args:
+            row (Row): The row.
+        """
         if row["use_lakehouse_schema"]:
             table_name = f"{row['lakehouse']}.{row['lakehouse_schema']}.{row['lakehouse_table_name']}"
         else:
             table_name = f"{row['lakehouse']}.{row['lakehouse_table_name']}"
 
-        table_maint = DeltaTableMaintenance(self.Context, table_name)
+        table_maint = DeltaTableMaintenance(table_name)
 
         if row["partition_id"]:
             self.Logger.sync_status(f"Expiring Partition: {table_name}${row['partition_id']}")
@@ -40,8 +50,11 @@ class BQDataRetention(ConfigBase):
             self.Logger.sync_status(f"Expiring Table: {table_name}")
             table_maint.drop_table()  
 
-    def _enforce_retention_policy(self):
-        df = self.Metastore.get_bq_retention_policy(self.UserConfig.ID)
+    def __enforce_retention_policy(self) -> None:
+        """
+        Enforces the retention policy.
+        """
+        df = FabricMetastore.get_bq_retention_policy()
 
         for d in df.collect():
             self.expire_data(d) 

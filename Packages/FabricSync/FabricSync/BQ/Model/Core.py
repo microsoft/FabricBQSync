@@ -1,14 +1,49 @@
+from dataclasses import dataclass
 from pydantic import Field
-from typing import List, Optional, Any
-from pyspark.sql.types import *
-from pyspark.sql import DataFrame, SparkSession
-from dataclasses import dataclass, field
 import json
 
-from .Config import *
+from typing import (
+    List, Optional, Any
+)
+from pyspark.sql.types import (
+    StructField, StructType, StringType
+)
+from pyspark.sql import (
+    DataFrame, SparkSession
+)
+from dataclasses import (
+    dataclass, field
+)
+
+from FabricSync.BQ.Model.Config import SyncBaseModel
+from FabricSync.BQ.Enum import (
+    PredicateType, SchemaView, BigQueryAPI, FileSystemType
+)
+
+@dataclass
+class HDFSFile:
+    name: str
+    path: str
+    mod_time: int
+    is_dir: bool
+    fs_type: FileSystemType
+
+@dataclass
+class OpenMirrorTable:
+    workspace: str
+    lakehouse: str
+    schema: str
+    name: str
+    keys: List[str]
+    initialize: bool
+    file_index: int
+
+    @property
+    def has_keys(self):
+        return self.keys and len(self.keys) > 0
 
 class BQQueryModelPredicate(SyncBaseModel):
-    Type:str = Field(alias="type", default=str(PredicateType.AND))
+    Type:PredicateType = Field(alias="type", default=PredicateType.AND)
     Predicate:str = Field(alias="predicate", default=None)
 
 class BQQueryModel(SyncBaseModel):
@@ -18,12 +53,12 @@ class BQQueryModel(SyncBaseModel):
     Query:Optional[str] = Field(alias="Query", default=None)
     PartitionFilter:str = Field(alias="PartitionFilter", default=None)
     Predicate:Optional[List[BQQueryModelPredicate]] = Field(alias="Predicate", default=None)
-    API:str = Field(alias="API", default=str(BigQueryAPI.STORAGE))
+    API:BigQueryAPI = Field(alias="API", default=BigQueryAPI.STORAGE)
 
     Cached:bool = Field(alias="Cached", default=True)
 
-    def add_predicate(self, predicate:str, type:PredicateType=PredicateType.AND):
-        d = {"predicate": predicate, "type":str(type)}
+    def add_predicate(self, predicate:str, type:PredicateType=PredicateType.AND) -> None:
+        d = {"predicate": predicate, "type":type.value}
         p = BQQueryModelPredicate(**d)
 
         if self.Predicate:
@@ -38,26 +73,28 @@ class InformationSchemaModel(SyncBaseModel):
     Schema:Optional[str] = Field(alias="schema", default=None)
 
     @staticmethod
-    def define(view:SchemaView, columns:str, schema:str):
+    def define(view:SchemaView, columns:str, schema:str) -> "InformationSchemaModel":
         d = {
-            "view": str(view),
-            "table_name": f"BQ_{view}".replace(".", "_"),
+            "view": view.value,
+            "table_name": view.name.lower(),
             "columns": columns,
             "schema": schema
         }
         return InformationSchemaModel(**d)
     
-    def get_base_sql(self, project:str, dataset:str, alias:str = None):
+    def get_base_sql(self, sync_id:str, project:str, dataset:str, alias:str = None) -> str:
         if alias:
             cols = [f"{alias}.{c}" for c in self.Columns.split(",")]
 
-            return f"SELECT {','.join(cols)} FROM {project}.{dataset}.{str(self.View)} AS {alias}"
+            return f"SELECT '{sync_id}' AS sync_id, {','.join(cols)} FROM {project}.{dataset}.{self.View} AS {alias}"
         else:
-            return f"SELECT {self.Columns} FROM {project}.{dataset}.{str(self.View)}"
+            return f"SELECT '{sync_id}' AS sync_id, {self.Columns} FROM {project}.{dataset}.{self.View}"
 
-    def get_df_schema(self):
+    def get_df_schema(self) -> StructType:
         if self.Schema:
-            return StructType.fromJson(json.loads(self.Schema))
+            sync_id_col = [StructField("sync_id", StringType(), True)] 
+            table_schema = StructType.fromJson(json.loads(self.Schema))
+            return StructType(sync_id_col + table_schema.fields)
         else:
             return None
 
@@ -69,7 +106,7 @@ class CommandSet:
     Priority:int
     Commands:Any=field(compare=False)
 
-    def __init__(self, cmd=None):
+    def __init__(self, cmd=None) -> None:
         self.Priority=1
         if isinstance(cmd, list):
             self.Commands = cmd

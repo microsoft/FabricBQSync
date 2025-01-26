@@ -25,6 +25,7 @@ Packages/FabricSync/FabricSync/BQ/Logging.py
 Packages/FabricSync/FabricSync/BQ/Maintenance.py
 Packages/FabricSync/FabricSync/BQ/Metadata.py
 Packages/FabricSync/FabricSync/BQ/Metastore.py
+Packages/FabricSync/FabricSync/BQ/Mirror.py
 Packages/FabricSync/FabricSync/BQ/Schedule.py
 Packages/FabricSync/FabricSync/BQ/Sync.py
 Packages/FabricSync/FabricSync/BQ/SyncUtils.py
