@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from typing import List, Literal, Tuple
+from logging import Logger
 
 from py4j.java_gateway import JavaObject
 from pyspark.sql import SparkSession
@@ -141,7 +142,7 @@ class OneLakeFileSystem(HadoopFileSystem):
 class OpenMirrorLandingZone(OneLakeFileSystem):
     _lz_path = "Files/LandingZone/"
     _lz_table_schema_format = "{}.schema"
-    __Logger = SyncLogger().get_logger()
+    __logger = None
 
     def __init__(self, workspace_id:str, lakehouse_id:str, table_schema:str, table:str) -> None:
         super().__init__(workspace_id, lakehouse_id)
@@ -150,7 +151,10 @@ class OpenMirrorLandingZone(OneLakeFileSystem):
         self._table = table
     
     @property
-    def Logger(self):
+    def Logger(self) -> Logger:
+        if not self.__logger:
+            self.__logger = SyncLogger().get_logger()
+        
         return self.__logger
 
     @property
@@ -212,6 +216,13 @@ class OpenMirrorLandingZone(OneLakeFileSystem):
                           f"{LakehouseCatalog.resolve_table_name(self._table_schema, self._table)} - {file_index}")
         return file_index
     
+    def cleanup_staged_lz(self)-> None:
+        for f in  [x.name for x in self.glob(f"*.snappy.parquet")]:
+            result = self.delete(f)
+
+            if not result:
+                raise Exception(f"Failed to delete {LakehouseCatalog.resolve_table_name(self._table_schema, self._table)} LZ stage file {f}")
+
     def cleanup_lz(self)-> None:
         files = { 
             x.name: int(Path(x.name).with_suffix('').stem) 
@@ -224,7 +235,7 @@ class OpenMirrorLandingZone(OneLakeFileSystem):
             result = self.delete(f)
 
             if not result:
-                raise Exception(f"Failed to delete {self._table} LZ stage file {f}")
+                raise Exception(f"Failed to delete {LakehouseCatalog.resolve_table_name(self._table_schema, self._table)} LZ stage file {f}")
     
     def __format_lz_filename(self, idx:int) -> str:
         return "%020d.parquet" % idx

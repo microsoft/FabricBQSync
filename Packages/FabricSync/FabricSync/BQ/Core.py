@@ -3,6 +3,7 @@ from logging import Logger
 
 
 from FabricSync.BQ.Constants import SyncConstants
+from FabricSync.BQ.Logging import SyncLogger
 
 class classproperty(property):
   def __get__(self, owner_self, owner_cls):
@@ -18,7 +19,19 @@ class classproperty(property):
 
 class ContextAwareBase():
     _context:SparkSession = None
-    _logger:Logger = None
+    _Logger:Logger = None
+    
+    @classproperty
+    def Logger(cls):
+        """
+        Gets the logger.
+        Returns:
+            Logger: The logger.
+        """
+        if cls._Logger is None:
+            cls._Logger = SyncLogger().get_logger()
+        
+        return cls._Logger
     
     @classproperty
     def Context(cls) -> SparkSession:
@@ -40,3 +53,12 @@ class ContextAwareBase():
             str: The sync ID.
         """
         return cls.Context.conf.get(f"{SyncConstants.SPARK_CONF_PREFIX}.name")
+    
+    @classproperty
+    def workspace_id(cls) -> str:
+        """
+        Gets the workspace ID.
+        Returns:
+            str: The workspace ID.
+        """
+        return cls.Context.conf.get("trident.workspace.id")

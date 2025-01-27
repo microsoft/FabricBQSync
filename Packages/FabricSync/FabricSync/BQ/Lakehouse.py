@@ -6,12 +6,13 @@ from pyspark.sql.types import (
     StructType, StructField
 )
 from FabricSync.BQ.Threading import SparkProcessor
-from FabricSync.BQ.Core import SyncLoggingBase
+from FabricSync.BQ.Core import ContextAwareBase
 from FabricSync.BQ.Model.Config import ConfigDataset
 from FabricSync.BQ.Constants import SyncConstants
 from FabricSync.BQ.Metastore import FabricMetastoreSchema
+from FabricSync.BQ.Enum import FabricDestinationType
 
-class LakehouseCatalog(SyncLoggingBase):
+class LakehouseCatalog(ContextAwareBase):
     @classmethod
     def get_catalog_tables(cls, catalog:str) -> List[str]:
         """
@@ -21,8 +22,9 @@ class LakehouseCatalog(SyncLoggingBase):
         Returns:
             List[str]: A list of table names in the specified catalog.
         """
-        df = cls.Context.sql(f"SHOW TABLES IN {catalog}") \
-            .filter(col("namespace")==catalog)
+        sql = f"SHOW TABLES IN {catalog}"
+        df = cls.Context.sql(sql) \
+            .filter(col("namespace")!="")
 
         return [r["tableName"] for r in df.collect()]
     
@@ -52,19 +54,20 @@ class LakehouseCatalog(SyncLoggingBase):
         sql_commands = []
         table_schema = "dbo" if userConfig.Fabric.EnableSchemas else None
 
-        for t in cls.get_catalog_tables(userConfig.Fabric.MetadataLakehouse):
+        for t in cls.get_catalog_tables(userConfig.Fabric.get_metadata_lakehouse()):
             if t != "bq_data_type_map":
                 sql_commands.append(f"DELETE FROM {userConfig.Fabric.MetadataLakehouse}." +
                                     f"{cls.resolve_table_name(table_schema, t)} WHERE sync_id='{userConfig.ID}';")
         
-        for t in cls.get_catalog_tables(userConfig.Fabric.TargetLakehouse):
-            sql_commands.append(f"DROP TABLE IF EXISTS {userConfig.Fabric.TargetLakehouse}.{t};")
+        if userConfig.Fabric.TargetType == FabricDestinationType.LAKEHOUSE:
+            for t in cls.get_catalog_tables(userConfig.Fabric.get_target_lakehouse()):
+                sql_commands.append(f"DROP TABLE IF EXISTS {userConfig.Fabric.TargetLakehouse}.{t};")
 
-        cls.Logger.sync_status("Reset Fabric Sync Environment")
+        cls.Logger.sync_status("Resetting Fabric Sync Environment")
         SparkProcessor.process_command_list(sql_commands)
 
         if optimize:
-            cls.Logger.sync_status("Optimizing Metastore")
+            cls.Logger.sync_status("Optimizing Fabric Sync Metastore")
             cls.optimize_sync_metastore()
     
     def create_metastore_tables(cls, enable_schemas:bool = False) -> None:

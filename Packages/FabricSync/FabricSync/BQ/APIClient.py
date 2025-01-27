@@ -211,7 +211,7 @@ class BaseFabricItem:
         Returns:
             str: Response from the Fabric API
         """
-        return self.rest_api_proxy.post(endpoint=f"{self.uri}/{id}/{path}").json()
+        return self.rest_api_proxy.post(endpoint=f"{self.uri}/{id}/{path}")
 
     def get_by_name(self, name:str) -> str:
         """

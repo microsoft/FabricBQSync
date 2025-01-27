@@ -27,21 +27,7 @@ class HDFSFile:
     mod_time: int
     is_dir: bool
     fs_type: FileSystemType
-
-@dataclass
-class OpenMirrorTable:
-    workspace: str
-    lakehouse: str
-    schema: str
-    name: str
-    keys: List[str]
-    initialize: bool
-    file_index: int
-
-    @property
-    def has_keys(self):
-        return self.keys and len(self.keys) > 0
-
+    
 class BQQueryModelPredicate(SyncBaseModel):
     Type:PredicateType = Field(alias="type", default=PredicateType.AND)
     Predicate:str = Field(alias="predicate", default=None)

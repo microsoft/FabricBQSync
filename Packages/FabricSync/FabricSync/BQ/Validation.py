@@ -18,7 +18,7 @@ class SqlValidator():
         return (cls.__sql_pattern.match(sql) != None)
 
     @classmethod
-    def has_predicate(sql:str) -> bool:
+    def has_predicate(cls, sql:str) -> bool:
         """
         Check if the SQL query has a predicate.
         Args:

@@ -27,7 +27,7 @@ from FabricSync.Meta import Version
 from FabricSync.BQ.Enum import FabricDestinationType
 
 from FabricSync.BQ.Core import (
-    TokenProvider, ContextAwareBase, SyncLoggingBase
+    TokenProvider, ContextAwareBase
 )
 from FabricSync.BQ.Exceptions import (
     SyncInstallError, SyncConfigurationError
@@ -354,7 +354,7 @@ class Installer(ContextAwareBase):
         
         self.Logger.sync_status(f"BQ Sync Installer finished in {str(t)}!")
 
-class SparkEnvironmentUtil(SyncLoggingBase):
+class SparkEnvironmentUtil(ContextAwareBase):
     def __init__(self, api_token:str) -> None:
         """
         Initializes a new instance of the SparkEnvironmentUtil class.

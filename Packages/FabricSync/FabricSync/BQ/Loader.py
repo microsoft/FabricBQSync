@@ -446,8 +446,7 @@ class BQScheduleLoader(ConfigBase):
             Tuple[SyncSchedule, DataFrame]: A tuple containing the updated SyncSchedule and the potentially
             modified DataFrame after saving to the mirrored database landing zone.
         """
-        open_mirror = OpenMirror(schedule, self.storage_token)
-        df = open_mirror.save_to_staging(df)
+        df = OpenMirror.save_to_landing_zone(schedule, df)
 
         has_lock = False
 
@@ -459,7 +458,7 @@ class BQScheduleLoader(ConfigBase):
             mirror_part = self.MirrorMultiWrite.get_or_set(schedule.LakehouseTableName, 0) + 1
 
             if mirror_part == schedule.TotalTableTasks:
-                schedule.MirrorFileIndex = open_mirror.sync_to_mirror_database(schedule.MirrorFileIndex)
+                mirror_file_index = OpenMirror.process_landing_zone(schedule)
 
             self.MirrorMultiWrite.set(schedule.LakehouseTableName, mirror_part)
         finally:
@@ -608,11 +607,15 @@ class BQScheduleLoader(ConfigBase):
         schedule = value[2]
         err = value[3]
         
+        if self.UserConfig.Fabric.TargetType==FabricDestinationType.MIRRORED_DATABASE:  
+            self.Logger.sync_status(f"Sync failed cleaning up staged LZ files for {schedule.LakehouseTableName}....") 
+            OpenMirror.cleanup_failed_sync(schedule)
+
         schedule.Status = SyncStatus.FAILED
         schedule.SummaryLoadType = f"ERROR"
         SyncUtil.save_schedule_telemetry(schedule) 
 
-        self.Logger.error(msg=f"ERROR - {schedule.BQTableName} FAILED: {err}")
+        self.Logger.error(msg=f"ERROR - {schedule.LakehouseTableName} FAILED: {err}")
 
     def run_schedule(self, schedule_type:str) -> bool:
         """
@@ -642,19 +645,24 @@ class BQScheduleLoader(ConfigBase):
             bool: True if initial loads are present; False otherwise.
         """
         initial_loads = [i for i in schedule.collect() if i["initial_load"] == True]
-
+                
         if initial_loads:
             self.Logger.sync_status(f"Initializing tables for initial load...", verbose=True)
             if self.UserConfig.Fabric.TargetType==FabricDestinationType.LAKEHOUSE:                
                 tbls = [SyncSchedule(**(tbl.asDict())).LakehouseTableName for tbl in initial_loads]
+                tbls = list(set(tbls))
+
                 self.Logger.debug(f"Dropping lakehouse tables: {tbls}")
                 SparkProcessor.drop(tbls)
             else:
                 tbls = [SyncSchedule(**(tbl.asDict())) for tbl in initial_loads]
+                dedup = []
 
                 for tbl in tbls:
-                    self.Logger.debug(f"Dropping mirrored database tables: {tbl.LakehouseTableName}")
-                    OpenMirror(tbl, self.storage_token).drop_mirrored_table()                
+                    if tbl.LakehouseTableName not in dedup:
+                        self.Logger.debug(f"Dropping mirrored database tables: {tbl.LakehouseTableName}")
+                        OpenMirror.drop_mirrored_table(tbl)
+                        dedup.append(tbl.LakehouseTableName)             
 
             return True
         else:
@@ -675,7 +683,9 @@ class BQScheduleLoader(ConfigBase):
         self.Logger.sync_status(f"Async schedule started with parallelism of {self.UserConfig.Async.Parallelism}...", verbose=True)
         self.TableLocks = ThreadSafeDict()
         
-        if self.UserConfig.Fabric.TargetType==FabricDestinationType.MIRRORED_DATABASE:   
+        if self.UserConfig.Fabric.TargetType==FabricDestinationType.MIRRORED_DATABASE:  
+            self.Logger.sync_status(f"Stopping Mirroring on {self.UserConfig.Fabric.TargetLakehouse} Database...") 
+            OpenMirror.stop_mirror(self.UserConfig.Fabric.TargetLakehouseID, token)
             self.MirrorMultiWrite = ThreadSafeDict()
 
         with SyncTimer() as t:
@@ -711,11 +721,7 @@ class BQScheduleLoader(ConfigBase):
                         with SyncTimer() as t:                        
                             processor.process(self.__schedule_sync_wrapper, self.__thread_exception_handler)
 
-                        if not processor.has_exceptions:
-                            if self.UserConfig.Fabric.TargetType  == FabricDestinationType.MIRRORED_DATABASE:
-                                #Async move stage to LZ
-                                pass
-                            
+                        if not processor.has_exceptions:                            
                             self.Logger.sync_status(f"### {grp_nm} completed in {str(t)}...")
                         else:
                             self.Logger.sync_status(f"### {grp_nm} FAILED...")
@@ -724,6 +730,10 @@ class BQScheduleLoader(ConfigBase):
                 self.Logger.sync_status("Processing Sync Telemetry...", verbose=True)
                 FabricMetastore.process_load_group_telemetry(schedule_type)
        
+        if self.UserConfig.Fabric.TargetType==FabricDestinationType.MIRRORED_DATABASE:  
+            self.Logger.sync_status(f"Starting Mirroring on {self.UserConfig.Fabric.TargetLakehouse} Database...") 
+            OpenMirror.start_mirror(self.UserConfig.Fabric.TargetLakehouseID, token)
+
         self.Logger.sync_status(f"Async schedule sync finished in {str(t)}...")
 
         return initial_loads

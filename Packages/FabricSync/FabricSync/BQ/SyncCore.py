@@ -1,5 +1,6 @@
 from pyspark.sql import DataFrame
 from pyspark.sql.types import StructType
+from logging import Logger
 
 from FabricSync.BQ.Validation import SqlValidator
 from FabricSync.BQ.Utils import Util, SyncUtil
@@ -7,7 +8,7 @@ from FabricSync.BQ.Metastore import FabricMetastore
 from FabricSync.BQ.Enum import BigQueryAPI
 
 from FabricSync.BQ.Core import (
-    ContextAwareBase, classproperty
+    ContextAwareBase
 ) 
 from FabricSync.BQ.Auth import (
     TokenProvider, Credentials, GCPAuth
@@ -19,19 +20,7 @@ from FabricSync.BQ.Logging import SyncLogger
 from FabricSync.BQ.Exceptions import (
     SyncConfigurationError, BQConnectorError
 )
-
-class SyncLoggingBase(ContextAwareBase):
-    @classproperty
-    def Logger(cls):
-        """
-        Gets the logger.
-        Returns:
-            Logger: The logger.
-        """
-        if cls._logger is None:
-            cls._logger = SyncLogger().get_logger()
-        
-        return cls._logger
+  
         
 class ConfigBase(ContextAwareBase):
     def __init__(self, user_config:ConfigDataset, token_provider:TokenProvider = None) -> None:
