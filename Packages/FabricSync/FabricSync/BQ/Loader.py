@@ -13,7 +13,7 @@ from typing import (
 from threading import Lock
 from delta.tables import DeltaTable
 
-from FabricSync.BQ.DeltaTableUtility import DeltaTableMaintenance
+from FabricSync.BQ.Utils import DeltaTableMaintenance
 from FabricSync.BQ.Model.Config import ConfigDataset
 from FabricSync.BQ.Model.Schedule import SyncSchedule
 from FabricSync.BQ.Model.Core import BQQueryModel
@@ -30,26 +30,19 @@ from FabricSync.BQ.Threading import (
     QueueProcessor, ThreadSafeDict, SparkProcessor
 )
 from FabricSync.BQ.SyncCore import ConfigBase
-from FabricSync.BQ.Auth import TokenProvider
 from FabricSync.BQ.Enum import (
     SyncLoadType, SyncLoadStrategy, SyncStatus, FabricDestinationType, BQDataType, BQPartitionType
 )
 
 class BQScheduleLoader(ConfigBase):    
-    def __init__(self, user_config:ConfigDataset, token_provider:TokenProvider) -> None:
+    def __init__(self) -> None:
         """
         BQ Schedule Loader
-        Args:
-            user_config (ConfigDataset): User Configuration
-            token_provider (TokenProvider): Token Provider
         """
-        super().__init__(user_config, token_provider)
+        super().__init__()
 
         self.TableLocks:ThreadSafeDict = None
         self.MultiWrite:ThreadSafeDict = None
-
-        if self.UserConfig.Fabric.TargetType==FabricDestinationType.MIRRORED_DATABASE:           
-            self.api_token = self.TokenProvider.get_token(TokenProvider.FABRIC_TOKEN_SCOPE)
 
     def __get_delta_merge_row_counts(self, schedule:SyncSchedule, telemetry:DataFrame) -> Tuple[int, int, int]:
         """
@@ -174,9 +167,31 @@ class BQScheduleLoader(ConfigBase):
             self.Context.conf.set("spark.databricks.delta.schema.autoMerge.enabled", "false")
 
     def __get_cdc_merge_set(self, columns:str, alias:str) -> Dict[str, str]:
+        """
+        Builds a dictionary of column expressions for a CDC merge operation.
+        This function constructs a dictionary of column expressions for a CDC merge operation
+        based on the provided column names and alias. It returns the dictionary of column
+        expressions for the merge operation.
+        Args:
+            columns (str): A comma-separated string of column names to merge.
+            alias (str): The alias to use for the column names in the merge operation.
+        Returns:
+            Dict[str, str]: A dictionary of column expressions for the merge operation.
+        """
         return {c: f"{alias}.{c}" for c in columns.split(",")}
 
     def __get_cdc_latest_changes(self, schedule:SyncSchedule, df:DataFrame) -> DataFrame:
+        """
+        Retrieves the latest changes from a CDC DataFrame based on the provided SyncSchedule.
+        This function calculates the row number for each key group in the DataFrame, filters
+        the DataFrame to only include the latest changes, and returns the filtered DataFrame.
+        Args:
+            schedule (SyncSchedule): An object that holds information about the sync configuration,
+                including load strategy, table columns, and keys.
+            df (DataFrame): The DataFrame to filter for the latest changes.
+        Returns:
+            DataFrame: A filtered DataFrame containing only the latest changes for each key group.
+        """
         keys = ",".join(schedule.Keys)
 
         row_num_expr = f"row_number() over(partition by {keys} order by BQ_CDC_CHANGE_TIMESTAMP desc) as cdc_row_num"
@@ -268,7 +283,6 @@ class BQScheduleLoader(ConfigBase):
         elif schedule.IsRangePartitioned:
             self.Logger.sync_status(f"Loading {schedule.LakehouseTableName} with range partitioning...", verbose=True)
             part_filter = SyncUtil.get_partition_range_predicate(schedule)
-
             self.Logger.sync_status(f"Load from BQ by range partition: {part_filter}", verbose=True)
             query_model.PartitionFilter = part_filter
         elif not schedule.InitialLoad:
@@ -376,7 +390,7 @@ class BQScheduleLoader(ConfigBase):
             modified DataFrame after saving to the Lakehouse table.
         """
         if not schedule.Load_Type == SyncLoadType.MERGE or schedule.InitialLoad:
-            df_bq = self.__apply_task_tracker_observation(schedule.LakehouseTableName, df_bq)
+            df_bq, observation = self.__apply_task_tracker_observation(schedule, df_bq)
 
             if schedule.IsPartitionedSyncLoad:
                 has_lock = False
@@ -391,12 +405,11 @@ class BQScheduleLoader(ConfigBase):
                 try:
                     partition_cols = SyncUtil.get_lakehouse_partitions(schedule)
                     df_bq = self.__save_to_lakehouse(schedule, df=df_bq, mode="OVERWRITE", partition_by=partition_cols, options=write_config)
-                    task_part = self.__increment_task_tracker(schedule.LakehouseTableName)                    
+                    task_part, total_row_count = self.__increment_task_tracker(schedule.LakehouseTableName, observation)                    
                 finally:
                     if has_lock:
                         lock.release()
             else:
-                task_part = 1
                 if schedule.Load_Strategy == SyncLoadStrategy.CDC_APPEND:
                     df_bq = df_bq.drop("BQ_CDC_CHANGE_TYPE", "BQ_CDC_CHANGE_TIMESTAMP")
 
@@ -405,10 +418,10 @@ class BQScheduleLoader(ConfigBase):
                 else:
                     partition_cols = SyncUtil.get_lakehouse_partitions(schedule)
                     df_bq = self.__save_to_lakehouse(schedule, df=df_bq, partition_by=partition_cols, options=write_config)
-            
+                
+                task_part, total_row_count = self.__increment_task_tracker(schedule.LakehouseTableName, observation)
             
             if task_part == schedule.TotalTableTasks:
-                total_row_count = self.__get_task_tracker_row_count(schedule.LakehouseTableName)
                 self.Logger.sync_status(f"LAKEHOUSE - {schedule.LakehouseTableName} - Rows: {total_row_count}", verbose=True)
 
                 if total_row_count > 0:
@@ -419,21 +432,42 @@ class BQScheduleLoader(ConfigBase):
 
         return (schedule,df_bq)
 
-    def __get_task_tracker_row_count(self, lakehouse_name:str) -> int:
-        observation = self.MultiWrite.get(lakehouse_name)["observation"]
-        return observation.get["row_count"]
+    def __apply_task_tracker_observation(self, schedule:SyncSchedule, df:DataFrame) -> Tuple[DataFrame, Observation]:
+        """
+        Applies an Observation object to a DataFrame for monitoring row counts.
+        This method applies an Observation object to a DataFrame for monitoring row counts
+        and returns the updated DataFrame after applying the observation.
+        Args:
+            schedule (SyncSchedule): The synchronization schedule containing the Lakehouse table details.
+            df (DataFrame): The DataFrame to apply the observation to.
+        Returns:
+            Tuple[DataFrame, Observation]: A tuple containing the updated DataFrame after applying
+            the observation and the Observation object for monitoring row counts.
+        """
+        observation = Observation(name=f"Tasks_{schedule.ID}")
+        df = df.observe(observation, count(lit(1)).alias("row_count"))
 
-    def __apply_task_tracker_observation(self, lakehouse_name:str, df:DataFrame) -> DataFrame:
-        return df.observe(
-                self.MultiWrite.get(lakehouse_name)["observation"], 
-                    count(lit(1)).alias("row_count"))
+        return (df, observation)
 
-    def __increment_task_tracker(self, lakehouse_name:str) -> int:
+    def __increment_task_tracker(self, lakehouse_name:str, observation:Observation) -> Tuple[int, int]:
+        """
+        Increments the task count for a given Lakehouse table.
+        This method increments the task count for a given Lakehouse table, updating the task
+        count in the shared dictionary and returning the updated task count.
+        Args:
+            lakehouse_name (str): The name of the Lakehouse table to increment the task count for.
+            observation (Observation): The Observation object containing the row count for the task.
+        Returns:
+            Tuple[int, int]: A tuple containing the updated task count and row count for the task.
+        """
+        row_count = observation.get["row_count"]
+
         sync_data = self.MultiWrite.get(lakehouse_name)
         sync_data["tasks"] += 1
+        sync_data["observations"] += row_count
         self.MultiWrite.set(lakehouse_name, sync_data)
 
-        return sync_data["tasks"]
+        return (sync_data["tasks"],sync_data["observations"])
 
     def __save_to_lakehouse(self, schedule:SyncSchedule, df:DataFrame, mode:str=None, partition_by:list=None, options:dict=None) -> DataFrame:
         """
@@ -483,7 +517,7 @@ class BQScheduleLoader(ConfigBase):
             modified DataFrame after saving to the mirrored database landing zone.
         """
 
-        df = self.__apply_task_tracker_observation(schedule.LakehouseTableName, df)
+        df, observation = self.__apply_task_tracker_observation(schedule, df)
         df = OpenMirror.save_to_landing_zone(schedule, df)
         has_lock = False
 
@@ -492,10 +526,9 @@ class BQScheduleLoader(ConfigBase):
             lock.acquire()
 
         try:
-            task_part = self.__increment_task_tracker(schedule.LakehouseTableName)
+            task_part, total_row_count = self.__increment_task_tracker(schedule.LakehouseTableName, observation)
 
             if task_part == schedule.TotalTableTasks:
-                total_row_count = self.__get_task_tracker_row_count(schedule.LakehouseTableName)
                 self.Logger.sync_status(f"MIRRORING - {schedule.LakehouseTableName} - Rows: {total_row_count}", verbose=True)
 
                 if total_row_count > 0:
@@ -523,6 +556,9 @@ class BQScheduleLoader(ConfigBase):
             lock (Lock): A threading lock for partitioned sync loads.
         Returns:
             SyncSchedule: The updated SyncSchedule after the synchronization process is complete.
+        Raises:
+            SyncLoadError: If an error occurs during the synchronization process.
+            FabricLakehouseError: If an error occurs during the Lakehouse write process.
         """
         with SyncTimer() as t:
             schedule.SummaryLoadType = schedule.get_summary_load_type()
@@ -733,7 +769,7 @@ class BQScheduleLoader(ConfigBase):
 
         if self.UserConfig.Fabric.TargetType==FabricDestinationType.MIRRORED_DATABASE:  
             self.Logger.sync_status(f"Stopping Mirroring on {self.UserConfig.Fabric.TargetLakehouse} Database...") 
-            OpenMirror.stop_mirror(self.UserConfig.Fabric.TargetLakehouseID, self.api_token)            
+            OpenMirror.stop_mirror(self.UserConfig.Fabric.TargetLakehouseID, self.FabricAPIToken)            
 
         processor = QueueProcessor(num_threads=num_threads)
 
@@ -758,7 +794,7 @@ class BQScheduleLoader(ConfigBase):
                         if not self.MultiWrite.contains(s.LakehouseTableName):
                             sync_track = {
                                 "tasks": 0,
-                                "observation": Observation(name=f"SyncTasks_{s.LakehouseTableName}")
+                                "observations": 0
                             }
                             self.MultiWrite.set(s.LakehouseTableName, sync_track)
 
@@ -789,7 +825,7 @@ class BQScheduleLoader(ConfigBase):
        
         if self.UserConfig.Fabric.TargetType==FabricDestinationType.MIRRORED_DATABASE:  
             self.Logger.sync_status(f"Starting Mirroring on {self.UserConfig.Fabric.TargetLakehouse} Database...") 
-            OpenMirror.start_mirror(self.UserConfig.Fabric.TargetLakehouseID, self.api_token)
+            OpenMirror.start_mirror(self.UserConfig.Fabric.TargetLakehouseID, self.FabricAPIToken)
 
         self.Logger.sync_status(f"Async schedule sync finished in {str(t)}...")
 

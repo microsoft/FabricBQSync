@@ -27,7 +27,7 @@ class BQMetadataLoader(ConfigBase):
         the Lakehouse Delta tables
     2. Autodetect table sync configuration based on defined metadata & heuristics
     """
-    def __init__(self, user_config) -> None:
+    def __init__(self) -> None:
         """
         Constructor for BQMetadataLoader class that initializes the schema models for the BigQuery information schema views.
         Args:
@@ -35,7 +35,7 @@ class BQMetadataLoader(ConfigBase):
         Returns:
             None
         """
-        super().__init__(user_config)
+        super().__init__()
         self.__load_bq_information_schema_models()
 
     def __sync_bq_information_schema_core(self, project:str, dataset:str, type:BigQueryObjectType, mode:SyncLoadType)-> None:
@@ -83,7 +83,7 @@ class BQMetadataLoader(ConfigBase):
             qm = {
                 "ProjectId": project,
                 "Dataset": dataset,
-                "Query": schema_model.get_base_sql(self.UserConfig.ID, project, dataset),
+                "Query": schema_model.get_base_sql(self.ID, project, dataset),
                 "API": bq_api,
                 "Cached": False
             }
@@ -165,7 +165,7 @@ class BQMetadataLoader(ConfigBase):
         """
         schema_model = self.schema_models[view]
 
-        bql = schema_model.get_base_sql(self.UserConfig.ID, project, dataset, alias="c")
+        bql = schema_model.get_base_sql(self.ID, project, dataset, alias="c")
         bql = bql + \
             f" JOIN {project}.{dataset}.{SchemaView.INFORMATION_SCHEMA_TABLES} t ON t.table_catalog=c.table_catalog AND t.table_schema=c.table_schema AND t.table_name=c.table_name"
 
@@ -319,7 +319,7 @@ class BQMetadataLoader(ConfigBase):
             schema_model = self.schema_models[view]
             #Clean-up existing data
             #if self.Context.catalog.tableExists(schema_model.TableName):
-            #    self.Context.sql(f"DELETE FROM {schema_model.TableName} WHERE sync_id='{self.UserConfig.ID}'")
+            #    self.Context.sql(f"DELETE FROM {schema_model.TableName} WHERE sync_id='{self.ID}'")
 
             for p in self.UserConfig.GCP.Projects:
                 for d in p.Datasets:

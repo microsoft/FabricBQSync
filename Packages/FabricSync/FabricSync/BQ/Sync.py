@@ -10,6 +10,7 @@ from FabricSync.BQ.Enum import (
 from FabricSync.BQ.SyncUtils import (
     SyncUtil, SyncTimer
 )
+from FabricSync.BQ.Core import Session
 from FabricSync.BQ.Loader import BQScheduleLoader
 from FabricSync.BQ.Metadata import BQMetadataLoader
 from FabricSync.BQ.Schedule import BQScheduler
@@ -39,21 +40,21 @@ class BQSync(SyncBase):
         try:
             super().__init__(config_path, credentials)
 
-            self.__validate_app_versions()
+            self.__validate_app_versions(config_path)
 
-            self.MetadataLoader = BQMetadataLoader(self.UserConfig)
-            self.Scheduler = BQScheduler(self.UserConfig)
-            self.Loader = BQScheduleLoader(self.UserConfig, self.TokenProvider)
-            self.DataRetention = BQDataRetention(self.UserConfig)
+            self.MetadataLoader = BQMetadataLoader()
+            self.Scheduler = BQScheduler()
+            self.Loader = BQScheduleLoader()
+            self.DataRetention = BQDataRetention()
         except SyncConfigurationError as e:
             print(f"FAILED TO INITIALIZE FABRIC SYNC\r\n{e}")
 
     def update_user_config_for_current(self):
-        self.__validate_user_config()
+        self.__validate_user_config(self.UserConfigPath)
 
-    def __validate_user_config(self):
+    def __validate_user_config(self, config_path:str):
         self.Logger.sync_status(f"Updating Fabric Sync user configuration...")
-        self.UserConfig.Version = Version.CurrentVersion
+        self.UserConfig.Version = str(Session.CurrentVersion)
         self.UserConfig.Fabric.WorkspaceID = self.Context.conf.get("trident.workspace.id")
 
         fabric_api = FabricAPI(self.UserConfig.Fabric.WorkspaceID, 
@@ -66,22 +67,21 @@ class BQSync(SyncBase):
         if not self.UserConfig.Fabric.TargetType:
             self.UserConfig.Fabric.TargetType = FabricDestinationType.LAKEHOUSE
         
-        self.UserConfig.to_json(self.ConfigPath)
+        self.UserConfig.to_json(config_path, self.TokenProvider.get_token(TokenProvider.FABRIC_TOKEN_SCOPE))
         self.load_user_config()
 
-    def __validate_app_versions(self):
-        runtime_version = pv.parse("0.0.0" if not self.UserConfig.Version else self.UserConfig.Version)
-        current_version = pv.parse(Version.CurrentVersion)
+    def __validate_app_versions(self, config_path:str):
+        runtime_version = self.Version
+        current_version = Session.CurrentVersion
 
         if current_version > runtime_version:
             self.Logger.sync_status(f"Fabric Sync Config Version: " +
-                f"{'Unspecified' if not self.UserConfig.Version else self.UserConfig.Version} " +
-                f"- Runtime Version: {Version.CurrentVersion}")
+                f"{str(runtime_version)} - Runtime Version: {str(current_version)}")
 
-            self.Logger.sync_status(f"Upgrading Fabric Sync metastore to v{Version.CurrentVersion}...")
+            self.Logger.sync_status(f"Upgrading Fabric Sync metastore to v{str(current_version)}...")
             LakehouseCatalog.upgrade_metastore(self.UserConfig.Fabric.MetadataLakehouse)
             
-            self.__validate_user_config()
+            self.__validate_user_config(config_path)
 
     def sync_metadata(self):
         """

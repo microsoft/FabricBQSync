@@ -235,11 +235,8 @@ dependencies = [
     { name = "db-dtypes" },
     { name = "google-cloud-bigquery" },
     { name = "mlflow-skinny" },
-    { name = "pandas" },
-    { name = "pyarrow" },
     { name = "pydantic" },
     { name = "pygithub" },
-    { name = "pyyaml" },
 ]
 
 [package.metadata]
@@ -247,11 +244,8 @@ requires-dist = [
     { name = "db-dtypes", specifier = ">=1.4.0" },
     { name = "google-cloud-bigquery", specifier = ">=3.29.0" },
     { name = "mlflow-skinny", specifier = ">=2.20.0" },
-    { name = "pandas", specifier = ">=2.2.3" },
-    { name = "pyarrow", specifier = ">=19.0.0" },
     { name = "pydantic", specifier = ">=2.10.6" },
     { name = "pygithub", specifier = ">=2.5.0" },
-    { name = "pyyaml", specifier = ">=6.0.2" },
 ]
 
 [[package]]

@@ -55,7 +55,7 @@ class LakehouseCatalog(ContextAwareBase):
         table_schema = "dbo" if userConfig.Fabric.EnableSchemas else None
 
         for t in cls.get_catalog_tables(userConfig.Fabric.get_metadata_lakehouse()):
-            if t != "bq_data_type_map":
+            if t != "data_type_map":
                 sql_commands.append(f"DELETE FROM {userConfig.Fabric.MetadataLakehouse}." +
                                     f"{cls.resolve_table_name(table_schema, t)} WHERE sync_id='{userConfig.ID}';")
         
@@ -70,6 +70,7 @@ class LakehouseCatalog(ContextAwareBase):
             cls.Logger.sync_status("Optimizing Fabric Sync Metastore")
             cls.optimize_sync_metastore()
     
+    @classmethod
     def create_metastore_tables(cls, enable_schemas:bool = False) -> None:
         """
         Creates the required metadata tables in the Spark metastore using the defined schemas.

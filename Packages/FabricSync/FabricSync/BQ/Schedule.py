@@ -5,13 +5,11 @@ from FabricSync.BQ.Logging import Telemetry
 from FabricSync.BQ.Enum import SyncScheduleType
 
 class BQScheduler(ConfigBase):
-    def __init__(self, user_config):
+    def __init__(self):
         """
         Initialize the Schedule instance with the provided user configuration.
-        :param user_config: A dictionary or object containing user-specific settings.
         """
-
-        super().__init__(user_config)
+        super().__init__()
 
     @Telemetry.Scheduler
     def build_schedule(self, schedule_type:SyncScheduleType) -> None:
@@ -25,6 +23,6 @@ class BQScheduler(ConfigBase):
             None
         """
 
-        self.Logger.sync_status(f"Scheduling {self.UserConfig.ID} for {schedule_type}...", verbose=True)
+        self.Logger.sync_status(f"Scheduling {self.ID} for {schedule_type}...", verbose=True)
         FabricMetastore.build_schedule(schedule_type)        
-        self.Logger.sync_status(f"Sync Schedule {self.UserConfig.ID}({schedule_type}) Ready...")
+        self.Logger.sync_status(f"Sync Schedule {self.ID}({schedule_type}) Ready...")

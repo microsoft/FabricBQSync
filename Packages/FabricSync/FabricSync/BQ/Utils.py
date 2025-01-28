@@ -2,7 +2,14 @@ import base64 as b64
 import time
 import os
 import requests
-from urllib import request as urllib
+import urllib.request
+from delta.tables import DeltaTable
+from pyspark.sql.types import StructType
+from contextlib import ContextDecorator
+
+from pyspark.sql import (
+    Row, DataFrame
+)
 
 from dataclasses import (
     dataclass, field
@@ -10,18 +17,98 @@ from dataclasses import (
 from typing import (
     Any, Optional, Dict
 )
-from pyspark.sql.types import StructType
-from contextlib import ContextDecorator
-from pyspark.sql import DataFrame
 
 from pyspark.sql.types import (
     ArrayType, MapType, StructType
 )
 from pyspark.sql.functions import (
-    col, to_json
+    col, to_json, max
 )
 
+
 from FabricSync.BQ.Exceptions import SyncTimerError
+from FabricSync.BQ.Core import ContextAwareBase
+
+class DeltaTableMaintenance(ContextAwareBase):
+    __detail:Row = None
+
+    def __init__(self, table_name:str, table_path:str=None) -> None:
+        """
+        Initializes a new instance of the DeltaTableMaintenance class.
+        Args:
+            table_name (str): The table name.
+            table_path (str): The table path.
+        """
+        self.TableName = table_name
+
+        if table_path:
+            self.DeltaTable = DeltaTable.forPath(self.Context, table_path)
+        else:
+            self.DeltaTable = DeltaTable.forName(self.Context, table_name)
+    
+    @property
+    def CurrentTableVersion(self) -> int:
+        """
+        Gets the current table version.
+        Returns:
+            int: The current table version.
+        """
+        history = self.DeltaTable.history() \
+            .select(max(col("version")).alias("delta_version"))
+
+        return [r[0] for r in history.collect()][0]
+
+    @property
+    def Detail(self) -> DataFrame:
+        """
+        Gets the table detail.
+        Returns:
+            DataFrame: The table detail.
+        """
+        if not self.__detail:
+            self.__detail = self.DeltaTable.detail().collect()[0]
+        
+        return self.__detail
+    
+    def drop_partition(self, partition_filter:str) -> None:
+        """
+        Drops the partition.
+        Args:
+            partition_filter (str): The partition filter.
+        """
+        self.DeltaTable.delete(partition_filter)
+
+    def drop_table(self) -> None:
+        """
+        Drops the table.
+        """
+        self.Context.sql(f"DROP TABLE IF EXISTS {self.TableName}")
+    
+    def optimize_and_vacuum(self, partition_filter:str = None) -> None:
+        """
+        Optimizes and vacuums the table.
+        Args:
+            partition_filter (str): The partition filter.
+        """
+        self.optimize(partition_filter)
+        self.vacuum()
+    
+    def optimize(self, partition_filter:str = None) -> None:
+        """
+        Optimizes the table.
+        Args:
+            partition_filter (str): The partition filter.
+        """
+        if partition_filter:
+            self.DeltaTable.optimize().where(partition_filter).executeCompaction()
+        else:
+            self.DeltaTable.optimize().executeCompaction()
+
+    def vacuum(self) -> None:
+        """
+        Vacuums the table.
+        """
+        self.DeltaTable.vacuum(0)
 
 @dataclass
 class SyncTimer(ContextDecorator):
@@ -87,7 +174,7 @@ class Util():
     @staticmethod
     def ensure_paths(paths):
         for p in paths:
-            if not os.Path(p).is_dir():
+            if not os.path.isdir(p):
                 os.mkdir(p)
 
     @staticmethod

@@ -1,6 +1,8 @@
 from typing import Dict
 
 from FabricSync.BQ.Utils import Util
+from FabricSync.BQ.Model.Config import ConfigDataset
+from FabricSync.BQ.Exceptions import SyncConfigurationError
 
 class Credentials:
     def getToken(audience) -> str:
@@ -11,7 +13,6 @@ class Credentials:
 
 class TokenProvider:
     FABRIC_TOKEN_SCOPE = "https://api.fabric.microsoft.com/"
-    STORAGE_TOKEN_SCOPE = "storage"
     
     def __init__(self, credential_provider:Credentials) -> None:
         """
@@ -36,8 +37,8 @@ class TokenProvider:
         return self.tokens[scope]
 
 class GCPAuth:
-    @staticmethod
-    def get_encoded_credentials_from_path(path:str) -> str:
+    @classmethod
+    def get_encoded_credentials_from_path(cls, path:str) -> str:
         """
         Returns the encoded credentials from the given path.
         Args:
@@ -50,3 +51,30 @@ class GCPAuth:
         credential_data = ''.join(credential_data)
 
         return Util.encode_base64(credential_data)
+    
+    @classmethod
+    def load_gcp_credential(cls, userConfig:ConfigDataset) -> str:
+        """
+        Loads the GCP credential from the user configuration settings.
+        1. If the credential is base-64 encoded, it is returned as is.
+        2. If the credential is a file path, it is read and encoded.
+        3. If the credential is missing or invalid, an exception is raised.
+        Returns:
+            str: The GCP credential.
+        Raises:
+            SyncConfigurationError: If the GCP credential is missing or invalid.
+        """
+        credential = None
+        if Util.is_base64(userConfig.GCP.GCPCredential.Credential):
+            credential = userConfig.GCP.GCPCredential.Credential
+        else:
+            try:
+                credential = cls.get_encoded_credentials_from_path(
+                    userConfig.GCP.GCPCredential.CredentialPath)
+            except Exception as e:
+                raise SyncConfigurationError(f"Failed to parse GCP credential file: {e}") from e
+        
+        if not credential:
+            raise SyncConfigurationError(f"GCP credential is missing or is in an invalid format.")
+        
+        return credential

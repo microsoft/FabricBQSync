@@ -12,6 +12,46 @@ class BaseEnum(Enum):
         """
         return str(self.value)
 
+class SparkSessionConfig(str, BaseEnum):
+    """
+    Represents the possible Spark session configurations.
+    Attributes:
+        APPLICATION_ID (str): The application ID.
+        VERSION (str): The version.
+        NAME (str): The application name.
+        LOG_PATH (str): The log path.
+        LOG_LEVEL (str): The log level.
+        LOG_TELEMETRY (str): The log telemetry.
+        TELEMETRY_ENDPOINT (str): The telemetry endpoint.
+        WORKSPACE_ID (str): The workspace ID.
+        METADATA_LAKEHOUSE (str): The metadata lakehouse.
+        METADATA_LAKEHOUSE_SCHEMA (str): The metadata lakehouse schema.
+        METADATA_LAKEHOUSE_ID (str): The metadata lakehouse ID.
+        TARGET_LAKEHOUSE (str): The target lakehouse.
+        TARGET_LAKEHOUSE_SCHEMA (str): The target lakehouse schema.
+        TARGET_LAKEHOUSE_ID (str): The target lakehouse ID.
+        SCHEMA_ENABLED (str): The schema enabled.
+        FABRIC_API_TOKEN (str): The Fabric API token.
+        USER_CONFIG_PATH (str): The user config path.
+    """
+    APPLICATION_ID = "application_id"
+    VERSION = "version"
+    NAME = "name"
+    LOG_PATH = "log_path"
+    LOG_LEVEL = "log_level"
+    LOG_TELEMETRY = "log_telemetry"
+    TELEMETRY_ENDPOINT = "telemetry_endpoint"
+    WORKSPACE_ID = "workspace_id"
+    METADATA_LAKEHOUSE = "metadata_lakehouse"
+    METADATA_LAKEHOUSE_SCHEMA = "metadata_lakehouse_schema"
+    METADATA_LAKEHOUSE_ID = "metadata_lakehouse_id"
+    TARGET_LAKEHOUSE = "target_lakehouse"
+    TARGET_LAKEHOUSE_SCHEMA = "target_lakehouse_schema"
+    TARGET_LAKEHOUSE_ID = "target_lakehouse_id"
+    SCHEMA_ENABLED = "schema_enabled"
+    FABRIC_API_TOKEN = "fabric_api_token"
+    USER_CONFIG_PATH = "user_config_path"
+
 class FileSystemType(str, BaseEnum):
     """
     FileSystemType is an enumeration of supported file system types.

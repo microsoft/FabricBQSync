@@ -210,7 +210,7 @@ class SyncSchedule(SyncBaseModel):
     def UpdateRowCounts(self, src:int = 0, insert:int = 0, update:int = 0) -> None:
         self.SourceRows += src
 
-        if not self.Load_Type == SyncLoadType.MERGE:
+        if not self.Load_Type == SyncLoadType.MERGE or self.IsMirrored:
             self.InsertedRows += src            
             self.UpdatedRows = 0
         else:

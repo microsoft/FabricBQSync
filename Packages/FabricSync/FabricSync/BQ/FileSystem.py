@@ -15,11 +15,16 @@ from FabricSync.BQ.Enum import FileSystemType
 from FabricSync.BQ.Lakehouse import LakehouseCatalog
 from FabricSync.BQ.Logging import SyncLogger
 
-class HadoopFileSystem(object):
+class HadoopFileSystem:
     __FS_PATTERN = r"(s3\w*://|hdfs://|abfss://|dbfs://|file://|file:/).(.*)"
 
     def __init__(self: "HadoopFileSystem", pattern: str) -> None:
-        spark = SparkSession.builder.getOrCreate()
+        """
+        Initializes a new instance of the HadoopFileSystem class.
+        Args:
+            pattern (str): The Hadoop file system pattern to use.
+        """
+        spark = SparkSession.getActiveSession()
         hadoop, hdfs, fs_type = self.__get_hdfs(spark, pattern)
         self._hdfs = hdfs
         self._fs_type = fs_type
@@ -27,6 +32,15 @@ class HadoopFileSystem(object):
         self._jvm = spark.sparkContext._jvm
 
     def write(self: "HadoopFileSystem", path: str, data: str, mode: Literal["a", "w"]) -> None:
+        """
+        Writes data to a file in the Hadoop file system.
+        Args:            
+            path (str): The path to the file to write.
+            data (str): The data to write to the file.
+            mode (Literal["a", "w"]): The write mode to use. Can be either "a" for append or "w" for write.
+        Raises:
+            Exception: If the file cannot be written.
+        """
         if mode == "w":
             # org.apache.hadoop.fs.FileSystem.create(Path f, boolean overwrite)
             output_stream = self._hdfs.create(self._hadoop.fs.Path(path), True)  # type: ignore
@@ -45,6 +59,15 @@ class HadoopFileSystem(object):
             raise e
 
     def read(self: "HadoopFileSystem", path: str) -> str:
+        """
+        Reads data from a file in the Hadoop file system.
+        Args:
+            path (str): The path to the file to read.
+        Returns:
+            str: The data read from the file.
+        Raises:
+            Exception: If the file cannot be read.
+        """
         res = []
         # org.apache.hadoop.fs.FileSystem.open
         in_stream = self._hdfs.open(self._hadoop.fs.Path(path))  # type: ignore
@@ -64,11 +87,27 @@ class HadoopFileSystem(object):
         return bytes(res).decode("utf-8")
 
     def delete(self, target:str, recurse:bool=False) -> bool:
+        """
+        Deletes a file or directory in the Hadoop file system.
+        Args:
+            target (str): The path to the file or directory to delete.
+            recurse (bool): A boolean indicating whether to delete recursively.
+        Returns:
+            bool: A boolean indicating whether the file or directory was deleted successfully.
+        """
         result = self._hdfs.delete(
             self._hadoop.fs.Path(target), recurse)
         return result
 
     def rename(self, target:str, destination:str) -> bool:
+        """
+        Renames a file or directory in the Hadoop file system.
+        Args:
+            target (str): The path to the file or directory to rename.
+            destination (str): The new path for the file or directory.
+        Returns:
+            bool: A boolean indicating whether the file or directory was renamed successfully.
+        """
         result = self._hdfs.rename(
             self._hadoop.fs.Path(target),
             self._hadoop.fs.Path(destination))
@@ -76,6 +115,13 @@ class HadoopFileSystem(object):
         return result
 
     def glob(self, pattern: str) -> List[HDFSFile]:
+        """
+        Searches for files or directories in the Hadoop file system using a glob pattern.
+        Args:
+            pattern (str): The glob pattern to use for the search.
+        Returns:
+            List[HDFSFile]: A list of HDFSFile objects representing the files or directories found.
+        """
         statuses = self._hdfs.globStatus(self._hadoop.fs.Path(pattern))
 
         res = []
@@ -94,6 +140,14 @@ class HadoopFileSystem(object):
         return res
     
     def __get_hdfs(self, spark: SparkSession, pattern: str) -> Tuple[JavaObject, JavaObject, FileSystemType]:
+        """
+        Gets the Hadoop file system object for the specified pattern.
+        Args:
+            spark (SparkSession): The Spark session to use.
+            pattern (str): The Hadoop file system pattern to use.
+        Returns:
+            Tuple[JavaObject, JavaObject, FileSystemType]: A tuple containing the Hadoop file system object, the Hadoop file system object, and the file system type.
+        """
         match = re.match(self.__FS_PATTERN, pattern)
 
         if match is None:
@@ -111,40 +165,107 @@ class HadoopFileSystem(object):
 
         return (hadoop, hdfs, fs_type)  # type: ignore
 
-class OneLakeFileSystem(HadoopFileSystem):
+class OneLakeUtil:
     _abfss_onelake_path_format = "abfss://{}@onelake.dfs.fabric.microsoft.com/{}/"
 
+    @staticmethod
+    def get_onelake_uri(workspace_id:str, lakehouse_id:str) -> str:
+        """
+        Gets the URI for a OneLake instance.
+        Args:
+            workspace_id (str): The workspace ID for the OneLake instance.
+            lakehouse_id (str): The lakehouse ID for the OneLake instance.
+        Returns:
+            str: The URI for the OneLake instance.
+        """
+        return OneLakeUtil._abfss_onelake_path_format.format(workspace_id, lakehouse_id)
+
+class OneLakeFileSystem(HadoopFileSystem):
     def __init__(self, workspace_id:str, lakehouse_id:str) -> None:
+        """
+        Initializes a new instance of the OneLakeFileSystem class.
+        Args:
+            workspace_id (str): The workspace ID for the OneLake instance.
+            lakehouse_id (str): The lakehouse ID for the OneLake instance.
+        """
         self._workspace_id = workspace_id
         self._lakehouse_id = lakehouse_id
-        self._base_uri = self._abfss_onelake_path_format.format(workspace_id, lakehouse_id)
+        self._base_uri = OneLakeUtil.get_onelake_uri(workspace_id, lakehouse_id)
 
         super().__init__(self._base_uri)
     
-    def _get_onelake_path(self, path):
+    def _get_onelake_path(self, path) -> str:
+        """
+        Gets the full path for a file in the OneLake file system.
+        Args:
+            path (str): The path to the file.
+        Returns:
+            str: The full path for the file in the OneLake file system.
+        """
         return os.path.join(self._base_uri, path)
 
     def write(self, path: str, data: str, mode: Literal["a", "w"]) -> None:
+        """
+        Writes data to a file in the OneLake file system.
+        Args:
+            path (str): The path to the file to write.
+            data (str): The data to write to the file.
+            mode (Literal["a", "w"]): The write mode to use. Can be either "a" for append or "w" for write.
+        """
         super().write(self._get_onelake_path(path), data, mode)
     
     def read(self, path: str) -> str:
+        """
+        Reads data from a file in the OneLake file system.
+        Args:
+            path (str): The path to the file to read.
+        Returns:
+            str: The data read from the file.
+        """
         return super().read(self._get_onelake_path(path))
     
     def delete(self, target:str, recurse:bool=False) -> bool:
+        """
+        Deletes a file or directory in the OneLake file system.
+        Args:
+            target (str): The path to the file or directory to delete.
+            recurse (bool): A boolean indicating whether to delete recursively.
+        Returns:
+            bool: A boolean indicating whether the file or directory was deleted successfully.
+        """
         return super().delete(self._get_onelake_path(target), recurse)
     
     def rename(self, target:str, destination:str) -> bool:
+        """
+        Renames a file or directory in the OneLake file system.
+        Args:
+            target (str): The path to the file or directory to rename.
+            destination (str): The new path for the file or directory.  
+        Returns:
+            bool: A boolean indicating whether the file or directory was renamed successfully.
+        """
         return super().rename(self._get_onelake_path(target), self._get_onelake_path(destination))
     
     def glob(self, pattern: str) -> List[HDFSFile]:
         return super().glob(pattern)
 
 class OpenMirrorLandingZone(OneLakeFileSystem):
+    """
+    A class representing a file system for an OpenMirror landing zone. 
+    """
     _lz_path = "Files/LandingZone/"
     _lz_table_schema_format = "{}.schema"
     __logger = None
 
     def __init__(self, workspace_id:str, lakehouse_id:str, table_schema:str, table:str) -> None:
+        """
+        Initializes a new instance of the OpenMirrorLandingZone class.
+        Args:
+            workspace_id (str): The workspace ID for the OneLake instance.
+            lakehouse_id (str): The lakehouse ID for the OneLake instance.
+            table_schema (str): The schema for the table.
+            table (str): The name of the table.
+        """
         super().__init__(workspace_id, lakehouse_id)
 
         self._table_schema = table_schema
@@ -152,6 +273,11 @@ class OpenMirrorLandingZone(OneLakeFileSystem):
     
     @property
     def Logger(self) -> Logger:
+        """
+        Gets the logger for the OpenMirror landing zone.
+        Returns:
+            Logger: The logger for the OpenMirror landing zone.
+        """
         if not self.__logger:
             self.__logger = SyncLogger().get_logger()
         
@@ -159,6 +285,11 @@ class OpenMirrorLandingZone(OneLakeFileSystem):
 
     @property
     def _lz_relative_path(self) -> str:
+        """
+        Gets the relative path for the OpenMirror landing zone.
+        Returns:
+            str: The relative path for the OpenMirror landing zone.
+        """
         if self._table_schema:
             return os.path.join(self._lz_path,
                 self._lz_table_schema_format.format(self._table_schema),self._table)
@@ -167,6 +298,11 @@ class OpenMirrorLandingZone(OneLakeFileSystem):
 
     @property
     def _lz_uri(self) -> str:
+        """
+        Gets the URI for the OpenMirror landing zone.
+        Returns:
+            str: The URI for the OpenMirror landing zone.
+        """
         if self._table_schema:
             return os.path.join(self._base_uri, self._lz_path,
                 self._lz_table_schema_format.format(self._table_schema),self._table)
@@ -174,37 +310,91 @@ class OpenMirrorLandingZone(OneLakeFileSystem):
             return os.path.join(self._base_uri, self._lz_path, self._table)
 
     def _get_onelake_path(self, path) -> str:
+        """
+        Gets the full path for a file in the OpenMirror landing zone.
+        Args:
+            path (str): The path to the file.
+        Returns:
+            str: The full path for the file in the OpenMirror landing zone.
+        """
         return os.path.join(self._lz_uri, path)
 
     def write(self, path: str, data: str, mode: Literal["a", "w"]) -> None:
+        """
+        Writes data to a file in the OpenMirror landing zone.
+        Args:
+            path (str): The path to the file to write.
+            data (str): The data to write to the file.
+            mode (Literal["a", "w"]): The write mode to use. Can be either "a" for append or "w" for write.
+        """
         self.Logger.debug(f"Landing Zone Operation - WRITE ({mode}) - " +
                           f"{LakehouseCatalog.resolve_table_name(self._table_schema, self._table)} - {path}")
         super().write(path, data, mode)
     
     def read(self, path: str) -> str:
+        """
+        Reads data from a file in the OpenMirror landing zone.
+        Args:
+            path (str): The path to the file to read.
+        Returns:
+            str: The data read from the file.
+        """
         self.Logger.debug(f"Landing Zone Operation - READ - " +
                           f"{LakehouseCatalog.resolve_table_name(self._table_schema, self._table)} - {path}")
         return super().read(path)
 
     def delete(self, target:str, recurse:bool=False) -> bool:
+        """
+        Deletes a file or directory in the OpenMirror landing zone.
+        Args:
+            target (str): The path to the file or directory to delete.
+            recurse (bool): A boolean indicating whether to delete recursively.
+        Returns:
+            bool: A boolean indicating whether the file or directory was deleted successfully.
+        """
         self.Logger.debug(f"Landing Zone Operation - DELETE - " +
                           f"{LakehouseCatalog.resolve_table_name(self._table_schema, self._table)} - {target}")
         return super().delete(target, recurse)
     
     def rename(self, target:str, destination:str) -> bool:
+        """
+        Renames a file or directory in the OpenMirror landing zone.
+        Args:
+            target (str): The path to the file or directory to rename.
+            destination (str): The new path for the file or directory.
+        Returns:
+            bool: A boolean indicating whether the file or directory was renamed successfully.
+        """
         self.Logger.debug(f"Landing Zone Operation - RENAME - " +
                           f"{LakehouseCatalog.resolve_table_name(self._table_schema, self._table)} - {target} -> {destination}")
         return super().rename(target, destination)
 
     def glob(self, pattern: str) -> List[HDFSFile]:
+        """
+        Searches for files or directories in the OpenMirror landing zone using a glob pattern.
+        Args:
+            pattern (str): The glob pattern to use for the search.
+        Returns:
+            List[HDFSFile]: A list of HDFSFile objects representing the files or directories found.
+        """
         self.Logger.debug(f"Landing Zone Operation - SEARCH - " +
                           f"{LakehouseCatalog.resolve_table_name(self._table_schema, self._table)} - {pattern}")
         return super().glob(f"/{self._lakehouse_id}/{self._lz_relative_path}/{pattern}")
 
     def delete_table(self) -> bool:
+        """
+        Deletes the OpenMirror landing zone for the table.
+        Returns:
+            bool: A boolean indicating whether the OpenMirror landing zone was deleted successfully.
+        """
         return self.delete("", recurse=True)
     
     def get_last_file_index(self) -> int:
+        """
+        Gets the last file index in the OpenMirror landing zone.
+        Returns:
+            int: The last file index in the OpenMirror landing zone.
+        """
         files = [
             int(Path(x.name).with_suffix('').stem) for x in self.glob(f"*.parquet") 
                 if not x.name.endswith(".snappy.parquet")
@@ -216,6 +406,11 @@ class OpenMirrorLandingZone(OneLakeFileSystem):
         return file_index
     
     def cleanup_staged_lz(self)-> None:
+        """
+        Cleans up staged files in the OpenMirror landing zone.
+        Raises:
+            Exception: If any files cannot be deleted.
+        """
         self.delete("_SUCCESS")
         
         for f in  [x.name for x in self.glob(f"*.snappy.parquet")]:
@@ -225,6 +420,11 @@ class OpenMirrorLandingZone(OneLakeFileSystem):
                 raise Exception(f"Failed to delete {LakehouseCatalog.resolve_table_name(self._table_schema, self._table)} LZ stage file {f}")
 
     def cleanup_lz(self)-> None:
+        """
+        Cleans up files in the OpenMirror landing zone.
+        Raises:
+            Exception: If any files cannot be deleted.
+        """
         files = { 
             x.name: int(Path(x.name).with_suffix('').stem) 
                 for x in self.glob(f"*.parquet") 
@@ -242,6 +442,13 @@ class OpenMirrorLandingZone(OneLakeFileSystem):
         return "%020d.parquet" % idx
     
     def generate_metadata_file(self, keys:List[str]) -> bool:
+        """
+        Generates a metadata file for a table using the provided key columns.
+        Args:
+            keys (List[str]): The key columns for the table.
+        Returns:
+            bool: A boolean indicating whether the metadata file was generated successfully
+        """
         #Generate metadata file for the table
         if not keys:
             keys = []
@@ -250,6 +457,18 @@ class OpenMirrorLandingZone(OneLakeFileSystem):
         self.write("_metadata.json", json.dumps(metadata), "w")
 
     def stage_spark_output(self, mirror_index:int) -> int:
+        """
+        Stages and renames Spark output files to match the LZ naming convention.
+        This method deletes the Spark _SUCCESS marker file, checks for consistency
+        between the current file index and the provided mirror index, and then renames
+        all applicable parquet files in incremental order.
+        Args:
+            mirror_index (int): The mirror index to use for the staging operation.
+        Returns:
+            int: The new mirror index after the staging operation.
+        Raises:
+            Exception: If the specified mirror index is inconsistent with the current state.
+        """
         #Delete Spark _SUCCESS marker file
         self.delete("_SUCCESS")
 

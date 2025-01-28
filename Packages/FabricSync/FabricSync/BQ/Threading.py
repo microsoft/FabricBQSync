@@ -1,4 +1,4 @@
-from pyspark.sql import SparkSession
+import traceback
 from threading import (
     Thread, Lock
 )
@@ -228,6 +228,7 @@ class QueueProcessor:
             try:
                 sync_function(value)
             except Exception as e:
+                #print(traceback.format_exc())
                 self.exceptions.append(e)  
                 self.Logger.sync_status(f"QUEUE PROCESS THREAD ERROR: {e}", verbose=True)
 

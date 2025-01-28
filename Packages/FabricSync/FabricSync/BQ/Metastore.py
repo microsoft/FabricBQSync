@@ -78,7 +78,7 @@ class FabricMetastore(ContextAwareBase):
             LEFT JOIN last_scheduled_load d ON c.sync_id=d.sync_id AND c.interval= d.schedule_type 
             CROSS JOIN new_schedule n
             WHERE c.enabled = TRUE AND COALESCE(d.open_tasks,0) = 0
-            AND c.sync_id = '{cls.sync_id}'
+            AND c.sync_id = '{cls.ID}'
             AND c.interval='{schedule_type}'
         )
 
@@ -144,7 +144,7 @@ class FabricMetastore(ContextAwareBase):
             LEFT JOIN last_completed_schedule s ON sp.table_catalog = s.project_id AND sp.sync_id=s.sync_id
                 AND sp.table_schema = s.dataset AND sp.table_name = s.table_name
             WHERE sp.partition_id IS NOT NULL 
-            AND sp.partition_id != '__NULL__'
+            AND sp.partition_id NOT IN ('__NULL__', '__UNPARTITIONED__')
             AND ((sp.last_modified_time >= s.last_schedule_dt) OR (s.last_schedule_dt IS NULL))
             AND 
                 (
@@ -213,7 +213,7 @@ class FabricMetastore(ContextAwareBase):
         LEFT JOIN tbl_columns tc ON c.sync_id=tc.sync_id AND c.project_id = tc.table_catalog 
             AND c.dataset = tc.table_schema AND c.table_name = tc.table_name
         WHERE s.status IN ('SCHEDULED', 'FAILED') AND c.enabled = TRUE AND t.schedule_id IS NULL
-            AND c.sync_id='{cls.sync_id}'
+            AND c.sync_id='{cls.ID}'
             AND s.schedule_type='{schedule_type}'
         """
         df = cls.Context.sql(sql)
@@ -263,7 +263,7 @@ class FabricMetastore(ContextAwareBase):
                 s.project_id=t.project_id AND s.dataset=t.dataset AND s.table_name=t.table_name
             LEFT JOIN schedule_watermarks w ON s.sync_id=w.sync_id AND s.schedule_id=w.schedule_id 
                 AND s.project_id=w.project_id AND s.dataset=w.dataset AND s.table_name=w.table_name
-            WHERE s.sync_id='{cls.sync_id}'
+            WHERE s.sync_id='{cls.ID}'
             AND s.schedule_type='{schedule_type}' 
             AND s.status IN ('SCHEDULED', 'FAILED')
         ) 
@@ -297,7 +297,7 @@ class FabricMetastore(ContextAwareBase):
             FROM sync_schedule s
             JOIN sync_configuration c ON c.sync_id=s.sync_id AND c.project_id=s.project_id 
                 AND c.dataset=s.dataset AND c.table_name=s.table_name
-            WHERE s.status='COMPLETE' AND s.sync_id='{cls.sync_id}'
+            WHERE s.status='COMPLETE' AND s.sync_id='{cls.ID}'
                 AND s.schedule_type='{schedule_type}' AND c.sync_state != 'COMMIT'
             GROUP BY s.sync_id, s.project_id, s.dataset, s.table_name
         )
@@ -643,7 +643,7 @@ class FabricMetastore(ContextAwareBase):
             WHERE CASE WHEN (p.load_all=TRUE) THEN TRUE ELSE
                 CASE WHEN (u.table_name IS NULL) THEN FALSE ELSE TRUE END END = TRUE       
                 AND p.type_enabled = TRUE 
-                AND p.sync_id = '{cls.sync_id}'
+                AND p.sync_id = '{cls.ID}'
         )
 
         MERGE INTO sync_configuration t
@@ -674,7 +674,7 @@ class FabricMetastore(ContextAwareBase):
             UPDATE SET *
         WHEN NOT MATCHED THEN
             INSERT *
-        WHEN NOT MATCHED BY SOURCE AND t.sync_id = '{cls.sync_id}' AND t.enabled = TRUE THEN
+        WHEN NOT MATCHED BY SOURCE AND t.sync_id = '{cls.ID}' AND t.enabled = TRUE THEN
             UPDATE SET
                 t.enabled = FALSE
         """
@@ -686,7 +686,7 @@ class FabricMetastore(ContextAwareBase):
         sql =  f"""
             SELECT DISTINCT lakehouse, lakehouse_schema FROM sync_configuration
             WHERE enabled=TRUE AND use_lakehouse_schema=TRUE
-            AND sync_id='{cls.sync_id}'
+            AND sync_id='{cls.ID}'
             """
 
         df = cls.Context.sql(sql)    
@@ -734,7 +734,7 @@ class FabricMetastore(ContextAwareBase):
             JOIN sync_configuration c ON s.table_catalog=c.project_id
                 AND s.table_schema=c.dataset AND s.table_name=c.table_name
                 AND c.enforce_expiration=TRUE
-            WHERE c.sync_id='{cls.sync_id}'
+            WHERE c.sync_id='{cls.ID}'
         )
 
         MERGE INTO sync_data_expiration t
@@ -761,7 +761,7 @@ class FabricMetastore(ContextAwareBase):
             JOIN sync_configuration c ON e.sync_id=c.sync_id AND e.table_catalog=c.project_id
                 AND e.table_schema=c.dataset AND e.table_name=c.table_name AND c.enforce_expiration=TRUE
             WHERE e.expiration < current_timestamp()
-            AND e.sync_id='{cls.sync_id}'
+            AND e.sync_id='{cls.ID}'
         """
 
         return cls.Context.sql(sql)
@@ -798,7 +798,7 @@ class FabricMetastore(ContextAwareBase):
                 LEFT JOIN tbl_config u ON c.project_id=u.project_id AND
                     c.dataset=u.dataset AND c.table_name=u.table_name
                 CROSS JOIN base_config b
-                WHERE c.sync_id='{cls.sync_id}'
+                WHERE c.sync_id='{cls.ID}'
             )
 
             MERGE INTO sync_configuration t
@@ -869,7 +869,7 @@ class FabricMetastore(ContextAwareBase):
                     LEFT JOIN sync_maintenance m ON t.table_catalog=m.project_id 
                         AND t.table_schema=m.dataset AND t.table_name=m.table_name
                         AND COALESCE(p.partition_id,'')=m.partition_id
-                        AND m.sync_id = '{cls.sync_id}'
+                        AND m.sync_id = '{cls.ID}'
                     WHERE COALESCE(p.partition_id,'') != '__NULL__'
                 )
 
@@ -892,7 +892,7 @@ class FabricMetastore(ContextAwareBase):
                 JOIN sync_config m ON p.table_catalog=m.project_id AND p.table_schema=m.dataset AND p.table_name=m.table_name
                 WHERE m.table_maintenance_enabled=TRUE
                     AND m.maintenance_enabled=TRUE
-                    AND m.sync_id = '{cls.sync_id}'
+                    AND m.sync_id = '{cls.ID}'
         """
 
         cls.Context.sql(sql)
@@ -917,7 +917,7 @@ class FabricMetastore(ContextAwareBase):
             SELECT 
                 *
             FROM scheduled
-            WHERE sync_id='{cls.sync_id}' 
+            WHERE sync_id='{cls.ID}' 
             AND maintenance_strategy='SCHEDULED' 
             AND (
                 next_maintenance <= CURRENT_DATE() OR 
@@ -935,7 +935,7 @@ class FabricMetastore(ContextAwareBase):
                         lakehouse,lakehouse_schema,lakehouse_table,delta_partition,
                         POSEXPLODE(SPLIT(delta_partition, '/'))
                     FROM storage_inventory_table_partitions
-                    WHERE sync_id='{cls.sync_id}' AND delta_partition != '<default>'
+                    WHERE sync_id='{cls.ID}' AND delta_partition != '<default>'
                 ),
                 lh_partition_parts AS (
                     SELECT
@@ -977,7 +977,7 @@ class FabricMetastore(ContextAwareBase):
                         substring(data_file, 1, len(data_file) - locate('/', reverse(data_file))) as delta_partition,
                         file_info['file_size'] as file_size 
                     FROM  storage_inventory_table_files
-                    WHERE sync_id='{cls.sync_id}' AND file_info['operation'] = 'ADD'
+                    WHERE sync_id='{cls.ID}' AND file_info['operation'] = 'ADD'
                 ),
                 table_files AS (
                     SELECT
@@ -1002,7 +1002,7 @@ class FabricMetastore(ContextAwareBase):
                         AND p.lakehouse_table=f.lakehouse_table AND p.delta_partition=f.delta_partition
                     LEFT JOIN lh_partition_map m ON p.lakehouse=m.lakehouse AND p.lakehouse_schema=m.lakehouse_schema
                         AND p.lakehouse_table=m.lakehouse_table AND p.delta_partition=m.delta_partition
-                    WHERE p.sync_id='{cls.sync_id}' 
+                    WHERE p.sync_id='{cls.ID}' 
                 ),
                 inventory_maintenance_snap AS (
                     SELECT
@@ -1049,7 +1049,7 @@ class FabricMetastore(ContextAwareBase):
                 CASE WHEN (is_scheduled_maint=TRUE) THEN TRUE ELSE run_optimize END AS run_optimize, 
                 CASE WHEN (is_scheduled_maint=TRUE) THEN TRUE ELSE run_vacuum END AS run_vacuum
             FROM inventory_maintenance
-            WHERE sync_id='{cls.sync_id}' AND maintenance_strategy='INTELLIGENT'
+            WHERE sync_id='{cls.ID}' AND maintenance_strategy='INTELLIGENT'
             AND next_maintenance <= CURRENT_DATE()
             AND ((run_optimize=TRUE OR run_vacuum=TRUE) OR (is_scheduled_maint=TRUE))
         """

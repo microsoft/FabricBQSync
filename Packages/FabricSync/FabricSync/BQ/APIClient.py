@@ -4,6 +4,7 @@ import json
 import os
 from threading import Thread
 import time
+from logging import Logger
 
 from typing import (
     Dict, Tuple, Any
@@ -11,6 +12,7 @@ from typing import (
 
 from FabricSync.BQ.Utils import Util
 from FabricSync.BQ.Enum import FabricItemType
+from FabricSync.BQ.Logging import SyncLogger
 
 class RestAPIProxy:
     def __init__(self, base_url, headers=None) -> None:
@@ -120,6 +122,8 @@ class RestAPIProxy:
             response.raise_for_status()
 
 class BaseFabricItem:
+    __Logger:Logger = None
+
     def __init__(self, type:FabricItemType, workspace_id:str, api_token:str):
         """
         Base Fabric Item API Client
@@ -134,6 +138,18 @@ class BaseFabricItem:
 
         headers = {'Content-Type':'application/json','Authorization': f'Bearer {self.token}'}
         self.rest_api_proxy = RestAPIProxy(base_url="https://api.fabric.microsoft.com/v1/", headers=headers)
+    
+    @property
+    def Logger(self) -> Logger:
+        """
+        Returns the logger
+        Returns:
+            Logger: Logger
+        """
+        if not self.__Logger:
+            self.__Logger = SyncLogger().get_logger()
+
+        return self.__Logger
     
     @property
     def uri(self) -> str:
@@ -191,8 +207,12 @@ class BaseFabricItem:
         Returns:
             str: ID of the Fabric item
         """
-        response = self.list()
-        return [x["id"] for x in response["value"] if x["displayName"].lower() == name.lower()][0]
+        response = self.get_by_name(name)
+
+        if response:
+            return response["id"]
+        
+        return None
     
     def list(self) -> str:
         """
@@ -222,7 +242,14 @@ class BaseFabricItem:
             str: Fabric item
         """
         response = self.list()
-        return [x for x in response["value"] if x["displayName"].lower() == name.lower()][0]
+
+        if response and "value" in response:
+            filter = [x for x in response["value"] if x["displayName"].lower() == name.lower()]
+
+            if filter:
+                return filter[0]
+        
+        return None
     
     def get_or_create(self, name:str, data:Dict = None) -> Tuple[str, bool]:
         """
@@ -272,7 +299,7 @@ class BaseFabricItem:
         """
         while (True):
             state = api_function(id)
-            print(f"POLLING FABRIC API: {self.type} for {result} status State: {state}...")
+            self.Logger.debug(f"POLLING FABRIC API: {self.type} for {result} status State: {state}...")
 
             if state == result and not while_match:
                 break
@@ -295,9 +322,9 @@ class BaseFabricItem:
         """
         try:
             self.__run_with_timeout(api_function, id, result, while_match, timeout_minutes, poll_seconds)
-            print(f"POLLING FABRIC API: {self.type} {result} complete")
+            self.Logger.debug(f"POLLING FABRIC API: {self.type} {result} complete")
         except TimeoutError:
-            print("Timed out waiting for environment publish to complete...")
+            self.Logger.debug("Timed out waiting for environment publish to complete...")
 
 class FabricWorkspace(BaseFabricItem):
     def __init__(self, workspace_id:str, api_token:str):
@@ -439,7 +466,7 @@ class FabricOpenMirroredDatabase(BaseFabricItem):
         """
         super().__init__(FabricItemType.MIRRORED_DATABASE, workspace_id, api_token)
 
-    def create(self, name:str) -> str:
+    def create(self, name:str, data:Dict = None) -> str:
         """
         Creates a mirrored database
         Args:
@@ -447,35 +474,39 @@ class FabricOpenMirroredDatabase(BaseFabricItem):
         Returns:
             str: Mirrored Database ID
         """
-        mirror_db_definition = {
-                "properties": {
-                    "source": {
-                        "type": "GenericMirror",
-                        "typeProperties": {}
-                    },
-                    "target": {
-                        "type": "MountedRelationalDatabase",
-                        "typeProperties": {
-                            "format": "Delta"
+
+        if not data:
+            mirror_db_definition = {
+                    "properties": {
+                        "source": {
+                            "type": "GenericMirror",
+                            "typeProperties": {}
+                        },
+                        "target": {
+                            "type": "MountedRelationalDatabase",
+                            "typeProperties": {
+                                "format": "Delta"
+                            }
                         }
                     }
                 }
+            
+            encode_data = Util.encode_base64(json.dumps(mirror_db_definition))
+            payload = {
+                "displayName": name,
+                "description": f"Fabric Sync - {name}",
+                "definition": {
+                    "parts": [
+                        {
+                            "path": "mirroring.json",
+                            "payload": encode_data,
+                            "payloadType": "InlineBase64"
+                        }
+                    ]
+                }
             }
-        
-        encode_data = Util.encode_base64(json.dumps(mirror_db_definition))
-        payload = {
-            "displayName": name,
-            "description": f"Fabric Sync - {name}",
-            "definition": {
-                "parts": [
-                    {
-                        "path": "mirroring.json",
-                        "payload": encode_data,
-                        "payloadType": "InlineBase64"
-                    }
-                ]
-            }
-        }
+        else:
+            payload = data
 
         return super().create(name, payload)
 

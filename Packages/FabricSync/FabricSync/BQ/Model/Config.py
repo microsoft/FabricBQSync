@@ -6,7 +6,6 @@ from typing import (
 )
 
 import json
-import yaml # type: ignore
 import os
 
 from FabricSync.BQ.Enum import (
@@ -95,6 +94,7 @@ class ConfigFabric(SyncBaseModel):
     WorkspaceID:Optional[str] = Field(alias="workspace_id", default=None)
     WorkspaceName:Optional[str] = Field(alias="workspace_name", default=None)
     MetadataLakehouse:Optional[str] = Field(alias="metadata_lakehouse", default=None)
+    MetadataSchema:Optional[str] = Field(alias="metadata_schema", default="dbo")
     MetadataLakehouseID:Optional[str] = Field(alias="metadata_lakehouse_id", default=None)
     TargetType:Optional[FabricDestinationType] = Field(alias="target_type", default=FabricDestinationType.LAKEHOUSE)
     TargetLakehouse:Optional[str] = Field(alias="target_lakehouse", default=None)
@@ -102,15 +102,39 @@ class ConfigFabric(SyncBaseModel):
     TargetLakehouseSchema:Optional[str] = Field(alias="target_schema", default=None)
     EnableSchemas:Optional[bool] = Field(alias="enable_schemas", default=False)
 
+    def get_metadata_namespace(self) -> str:
+        if self.EnableSchemas:
+            return f"`{self.WorkspaceName}`.{self.MetadataLakehouse}.dbo"
+        else:
+            return f"`{self.WorkspaceName}`.{self.MetadataLakehouse}"
+
     def get_metadata_lakehouse(self) -> str:
         if self.EnableSchemas:
-            return f"`{self.MetadataLakehouse}`.dbo"
+            return f"{self.MetadataLakehouse}.dbo"
         else:
-            return f"`{self.MetadataLakehouse}`"
+            return f"{self.MetadataLakehouse}"
     
+    def get_target_namespace(self) -> str:
+        if self.EnableSchemas:
+            return f"`{self.WorkspaceName}`.{self.TargetLakehouse}.{self.TargetLakehouseSchema}"
+        else:
+            return f"`{self.WorkspaceName}`.{self.TargetLakehouse}"
+
+    def get_target_lakehouse(self) -> str:
+        if self.EnableSchemas:
+            return f"{self.TargetLakehouse}.{self.TargetLakehouseSchema}"
+        else:
+            return f"{self.TargetLakehouse}"
+    
+    def get_target_table_path(self, table:str) -> str:
+        if self.EnableSchemas:
+            return f"{self.TargetLakehouse}.{self.TargetLakehouseSchema}.{table}"
+        else:
+            return table
+
     def get_metadata_table_path(self, table:str) -> str:
         if self.EnableSchemas:
-            return f"`{self.MetadataLakehouse}`.dbo.{table}"
+            return f"{self.MetadataLakehouse}.dbo.{table}"
         else:
             return table
 
@@ -136,6 +160,21 @@ class ConfigGCP(SyncBaseModel):
     API:Optional[ConfigGCPAPI] = Field(alias="api", default=ConfigGCPAPI())
     Projects:List[ConfigGCPProject] = Field(alias="projects", default=[ConfigGCPProject()])
     GCPCredential:ConfigGCPCredential = Field(alias="gcp_credentials", default=ConfigGCPCredential())
+
+    @property
+    def DefaultProjectID(self) -> str:
+        if self.Projects:
+            return self.Projects[0].ProjectID
+        
+        return None
+    
+    @property
+    def DefaultDataset(self) -> str:
+        if self.Projects:
+            if self.Projects[0].Datasets:
+                return self.Projects[0].Datasets[0].Dataset
+        
+        return None
 
 class ConfigTableColumn(SyncBaseModel):
     Column:Optional[str] = Field(alias="column", default=None)
@@ -294,7 +333,15 @@ class ConfigDataset(SyncBaseModel):
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
 
-    def apply_table_defaults(self, json_data) -> None:
+    def apply_defaults(self, json_data) -> None:
+        if self.Fabric.EnableSchemas:
+            if not self.Fabric.TargetLakehouseSchema:
+                self.Fabric.TargetLakehouseSchema = self.GCP.DefaultDataset
+
+        self.__apply_table_defaults(json_data)
+
+
+    def __apply_table_defaults(self, json_data) -> None:
         if self.TableDefaults and self.Tables:
             for t in self.Tables: 
                 tbl_cfg = self.__get_table_json_config(json_data, t.TableName)
@@ -310,23 +357,20 @@ class ConfigDataset(SyncBaseModel):
                 return t[0]
         
         return None
-
-    @classmethod
-    def from_yaml(cls, path:str) -> 'ConfigDataset':
-        if os.path.exists(path):
-            with open(path, 'r', encoding="utf-8") as f:
-                data = yaml.safe_load(f)
-            return cls(**data)
-        else:
-            raise SyncConfigurationError(f"Configuration file not found ({path})")
         
     @classmethod
-    def from_json(cls, path:str) -> 'ConfigDataset':
-        data = cls.read_json_config(path)
-        return cls(**data)
+    def from_json(cls, path:str, with_defaults:bool=True) -> 'ConfigDataset':
+        data = cls.__read_json_config(path)
+
+        config = ConfigDataset(**data)      
+         
+        if with_defaults:     
+            config.apply_defaults(data)
+
+        return config
 
     @classmethod
-    def read_json_config(self, path) -> 'ConfigDataset':
+    def __read_json_config(self, path) -> 'ConfigDataset':
         if os.path.exists(path):
             with open(path, 'r', encoding="utf-8") as f:
                 data = json.load(f)
@@ -338,12 +382,5 @@ class ConfigDataset(SyncBaseModel):
         try:
             with open(path, 'w', encoding="utf-8") as f:
                 json.dump(self.model_dump(exclude_none=True, exclude_unset=True), f)
-        except IOError as e:
-            raise SyncConfigurationError(f"Unable to save Configuration file to path ({path}): {e}")       
-
-    def to_yaml(self, path:str) -> None:
-        try:
-            with open(path, 'w', encoding="utf-8") as f:
-                yaml.safe_dump(self.model_dump(exclude_none=True, exclude_unset=True), f)
         except IOError as e:
             raise SyncConfigurationError(f"Unable to save Configuration file to path ({path}): {e}")

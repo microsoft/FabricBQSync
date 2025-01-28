@@ -2,21 +2,20 @@ from pyspark.sql import Row
 
 from FabricSync.BQ.Metastore import FabricMetastore
 from FabricSync.BQ.SyncCore import ConfigBase
-from FabricSync.BQ.DeltaTableUtility import DeltaTableMaintenance
-from FabricSync.BQ.SyncUtils import SyncUtil
+from FabricSync.BQ.SyncUtils import (
+    SyncUtil, DeltaTableMaintenance
+)
 from FabricSync.BQ.Logging import Telemetry
 
 class BQDataRetention(ConfigBase):
     """
     Represents a class for enforcing BigQuerydata expiration/retention policy.
     """
-    def __init__(self, user_config):
+    def __init__(self):
         """
         Initializes a new instance of the BQDataRetention class.
-        Args:
-            user_config (dict): The user configuration.
         """
-        super().__init__(user_config)
+        super().__init__()
     
     def execute(self) -> None:   
         """

@@ -13,19 +13,13 @@ from FabricSync.BQ.Enum import (
 from FabricSync.BQ.Constants import SyncConstants
 from FabricSync.BQ.Utils import Util
 from FabricSync.BQ.APIClient import RestAPIProxy
-from FabricSync.Meta import Version
-from FabricSync.BQ.Core import ContextAwareBase
+from FabricSync.BQ.Core import (
+    ContextAwareBase, Session
+)
 
 class SyncLogger(ContextAwareBase):
     def __init__(self) -> None:
         self.loop = None
-
-        self.TelemetryEndpoint = self.Context.conf.get(f"{SyncConstants.SPARK_CONF_PREFIX}.telemetry_endpoint")
-        self.ApplicationID = self.Context.conf.get(f"{SyncConstants.SPARK_CONF_PREFIX}.application_id")
-        self.ID = self.Context.conf.get(f"{SyncConstants.SPARK_CONF_PREFIX}.name")
-        self.LogLevel = self.Context.conf.get(f"{SyncConstants.SPARK_CONF_PREFIX}.log_level")
-        self.LogPath = self.Context.conf.get(f"{SyncConstants.SPARK_CONF_PREFIX}.log_path")
-        self.Telemetry = self.Context.conf.get(f"{SyncConstants.SPARK_CONF_PREFIX}.log_telemetry").lower() == "true"
 
         if SyncConstants.FABRIC_LOG_NAME not in logging.Logger.manager.loggerDict:
             self._initialize_logger()
@@ -67,7 +61,7 @@ class SyncLogger(ContextAwareBase):
         if (self.logger.isEnabledFor(SyncLogLevel.TELEMETRY.value)):
             if self.Telemetry:
                 message["correlation_id"] = self.ApplicationID
-                message["sync_version"] = Version.CurrentVersion 
+                message["sync_version"] = str(Session.CurrentVersion)
 
                 self.send_telemetry(json.dumps(message))
                 #self.logger._log(SyncLogLevel.SYNC_STATUS.value, f"Telemetry: {message}", args, **kwargs)
@@ -120,7 +114,6 @@ class SyncLogHandler(logging.Handler):
         self.target_handler = target_handler
 
     def emit(self, record) -> None:
-        #formatted_record = self.format(record)
         #Pass-through handler defined for future use
 
         self.target_handler.handle(record)
@@ -180,6 +173,21 @@ class Telemetry():
         elif func_ is None:
             return _decorator
 
+    def Mirror_DB_Sync(func_=None):
+        def _decorator(func):
+            @functools.wraps(func)
+            def wrapper(*args, **kwargs):
+                r =  func(*args, **kwargs)
+                Telemetry.log_telemetry("Mirror Database Sync", r)
+
+                return r
+            return wrapper
+
+        if callable(func_):
+            return _decorator(func_)
+        elif func_ is None:
+            return _decorator
+        
     def Metadata_Sync(func_=None):
         def _decorator(func):
             @functools.wraps(func)

@@ -1,9 +1,8 @@
 from pyspark.sql import DataFrame
 from pyspark.sql.types import StructType
-from logging import Logger
 
 from FabricSync.BQ.Validation import SqlValidator
-from FabricSync.BQ.Utils import Util, SyncUtil
+from FabricSync.BQ.Utils import Util
 from FabricSync.BQ.Metastore import FabricMetastore
 from FabricSync.BQ.Enum import BigQueryAPI
 
@@ -15,22 +14,16 @@ from FabricSync.BQ.Auth import (
 )
 from FabricSync.BQ.BigQueryAPI import BigQueryClient
 from FabricSync.BQ.Model.Config import ConfigDataset
-from FabricSync.BQ.Model.Core import BQQueryModel
-from FabricSync.BQ.Logging import SyncLogger
+from FabricSync.BQ.Model.Core import (
+    BQQueryModel, Session
+)
 from FabricSync.BQ.Exceptions import (
     SyncConfigurationError, BQConnectorError
 )
    
 class ConfigBase(ContextAwareBase):
-    def __init__(self, user_config:ConfigDataset, token_provider:TokenProvider = None) -> None:
-        """
-        Initializes a new instance of the ConfigBase class.
-        Args:
-            user_config (ConfigDataset): The user configuration.
-            token_provider (TokenProvider): The token provider.
-        """
-        self.UserConfig = user_config
-        self.TokenProvider = token_provider
+    def __init__(self) -> None:
+        self.UserConfig = ConfigDataset.from_json(self.UserConfigPath)
 
     @property
     def GCPCredential(self) -> str:
@@ -183,14 +176,14 @@ class SyncBase(ContextAwareBase):
             raise SyncConfigurationError("Missing Path to JSON User Config")
 
         self.TokenProvider = TokenProvider(credentials)
-        self.ConfigPath = config_path
 
-        self.load_user_config()
+        self.load_user_config(config_path, 
+                              self.TokenProvider.get_token(TokenProvider.FABRIC_TOKEN_SCOPE))
 
         self.Context.sql(f"USE {self.UserConfig.Fabric.get_metadata_lakehouse()}")
         FabricMetastore.create_proxy_views()
 
-    def load_user_config(self):
+    def load_user_config(self, config_path:str, fabric_api_token:str) -> None:
         """
         Loads the user's configuration from a specified JSON file and sets up the session context.
         This method performs the following steps:
@@ -204,18 +197,18 @@ class SyncBase(ContextAwareBase):
             - The loaded configuration is stored in self.UserConfig.
             - This method relies on helper functions for credential loading and session configuration.
         """
-        self.UserConfig = self.__load_user_config_from_json(self.ConfigPath)            
-        gcp_credential = self.__load_gcp_credential()
-        self.__configure_session_context(gcp_credential)
+        self.UserConfig = self.__load_user_config_from_json(config_path)            
+        gcp_credential = GCPAuth.load_gcp_credential(self.UserConfig)
+        self.__configure_session_context(gcp_credential, config_path, fabric_api_token)
 
-    def __configure_session_context(self, gcp_credential:str) -> None:
+    def __configure_session_context(self, gcp_credential:str, config_path:str, fabric_api_token:str) -> None:
         """
         Configures the Spark session context with the user configuration settings
         and the base-64 encoded GCP credentials.
         Args:
             gcp_credential (str): The GCP credential.
         """
-        SyncUtil.initialize_spark_session(self.UserConfig)
+        Session.initialize_spark_session(self.UserConfig, config_path, fabric_api_token)
         self.Context.conf.set("credentials", gcp_credential)
 
     def __load_user_config_from_json(self, config_path:str) -> ConfigDataset:
@@ -229,38 +222,10 @@ class SyncBase(ContextAwareBase):
         Returns:
             ConfigDataset: The user configuration settings
         """
-        
-        config = ConfigDataset.read_json_config(config_path)
-        cfg = ConfigDataset(**config)            
-        cfg.apply_table_defaults(config)
+        config = ConfigDataset.from_json(config_path)
 
-        config_df = self.Context.read.json(self.Context.sparkContext.parallelize([cfg.model_dump_json()]))
+        config_df = self.Context.read.json(self.Context.sparkContext.parallelize([config.model_dump_json()]))
         config_df.createOrReplaceTempView("user_config_json")
         config_df.cache()
 
-        return cfg
-
-    def __load_gcp_credential(self) -> str:
-        """
-        Loads the GCP credential from the user configuration settings.
-        1. If the credential is base-64 encoded, it is returned as is.
-        2. If the credential is a file path, it is read and encoded.
-        3. If the credential is missing or invalid, an exception is raised.
-        Returns:
-            str: The GCP credential.
-        Raises:
-            SyncConfigurationError: If the GCP credential is missing or invalid.
-        """
-        credential = None
-        if Util.is_base64(self.UserConfig.GCP.GCPCredential.Credential):
-            credential = self.UserConfig.GCP.GCPCredential.Credential
-        else:
-            try:
-                credential = GCPAuth.get_encoded_credentials_from_path(self.UserConfig.GCP.GCPCredential.CredentialPath)
-            except Exception as e:
-                raise SyncConfigurationError(f"Failed to parse GCP credential file: {e}") from e
-        
-        if not credential:
-            raise SyncConfigurationError(f"GCP credential is missing or is in an invalid format.")
-        
-        return credential
+        return config

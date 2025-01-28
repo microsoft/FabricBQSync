@@ -28,9 +28,6 @@ Requires-Dist: pygithub>=2.5.0
 Requires-Dist: mlflow-skinny>=2.20.0
 Requires-Dist: google-cloud-bigquery>=3.29.0
 Requires-Dist: db-dtypes>=1.4.0
-Requires-Dist: pyyaml>=6.0.2
-Requires-Dist: pyarrow>=19.0.0
-Requires-Dist: pandas>=2.2.3
 
 # Fabric BQ (BigQuery) Sync
 

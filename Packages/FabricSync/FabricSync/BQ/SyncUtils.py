@@ -14,47 +14,19 @@ from typing import (
 import warnings
 
 from FabricSync.BQ.Model.Config import (
-    ConfigDataset, ConfigObjectFilter, MappedColumn
+    ConfigObjectFilter, MappedColumn
 )
-from FabricSync.BQ.Threading import SparkProcessor
 from FabricSync.BQ.Core import ContextAwareBase
 from FabricSync.BQ.Enum import (
     ObjectFilterType, SupportedTypeConversion, BQPartitionType, CalendarInterval,
     SyncLoadType, SyncLoadStrategy
 )
 from FabricSync.BQ.Model.Schedule import SyncSchedule
-from FabricSync.BQ.Constants import SyncConstants
 from FabricSync.BQ.Warnings import SyncUnsupportedConfigurationWarning
 from FabricSync.BQ.Metastore import FabricMetastore
 from FabricSync.BQ.Exceptions import SyncConfigurationError
 
 class SyncUtil(ContextAwareBase):
-    @classmethod
-    def initialize_spark_session(cls, config:ConfigDataset) -> None:
-        """
-        Initialize a Spark session and configure Spark settings based on the provided config.
-        This function retrieves the current SparkSession (or creates one if it does not exist)
-        and updates various configuration settings such as Delta Lake properties, partition
-        overwrite mode, and custom application/logging metadata.
-        Parameters:
-            config (ConfigDataset): Contains application, logging, and telemetry settings.
-        Returns:
-            None
-        """
-        cls.Context.conf.set("spark.databricks.delta.vacuum.parallelDelete.enabled", "true")
-        cls.Context.conf.set("spark.databricks.delta.retentionDurationCheck.enabled", "false")
-        cls.Context.conf.set("spark.databricks.delta.properties.defaults.minWriterVersion", "7")
-        cls.Context.conf.set("spark.databricks.delta.properties.defaults.minReaderVersion", "3")
-        cls.Context.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
-
-        cls.Context.conf.set(f"{SyncConstants.SPARK_CONF_PREFIX}.application_id", config.ApplicationID)
-        cls.Context.conf.set(f"{SyncConstants.SPARK_CONF_PREFIX}.name", config.ID)
-        cls.Context.conf.set(f"{SyncConstants.SPARK_CONF_PREFIX}.log_path", config.Logging.LogPath)
-        cls.Context.conf.set(f"{SyncConstants.SPARK_CONF_PREFIX}.log_level", config.Logging.LogLevel)
-        cls.Context.conf.set(f"{SyncConstants.SPARK_CONF_PREFIX}.log_telemetry", config.Logging.Telemetry)
-        cls.Context.conf.set(f"{SyncConstants.SPARK_CONF_PREFIX}.telemetry_endpoint", 
-            f"{config.Logging.TelemetryEndPoint}.azurewebsites.net")
-
     @classmethod
     def build_filter_predicate(cls, filter:ConfigObjectFilter) -> str:
         """

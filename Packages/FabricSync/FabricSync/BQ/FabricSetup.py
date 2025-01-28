@@ -1,5 +1,4 @@
 from packaging import version as pv
-from pyspark.sql import SparkSession
 
 from github import * # type: ignore
 
@@ -11,23 +10,13 @@ import time
 from requests.exceptions import HTTPError
 
 from FabricSync.BQ.Lakehouse import LakehouseCatalog
-from FabricSync.BQ.Utils import Util
+from FabricSync.BQ.Utils import Util, SyncTimer
 from FabricSync.BQ.APIClient import FabricAPI
-from FabricSync.BQ.Logging import (
-    SyncLogger, Telemetry
-)
-
 from FabricSync.BQ.Logging import Telemetry
 from FabricSync.BQ.Model.Config import ConfigDataset
-from FabricSync.BQ.SyncUtils import (
-    SyncUtil, SyncTimer
-)
-from FabricSync.BQ.Utils import Util
-from FabricSync.Meta import Version
 from FabricSync.BQ.Enum import FabricDestinationType
-
 from FabricSync.BQ.Core import (
-    TokenProvider, ContextAwareBase
+    TokenProvider, ContextAwareBase, Session
 )
 from FabricSync.BQ.Exceptions import (
     SyncInstallError, SyncConfigurationError
@@ -170,7 +159,7 @@ class Installer(ContextAwareBase):
                 }
             },
             "fabric": {
-                "workspace_id": self.data["workspace_id"],
+                "workspace_id": self.WorkspaceID,
                 "enable_schemas": self.data["enable_schemas"],
                 "metadata_lakehouse": self.data["metadata_lakehouse"],
                 "target_lakehouse": self.data["target_lakehouse"],
@@ -233,7 +222,7 @@ class Installer(ContextAwareBase):
                 nb_data = nb_data.replace("<<<PATH_TO_USER_CONFIG>>>", self.data["user_config_file_path"])
                 nb_data = nb_data.replace("<<<VERSION>>>", self.UserConfig.Version)
 
-                self.fabric_api.upload_fabric_notebook(notebook["name"], nb_data)
+                self.fabric_api.Notebook.upload(notebook["name"], nb_data)
                 self.Logger.sync_status(f"{notebook['name']} copied to workspace, it may take a moment to appear...")
             except Exception as e:
                 raise SyncInstallError(f"Failed to deploy BQ Sync notebook to workspace: {notebook['name']}: {e}")
@@ -246,14 +235,15 @@ class Installer(ContextAwareBase):
         """    
         self.data = data 
 
-        self.data["workspace_id"] = self.Context.conf.get("trident.workspace.id")
-        self.data["version"] = Version.CurrentVersion
+        self.data["version"] = str(Session.CurrentVersion)
 
         self.UserConfig = self.__build_new_config()
-        SyncUtil.initialize_spark_session(self.UserConfig)       
+        Session.initialize_spark_session(
+            config = self.UserConfig,
+            fabric_api_token = self.TokenProvider.get_token(TokenProvider.FABRIC_TOKEN_SCOPE))       
 
-        self.Logger = SyncLogger().get_logger()
-        self.fabric_api = FabricAPI(self.data["workspace_id"], self.TokenProvider.get_token(TokenProvider.FABRIC_TOKEN_SCOPE))
+        self.fabric_api = FabricAPI(self.WorkspaceID, 
+                                    self.TokenProvider.get_token(TokenProvider.FABRIC_TOKEN_SCOPE))
 
     def __validate_lakehouse_schemas(self, lakehouse_id:str, lakehouse_name:str):
         has_schema = self.fabric_api.Lakehouse.has_schema(lakehouse_id)
@@ -265,6 +255,47 @@ class Installer(ContextAwareBase):
             if has_schema:
                 raise SyncConfigurationError(f"Invalid Configuration: {lakehouse_name} lakehouse already exists and IS schema-enabled.")
 
+    def __create_environment_yaml(self) -> None:
+        """
+        Creates the environment yaml.
+        """
+        version = str(Session.CurrentVersion)
+        environments_yaml = """dependencies:\r\n- pip:\r\n  - fabricsync>=<<<VERSION>>>"""
+        yaml_path = f"{self.libs_path}/environment.yml"
+
+        with open(yaml_path, 'w') as file:
+            file.write(environments_yaml.replace("<<<VERSION>>>", version))
+        
+        return yaml_path
+
+    def create_or_update_environment(self, name) -> str:
+        try:
+            self.Logger.sync_status(f"Creating (or Updating) Fabric Spark Environment: {name}...")
+            environment_id, created = self.fabric_api.Environment.get_or_create(name)
+
+            if created:
+                self.Logger.sync_status(f"New Fabric Spark Environment created: {name}...", verbose=True)
+
+            environment_yml_path = self.__create_environment_yaml()
+            bq_connector_path = f"{self.libs_path}/{self.data['spark_jar']}"
+
+            files = [environment_yml_path,bq_connector_path]
+            self.fabric_api.Environment.stage_libraries(environment_id, files)
+
+            publish_state = self.fabric_api.Environment.get_publish_state(environment_id)
+
+            if (publish_state != "running"):
+                self.Logger.sync_status(f"{name} created/updated and is publishing...")
+                self.fabric_api.Environment.publish(environment_id)              
+            else:
+                self.Logger.sync_status(f"{name} updated but requires MANUAL publishing...")
+
+        except HTTPError as http_err:
+            self.Logger.sync_status(f"Fabric API Error: {http_err}")
+        except Exception as err:
+            self.Logger.sync_status(f"An error occurred: {err}")
+
+
     @Telemetry.Install
     def install(self, data):
         """
@@ -275,8 +306,7 @@ class Installer(ContextAwareBase):
         with SyncTimer() as t:
             self.__initialize_installer(data)
 
-            av = pv.parse(data["version"])
-            data["asset_version"] = f"{av.major}.0.0"
+            data["asset_version"] = f"{Session.CurrentVersion.major}.0.0"
 
             self.Logger.sync_status("Starting BQ Sync Installer...")
 
@@ -285,7 +315,7 @@ class Installer(ContextAwareBase):
                 Please make sure your credentials have been uploaded to the environment and that the gcp_credential_path parameter is correct.""")
 
             #Create Lakehouses            
-            self.UserConfig.Fabric.WorkspaceName = self.fabric_api.Workspace.get_name()
+            self.UserConfig.Fabric.WorkspaceName = self.fabric_api.Workspace.get_name(self.WorkspaceID)
 
             self.Logger.sync_status("Creating metadata lakehouse (if not exists)...")
             self.UserConfig.Fabric.MetadataLakehouseID, is_new = self.fabric_api.Lakehouse.get_or_create(
@@ -305,7 +335,7 @@ class Installer(ContextAwareBase):
                                                       self.UserConfig.Fabric.TargetLakehouse)
             else:
                 self.Logger.sync_status("Creating mirrored database (if not exists)...")
-                self.UserConfig.Fabric.TargetLakehouseID = self.fabric_api.OpenMirroredDatabase.get_or_create(
+                self.UserConfig.Fabric.TargetLakehouseID, is_new = self.fabric_api.OpenMirroredDatabase.get_or_create(
                     self.UserConfig.Fabric.TargetLakehouse)
 
                 while True:
@@ -318,7 +348,7 @@ class Installer(ContextAwareBase):
                             move_exit = True
                         case "initialized" | "stopped":
                             self.Logger.sync_status(f"Starting {self.UserConfig.Fabric.TargetLakehouse} mirrored database ({status})...")
-                            self.fabric_api.start_mirroring(self.UserConfig.Fabric.TargetLakehouseID)
+                            self.fabric_api.OpenMirroredDatabase.start_mirroring(self.UserConfig.Fabric.TargetLakehouseID)
                             move_exit = False                        
                         case _:
                             self.Logger.sync_status(f"Waiting for {self.UserConfig.Fabric.TargetLakehouse} mirrored database ({status})...")
@@ -339,7 +369,7 @@ class Installer(ContextAwareBase):
 
             #Encode for embedding in config file
             self.Logger.sync_status("Generating initial configuration file...")
-            encoded_credential = GCPAuth.get_encoded_gcp_credentials_from_path(self.data["gcp_credential_path"])
+            encoded_credential = GCPAuth.get_encoded_credentials_from_path(self.data["gcp_credential_path"])
             self.UserConfig.GCP.GCPCredential.Credential = encoded_credential        
 
             config_path = f"{self.config_path}/{self.UserConfig.ID.replace(' ', '_')}_v{self.UserConfig.Version}.json"
@@ -348,97 +378,13 @@ class Installer(ContextAwareBase):
             self.UserConfig.to_json(config_path)
             self.data["user_config_file_path"] = config_path 
 
-            ##Get sync notebooks from Git, customize and install into the workspace
+            #Get sync notebooks from Git, customize and install into the workspace
             self.Logger.sync_status("Copying BQ Sync artifacts to Fabric workspace...")
             self.__download_notebooks()
         
+            if self.data["create_spark_environment"]:
+                #Create a Fabric Spark Environment
+                self.Logger.sync_status("Creating/Updating Spark Environment...")
+                self.create_or_update_environment(self.data["spark_environment_name"])
+
         self.Logger.sync_status(f"BQ Sync Installer finished in {str(t)}!")
-
-class SparkEnvironmentUtil(ContextAwareBase):
-    def __init__(self, api_token:str) -> None:
-        """
-        Initializes a new instance of the SparkEnvironmentUtil class.
-        Args:
-            api_token (str): The API token.
-        """
-        self.environment_id = None
-        self.base_path = "/lakehouse/default/Files/BQ_Sync_Process"
-        self.libraries_path = "/lakehouse/default/Files/BQ_Sync_Process/libs"
-
-        self.fabric_api = FabricAPI(self.Context.conf.get("trident.workspace.id"), api_token)
-
-        self.__ensure_paths()
-
-    def __ensure_paths(self) -> None:
-        """
-        Ensures the required paths exist.
-        """
-        paths = [self.base_path, self.libraries_path]
-        Util.ensure_paths(paths)
-
-    def __create_environment_yaml(self) -> None:
-        """
-        Creates the environment yaml.
-        """
-        version = Version.CurrentVersion
-        environments_yaml = """dependencies:\r\n- pip:\r\n  - fabricsync==<<<VERSION>>>"""
-        yaml_path = f"{self.libraries_path}/environment.yml"
-
-        with open(yaml_path, 'w') as file:
-            file.write(environments_yaml.replace("<<<VERSION>>>", version))
-        
-        return yaml_path
-    
-    def __download_bq_connector(self) -> None:
-        """
-        Downloads the BigQuery connector.
-        """
-        connector = SetupUtils.get_bq_spark_connector(spark_version=self.Context.version, 
-            jar_path=self.libraries_path)
-        return f"{self.libraries_path}/{connector}"
-
-    def __wait_for_publish(self, environment_id:str) -> None:
-        """
-        Waits for the environment to publish.
-        Args:
-            environment_id (str): The environment ID.
-        """
-        try:
-            self.Logger.sync_status("Waiting for Fabric Spark Environment publish to complete (5 min timeout)...", verbose=True)
-            self.fabric_api.Environment.wait_for_publish(environment_id)
-            self.Logger.sync_status("Fabric Spark Environment publish completed!")
-        except TimeoutError:
-            self.Logger.sync_status("Timed out waiting for Fabric Spark Environment publish to complete...")
-
-    def create_or_update_environment(self, name) -> str:
-        """
-        Creates or updates the Fabric Spark environment.
-        Args:
-            name (str): The name.
-        """
-        try:
-            self.Logger.sync_status(f"Creating (or Updating) Fabric Spark Environment: {name}...")
-            environment_id, created = self.fabric_api.Environment.get_or_create(name)
-
-            if created:
-                self.Logger.sync_status(f"New Fabric Spark Environment created: {name}...", verbose=True)
-
-            environment_yml_path = self.__create_environment_yaml()
-            bq_connector_path = self.__download_bq_connector()
-
-            files = [environment_yml_path,bq_connector_path]
-            self.fabric_api.Environment.stage_libraries(environment_id, files)
-
-            publish_state = self.fabric_api.Environment.get_publish_state(environment_id)
-
-            if (publish_state != "running"):
-                self.Logger.sync_status(f"{name} created/updated and is publishing...")
-                self.fabric_api.Environment.publish(environment_id)
-                self.__wait_for_publish(environment_id)                
-            else:
-                self.Logger.sync_status(f"{name} updated but requires MANUAL publishing...")
-
-        except HTTPError as http_err:
-            self.Logger.sync_status(f"Fabric API Error: {http_err}")
-        except Exception as err:
-            self.Logger.sync_status(f"An error occurred: {err}")
