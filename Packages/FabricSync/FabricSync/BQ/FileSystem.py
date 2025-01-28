@@ -209,14 +209,15 @@ class OpenMirrorLandingZone(OneLakeFileSystem):
             int(Path(x.name).with_suffix('').stem) for x in self.glob(f"*.parquet") 
                 if not x.name.endswith(".snappy.parquet")
             ]
-        
-        file_index = max(files) if files else 0
-        
+
+        file_index = b.max(files) if files else 0        
         self.Logger.debug(f"Landing Zone Operation - MIRROR INDEX - " +
                           f"{LakehouseCatalog.resolve_table_name(self._table_schema, self._table)} - {file_index}")
         return file_index
     
     def cleanup_staged_lz(self)-> None:
+        self.delete("_SUCCESS")
+        
         for f in  [x.name for x in self.glob(f"*.snappy.parquet")]:
             result = self.delete(f)
 
@@ -229,7 +230,7 @@ class OpenMirrorLandingZone(OneLakeFileSystem):
                 for x in self.glob(f"*.parquet") 
                 if not x.name.endswith(".snappy.parquet") }
 
-        max_key = max(files, key=files.get)
+        max_key = b.max(files, key=files.get)
 
         for f in [f for f in files if f != max_key]:
             result = self.delete(f)
@@ -242,6 +243,9 @@ class OpenMirrorLandingZone(OneLakeFileSystem):
     
     def generate_metadata_file(self, keys:List[str]) -> bool:
         #Generate metadata file for the table
+        if not keys:
+            keys = []
+            
         metadata = {"keyColumns" : keys}
         self.write("_metadata.json", json.dumps(metadata), "w")
 

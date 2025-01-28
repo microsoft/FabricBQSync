@@ -103,9 +103,11 @@ class FabricMetastore(ContextAwareBase):
         """
         sql = f"""
         WITH last_completed_schedule AS (
-            SELECT sync_id, schedule_id, project_id, dataset, table_name, max_watermark, started AS last_schedule_dt
+            SELECT 
+                sync_id, schedule_id, project_id, dataset, table_name, 
+                mirror_file_index,max_watermark, started AS last_schedule_dt
             FROM (
-                SELECT sync_id, schedule_id, project_id, dataset, table_name, started, max_watermark,
+                SELECT sync_id, schedule_id, project_id, dataset, table_name, started, max_watermark, mirror_file_index,
                 ROW_NUMBER() OVER(PARTITION BY sync_id, project_id, dataset, table_name ORDER BY scheduled DESC) AS row_num
                 FROM sync_schedule
                 WHERE status='COMPLETE'
@@ -152,10 +154,27 @@ class FabricMetastore(ContextAwareBase):
                     c.load_strategy = 'TIME_INGESTION'
                 )
         ),
-        tbl_columns AS (
-            SELECT sync_id, table_catalog, table_schema, table_name, CONCAT_WS(',', ARRAY_AGG(column_name)) AS table_columns 
-            FROM information_schema_columns
+        sorted_columns AS (
+            SELECT sync_id, table_catalog, table_schema, table_name,
+                    ARRAY_SORT(
+                    ARRAY_AGG(st),
+                    (left, right) -> case when left.pos < right.pos then -1 when left.pos > right.pos then 1 else 0 end
+                    ) AS sorted_struct_array
+            FROM (
+                SELECT 
+                    sync_id, table_catalog, table_schema, table_name, 
+                    struct(column_name, ordinal_position AS pos) as st
+                FROM information_schema_columns
+            ) as column_struct
             GROUP BY sync_id, table_catalog, table_schema, table_name
+        ),
+        tbl_columns AS (
+            SELECT sync_id, table_catalog, table_schema, table_name,
+                CONCAT_WS(',', TRANSFORM(
+                    sorted_struct_array,
+                    sorted_struct -> sorted_struct.column_name
+                )) AS table_columns
+            FROM sorted_columns
         )
 
         SELECT
@@ -177,7 +196,7 @@ class FabricMetastore(ContextAwareBase):
             COALESCE(ts.total_logical_mb, 0) AS total_logical_mb, 
             COALESCE(ts.size_priority, 100) AS size_priority,
             tc.table_columns,
-            MAX(COALESCE(s.mirror_file_index, 1)) OVER(PARTITION BY c.sync_id, c.project_id, c.dataset, c.table_name) AS mirror_file_index,
+            COALESCE(h.mirror_file_index, 1) AS mirror_file_index,
             COUNT(*) OVER(PARTITION BY c.sync_id, c.project_id, c.dataset, c.table_name) AS total_table_tasks
         FROM sync_configuration c
         JOIN sync_schedule s ON c.sync_id = s.sync_id AND c.project_id = s.project_id 

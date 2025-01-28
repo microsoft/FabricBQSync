@@ -83,6 +83,8 @@ class SyncSchedule(SyncBaseModel):
     TableColumns:Optional[str] = Field(alias="table_columns", default=None)   
     TotalTableTasks:Optional[int] = Field(alias="total_table_tasks", default=0) 
 
+    IsEmpty:bool = Field(alias="is_skipped", default=False) 
+
     def to_telemetry(self) -> dict:
         sensitive_keys = ["project_id","dataset","table_name","source_query","source_predicate","watermark_column","max_watermark",
             "partition_column","partition_id","partition_range","mirror_file_index",
@@ -105,6 +107,13 @@ class SyncSchedule(SyncBaseModel):
             return [m for m in maps if m.Source]
 
         return None
+
+    @property
+    def ID(self) -> str:
+        if self.PartitionId:
+            return f"{self.BQTableName}${self.PartitionId}"
+        else:
+            return self.BQTableName
 
     @property
     def IsInitialLoad(self) -> bool:
@@ -134,6 +143,10 @@ class SyncSchedule(SyncBaseModel):
             return None
 
     @property
+    def HasKeys(self) -> bool:
+        return self.Keys and len(self.Keys) > 0
+        
+    @property
     def IsMirrored(self) -> bool:
         return self.LakehouseType == FabricDestinationType.MIRRORED_DATABASE
 
@@ -156,6 +169,7 @@ class SyncSchedule(SyncBaseModel):
     @property
     def LakehouseTableName(self) -> str:
         if self.UseLakehouseSchema:
+            #table_nm = f"`{self.WorkspaceName}.{self.Lakehouse}.{self.LakehouseSchema}.{self.LakehouseTable}"
             table_nm = f"{self.Lakehouse}.{self.LakehouseSchema}.{self.LakehouseTable}"
         else:
             table_nm = f"{self.Lakehouse}.{self.LakehouseTable}"

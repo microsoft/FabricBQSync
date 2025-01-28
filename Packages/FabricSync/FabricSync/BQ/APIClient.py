@@ -202,7 +202,7 @@ class BaseFabricItem:
         """ 
         return self.rest_api_proxy.get(endpoint=self.uri).json()
     
-    def _do_fabric_item_command(self, id:str, path:str) -> str:
+    def _do_fabric_item_command(self, id:str, path:str) -> Response:
         """
         Executes a command on a Fabric item
         Args:
@@ -365,7 +365,7 @@ class FabricEnvironment(BaseFabricItem):
         """
         super().__init__(FabricItemType.ENVIRONMENT, workspace_id, api_token)
 
-    def publish(self, id:str) -> str:
+    def publish(self, id:str) -> None:
         """
         Publishes the environment
         Args:
@@ -373,7 +373,7 @@ class FabricEnvironment(BaseFabricItem):
         Returns:
             str: Response from the Fabric API
         """
-        return self._do_fabric_item_command(id, "staging/publish")
+        self._do_fabric_item_command(id, "staging/publish")
     
     def stage_file(self, id:str, file_path:str) -> str:
         """
@@ -508,7 +508,7 @@ class FabricOpenMirroredDatabase(BaseFabricItem):
             str: Status of the mirroring operation
         """
         response = self._do_fabric_item_command(id, "getMirroringStatus")
-        return response["status"]
+        return response.json()["status"]
     
     def wait_for_mirroring(self, id:str, status:str) -> None:
         """

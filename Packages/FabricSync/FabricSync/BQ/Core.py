@@ -1,7 +1,6 @@
 from pyspark.sql import SparkSession
 from logging import Logger
 
-
 from FabricSync.BQ.Constants import SyncConstants
 from FabricSync.BQ.Logging import SyncLogger
 

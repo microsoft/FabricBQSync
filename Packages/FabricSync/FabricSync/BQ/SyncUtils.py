@@ -592,7 +592,7 @@ class SyncUtil(ContextAwareBase):
 
                 row = df.first()
                 row_count = row["row_count"]
-            
+    
         return (row_count, watermark)
     
     @classmethod

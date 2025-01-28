@@ -20,8 +20,7 @@ from FabricSync.BQ.Logging import SyncLogger
 from FabricSync.BQ.Exceptions import (
     SyncConfigurationError, BQConnectorError
 )
-  
-        
+   
 class ConfigBase(ContextAwareBase):
     def __init__(self, user_config:ConfigDataset, token_provider:TokenProvider = None) -> None:
         """
@@ -39,18 +38,6 @@ class ConfigBase(ContextAwareBase):
         Gets the GCP credential.
         """
         return self.Context.conf.get("credentials")
-
-    @property
-    def Logger(self):
-        """
-        Gets the logger.
-        Returns:
-            Logger: The logger.
-        """
-        if self._logger is None:
-            self._logger = SyncLogger().get_logger()
-        
-        return self._logger
 
     def __get_bq_reader_config(self, query:BQQueryModel) -> dict:
         """
@@ -202,18 +189,6 @@ class SyncBase(ContextAwareBase):
 
         self.Context.sql(f"USE {self.UserConfig.Fabric.get_metadata_lakehouse()}")
         FabricMetastore.create_proxy_views()
-
-    @property
-    def Logger(self):
-        """
-        Gets the logger.
-        Returns:
-            Logger: The logger.
-        """
-        if self._logger is None:
-            self._logger = SyncLogger().get_logger()
-        
-        return self._logger
 
     def load_user_config(self):
         """
