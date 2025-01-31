@@ -2,21 +2,18 @@ from pyspark.sql import DataFrame
 from pyspark.sql.types import StructType
 
 from FabricSync.BQ.Validation import SqlValidator
-from FabricSync.BQ.Utils import Util
 from FabricSync.BQ.Metastore import FabricMetastore
-from FabricSync.BQ.Enum import BigQueryAPI
+from FabricSync.BQ.Enum import BigQueryAPI, SparkSessionConfig
 
 from FabricSync.BQ.Core import (
-    ContextAwareBase
+    ContextAwareBase, Session
 ) 
 from FabricSync.BQ.Auth import (
     TokenProvider, Credentials, GCPAuth
 )
 from FabricSync.BQ.BigQueryAPI import BigQueryClient
 from FabricSync.BQ.Model.Config import ConfigDataset
-from FabricSync.BQ.Model.Core import (
-    BQQueryModel, Session
-)
+from FabricSync.BQ.Model.Core import BQQueryModel
 from FabricSync.BQ.Exceptions import (
     SyncConfigurationError, BQConnectorError
 )
@@ -176,14 +173,16 @@ class SyncBase(ContextAwareBase):
             raise SyncConfigurationError("Missing Path to JSON User Config")
 
         self.TokenProvider = TokenProvider(credentials)
+        self.init_sync_session(config_path)
+        
 
-        self.load_user_config(config_path, 
-                              self.TokenProvider.get_token(TokenProvider.FABRIC_TOKEN_SCOPE))
+    def init_sync_session(self, config_path):
+        self.load_user_config(config_path)
 
         self.Context.sql(f"USE {self.UserConfig.Fabric.get_metadata_lakehouse()}")
         FabricMetastore.create_proxy_views()
 
-    def load_user_config(self, config_path:str, fabric_api_token:str) -> None:
+    def load_user_config(self, config_path:str) -> None:
         """
         Loads the user's configuration from a specified JSON file and sets up the session context.
         This method performs the following steps:
@@ -199,17 +198,46 @@ class SyncBase(ContextAwareBase):
         """
         self.UserConfig = self.__load_user_config_from_json(config_path)            
         gcp_credential = GCPAuth.load_gcp_credential(self.UserConfig)
-        self.__configure_session_context(gcp_credential, config_path, fabric_api_token)
+        self.__configure_session_context(gcp_credential, config_path)
 
-    def __configure_session_context(self, gcp_credential:str, config_path:str, fabric_api_token:str) -> None:
+    def __configure_session_context(self, gcp_credential:str, config_path:str) -> None:
         """
-        Configures the Spark session context with the user configuration settings
-        and the base-64 encoded GCP credentials.
-        Args:
-            gcp_credential (str): The GCP credential.
+        Initialize a Spark session and configure Spark settings based on the provided config.
+        This function retrieves the current SparkSession (or creates one if it does not exist)
+        and updates various configuration settings such as Delta Lake properties, partition
+        overwrite mode, and custom application/logging metadata.
+        Parameters:
+            config (ConfigDataset): Contains application, logging, and telemetry settings.
+            user_config_path (str): The path to the user configuration file.
+            fabric_api_token (str): The Fabric API token.
+        Returns:
+            None
         """
-        Session.initialize_spark_session(self.UserConfig, config_path, fabric_api_token)
+        self.Context.conf.set("spark.databricks.delta.vacuum.parallelDelete.enabled", "true")
+        self.Context.conf.set("spark.databricks.delta.retentionDurationCheck.enabled", "false")
+        self.Context.conf.set("spark.databricks.delta.properties.defaults.minWriterVersion", "7")
+        self.Context.conf.set("spark.databricks.delta.properties.defaults.minReaderVersion", "3")
+        self.Context.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
         self.Context.conf.set("credentials", gcp_credential)
+
+        Session.set_setting(SparkSessionConfig.APPLICATION_ID, self.UserConfig.ApplicationID)
+        Session.set_setting(SparkSessionConfig.NAME, self.UserConfig.ID)
+        Session.set_setting(SparkSessionConfig.LOG_PATH, self.UserConfig.Logging.LogPath)
+        Session.set_setting(SparkSessionConfig.LOG_LEVEL, self.UserConfig.Logging.LogLevel)
+        Session.set_setting(SparkSessionConfig.LOG_TELEMETRY, self.UserConfig.Logging.Telemetry)
+        Session.set_setting(SparkSessionConfig.TELEMETRY_ENDPOINT, f"{self.UserConfig.Logging.TelemetryEndPoint}.azurewebsites.net")
+
+        Session.set_setting(SparkSessionConfig.WORKSPACE_ID, self.UserConfig.Fabric.WorkspaceID)
+        Session.set_setting(SparkSessionConfig.VERSION, "0.0.0" if not self.UserConfig.Version else self.UserConfig.Version)
+        Session.set_setting(SparkSessionConfig.METADATA_LAKEHOUSE, self.UserConfig.Fabric.MetadataLakehouse)
+        Session.set_setting(SparkSessionConfig.METADATA_LAKEHOUSE_ID , self.UserConfig.Fabric.MetadataLakehouseID)
+        Session.set_setting(SparkSessionConfig.TARGET_LAKEHOUSE, self.UserConfig.Fabric.TargetLakehouse)
+        Session.set_setting(SparkSessionConfig.TARGET_LAKEHOUSE_ID, self.UserConfig.Fabric.TargetLakehouseID)
+        Session.set_setting(SparkSessionConfig.SCHEMA_ENABLED, self.UserConfig.Fabric.EnableSchemas)
+        Session.set_setting(SparkSessionConfig.USER_CONFIG_PATH, config_path)
+
+        Session.set_setting(SparkSessionConfig.FABRIC_API_TOKEN, 
+                self.TokenProvider.get_token(TokenProvider.FABRIC_TOKEN_SCOPE))
 
     def __load_user_config_from_json(self, config_path:str) -> ConfigDataset:
         """

@@ -347,7 +347,6 @@ class FabricMetastore(ContextAwareBase):
                 tbl.bq_partition.partition_grain,
                 tbl.bq_partition.partition_data_type,
                 tbl.bq_partition.partition_range,
-                tbl.lakehouse_target.target_type,
                 tbl.lakehouse_target.lakehouse_id,
                 tbl.lakehouse_target.lakehouse,
                 tbl.lakehouse_target.schema AS lakehouse_schema,
@@ -575,10 +574,10 @@ class FabricMetastore(ContextAwareBase):
                 p.table_name as table_name,
                 p.object_type AS object_type,
                 CASE WHEN p.load_all THEN
-                    COALESCE(u.enabled, TRUE) ELSE COALESCE(u.enabled, FALSE) END AS enabled,                
+                    COALESCE(CAST(u.enabled AS BOOLEAN), TRUE) ELSE COALESCE(CAST(u.enabled AS BOOLEAN), FALSE) END AS enabled,                
                 p.workspace_id, 
                 p.workspace_name, 
-                CASE WHEN (u.target_type IS NULL) THEN p.target_lakehouse_type ELSE u.target_type END AS lakehouse_type, 
+                p.target_lakehouse_type AS lakehouse_type, 
                 CASE WHEN (u.lakehouse_id IS NULL) THEN p.target_lakehouse_id ELSE u.lakehouse_id END AS lakehouse_id,
                 CASE WHEN (u.lakehouse IS NULL) THEN p.target_lakehouse ELSE u.lakehouse END AS lakehouse,                
                 CASE WHEN p.enable_schemas THEN
@@ -612,7 +611,7 @@ class FabricMetastore(ContextAwareBase):
                         ELSE 'OVERWRITE' END) AS load_type,
                 COALESCE(u.interval, 'AUTO') AS interval,
                 p.tbl_key_cols AS primary_keys,
-                COALESCE(u.partition_enabled, p.is_partitioned, FALSE) AS is_partitioned,
+                COALESCE(CAST(u.partition_enabled AS BOOLEAN), p.is_partitioned, FALSE) AS is_partitioned,
                 COALESCE(u.partition_column, p.partition_col, NULL) AS partition_column,
                 COALESCE(u.partition_type, p.partitioning_type, NULL) AS partition_type,
                 COALESCE(u.partition_grain, p.partitioning_strategy, NULL) AS partition_grain,
@@ -622,13 +621,13 @@ class FabricMetastore(ContextAwareBase):
                 p.autodetect,
                 p.enable_schemas AS use_lakehouse_schema,
                 CASE WHEN (p.enable_data_expiration) THEN
-                    COALESCE(u.enforce_expiration, FALSE) ELSE FALSE END AS enforce_expiration,
-                COALESCE(u.allow_schema_evolution, FALSE) AS allow_schema_evolution,
-                COALESCE(u.table_maintenance_enabled, p.maintenance_enabled, FALSE) AS table_maintenance_enabled,
+                    COALESCE(CAST(u.enforce_expiration AS BOOLEAN), FALSE) ELSE FALSE END AS enforce_expiration,
+                COALESCE(CAST(u.allow_schema_evolution AS BOOLEAN), FALSE) AS allow_schema_evolution,
+                COALESCE(CAST(u.table_maintenance_enabled AS BOOLEAN), p.maintenance_enabled, FALSE) AS table_maintenance_enabled,
                 COALESCE(u.table_maintenance_interval, p.maintenance_interval, 'AUTO') AS table_maintenance_interval,
-                COALESCE(u.flatten_table, FALSE) AS flatten_table,
-                COALESCE(u.flatten_inplace, TRUE) AS flatten_inplace,
-                COALESCE(u.explode_arrays, FALSE) AS explode_arrays,
+                COALESCE(CAST(u.flatten_table AS BOOLEAN), FALSE) AS flatten_table,
+                COALESCE(CAST(u.flatten_inplace AS BOOLEAN), TRUE) AS flatten_inplace,
+                COALESCE(CAST(u.explode_arrays AS BOOLEAN), FALSE) AS explode_arrays,
                 COALESCE(u.column_map, NULL) AS column_map,
                 CASE WHEN u.table_name IS NULL THEN FALSE ELSE TRUE END AS config_override,
                 'INIT' AS sync_state,
@@ -642,7 +641,7 @@ class FabricMetastore(ContextAwareBase):
                 p.object_type = u.object_type
             WHERE CASE WHEN (p.load_all=TRUE) THEN TRUE ELSE
                 CASE WHEN (u.table_name IS NULL) THEN FALSE ELSE TRUE END END = TRUE       
-                AND p.type_enabled = TRUE 
+                AND p.type_enabled = TRUE  
                 AND p.sync_id = '{cls.ID}'
         )
 
@@ -1090,4 +1089,4 @@ class FabricMetastore(ContextAwareBase):
     def create_proxy_views(cls):
         cls.create_userconfig_tables_proxy_view()        
         cls.create_userconfig_tables_cols_proxy_view()
-        cls.create_autodetect_view()  
+        cls.create_autodetect_view()    

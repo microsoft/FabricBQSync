@@ -51,3 +51,4 @@ __pycache__/
 venv/
 env
 build
+/Packages/FabricSync/FabricSync.egg-info

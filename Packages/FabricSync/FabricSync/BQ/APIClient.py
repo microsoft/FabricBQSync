@@ -1,10 +1,8 @@
-import requests
 from requests.models import Response
 import json
 import os
 from threading import Thread
 import time
-from logging import Logger
 
 from typing import (
     Dict, Tuple, Any
@@ -12,118 +10,10 @@ from typing import (
 
 from FabricSync.BQ.Utils import Util
 from FabricSync.BQ.Enum import FabricItemType
-from FabricSync.BQ.Logging import SyncLogger
+from FabricSync.BQ.Core import LoggingBase
+from FabricSync.BQ.Http import RestAPIProxy
 
-class RestAPIProxy:
-    def __init__(self, base_url, headers=None) -> None:
-        """
-        Rest API Proxy
-        Args:
-            base_url (str): Base URL
-            headers (Dict): Headers
-        """
-        self.base_url = base_url
-        self.headers = headers
-
-    def get(self, endpoint, params=None, headers=None) -> Response:
-        """
-        Gets a resource from the API
-        Args:
-            endpoint (str): API endpoint
-            params (Dict): Parameters
-            headers (Dict): Headers
-        Returns:
-            Response: Response from the API
-        """
-        if not headers:
-            headers = self.headers
-
-        response = requests.get(f"{self.base_url}/{endpoint}", params=params, headers=headers)
-        return self._handle_response(response)
-
-    def post(self, endpoint, data=None, json=None, files=None, headers=None) -> Response:
-        """
-        Posts a resource to the API
-        Args:
-            endpoint (str): API endpoint
-            data (Dict): Data
-            json (Dict): JSON
-            files (Dict): Files
-            headers (Dict): Headers
-        Returns:
-            Response: Response from the API
-        """
-        if not headers:
-            headers = self.headers
-
-        response = requests.post(f"{self.base_url}/{endpoint}", data=data, json=json, files=files, headers=headers)
-        return self._handle_response(response)
-
-    def put(self, endpoint, data=None, json=None, headers=None) -> Response:
-        """
-        Puts a resource in the API
-        Args:
-            endpoint (str): API endpoint
-            data (Dict): Data
-            json (Dict): JSON
-            headers (Dict): Headers
-        Returns:
-            Response: Response from the API
-        """
-        if not headers:
-            headers = self.headers
-
-        response = requests.put(f"{self.base_url}/{endpoint}", data=data, json=json, headers=headers)
-        return self._handle_response(response)
-    
-    def patch(self, endpoint, data=None, json=None, headers=None) -> Response:
-        """
-        Patches a resource in the API
-        Args:
-            endpoint (str): API endpoint
-            data (Dict): Data
-            json (Dict): JSON
-            headers (Dict): Headers
-        Returns:
-            Response: Response from the API
-        """
-        if not headers:
-            headers = self.headers
-
-        response = requests.patch(f"{self.base_url}/{endpoint}", data=data, json=json, headers=headers)
-        return self._handle_response(response)
-
-    def delete(self, endpoint, headers=None) -> Response:
-        """
-        Deletes a resource from the API
-        Args:
-            endpoint (str): API endpoint
-            headers (Dict): Headers
-        Returns:
-            Response: Response from the API
-        """
-        if not headers:
-            headers = self.headers
-            
-        response = requests.delete(f"{self.base_url}/{endpoint}", headers=headers)
-        return self._handle_response(response)
-
-    def _handle_response(self, response) -> Response:
-        """
-        Handles the response from the API
-        Args:
-            response (Response): Response from the API
-        Returns:
-            Response: Response from the API
-        """
-        if response.status_code in (200, 201, 202):
-            return response
-        else:
-            response.raise_for_status()
-
-class BaseFabricItem:
-    __Logger:Logger = None
-
+class BaseFabricItem(LoggingBase):
     def __init__(self, type:FabricItemType, workspace_id:str, api_token:str):
         """
         Base Fabric Item API Client
@@ -140,18 +30,6 @@ class BaseFabricItem:
         self.rest_api_proxy = RestAPIProxy(base_url="https://api.fabric.microsoft.com/v1/", headers=headers)
     
     @property
-    def Logger(self) -> Logger:
-        """
-        Returns the logger
-        Returns:
-            Logger: Logger
-        """
-        if not self.__Logger:
-            self.__Logger = SyncLogger().get_logger()
-
-        return self.__Logger
-    
-    @property
     def uri(self) -> str:
         """
         Returns the URI of the Fabric item
@@ -163,7 +41,7 @@ class BaseFabricItem:
         else:
             return f"workspaces/{self.workspace_id}/{self.type}"
     
-    def create(self, name:str, data:Dict=None) -> str:
+    def create(self, name:str, data:Dict=None, update_hook:callable = None) -> str:
         """
         Creates a Fabric item
         Args:
@@ -174,9 +52,14 @@ class BaseFabricItem:
         """
         if not data:
             data = {"displayName": name}
-        response = self.rest_api_proxy.post(endpoint=self.uri, json=data).json()
-        
-        return response["id"]
+
+        response = self.rest_api_proxy.post(endpoint=self.uri, json=data, lro_update_hook=update_hook)
+
+        try:
+            response = response.json()
+            return response["id"]
+        except Exception:
+            return None
 
     def get(self, id:str) -> str:
         """
@@ -269,7 +152,8 @@ class BaseFabricItem:
         
         return (id, is_new)
     
-    def __run_with_timeout(self, api_function:callable, id:str, result:Any, while_match:bool, timeout:int, poll_seconds:int): 
+    def __run_with_timeout(self, api_function:callable, id:str, result:Any, while_match:bool, 
+                        timeout:int, poll_seconds:int, update_hook:callable=None): 
         """
         Runs the Fabric API function with a timeout
         Args:
@@ -280,14 +164,16 @@ class BaseFabricItem:
             timeout (int): Timeout in minutes
             poll_seconds (int): Polling interval in seconds
         """       
-        thread = Thread(target=self.__poll_status, args=(api_function, id, result, while_match, poll_seconds))
+        thread = Thread(target=self.__poll_status, args=(api_function, id, result, 
+                            while_match, poll_seconds, update_hook))
         thread.start()
         thread.join(timeout*60)
         
         if thread.is_alive():
             raise TimeoutError()
 
-    def __poll_status(self, api_function:callable, id:str, result:Any, while_match:bool, poll_seconds:int):
+    def __poll_status(self, api_function:callable, id:str, result:Any, while_match:bool, 
+        poll_seconds:int, update_hook:callable):
         """
         Polls the Fabric API for the status of the Fabric item
         Args:
@@ -297,34 +183,48 @@ class BaseFabricItem:
             while_match (bool): Flag to indicate if the status should match the expected result
             poll_seconds (int): Polling interval in seconds
         """
+
+        complete = False
+
         while (True):
             state = api_function(id)
             self.Logger.debug(f"POLLING FABRIC API: {self.type} for {result} status State: {state}...")
 
             if state == result and not while_match:
+                complete = True
                 break
             elif state != result and while_match:
+                complete = True
                 break
+            
+            if update_hook:
+                update_hook(state)
 
             time.sleep(poll_seconds)
+        
+        if complete and update_hook:
+            update_hook("Completed")
 
-    def _wait_status(self, api_function:callable, id:str, result:Any, 
-                     while_match:bool=True, timeout_minutes:int = 1, poll_seconds:int = 1):
-        """
-        Waits for the status of the Fabric API to match the expected result
-        Args:
-            api_function (callable): API function to call
-            id (str): ID of the Fabric item
-            result (Any): Expected result
-            while_match (bool): Flag to indicate if the status should match the expected result
-            timeout_minutes (int): Timeout in minutes
-            poll_seconds (int): Polling interval in seconds
-        """
+    def _wait_status(self, api_function:callable, id:str, result:Any, while_match:bool=True, 
+        timeout_minutes:int = 1, poll_seconds:int = 1, raise_error = False, update_hook:callable=None) -> str:
+
         try:
-            self.__run_with_timeout(api_function, id, result, while_match, timeout_minutes, poll_seconds)
-            self.Logger.debug(f"POLLING FABRIC API: {self.type} {result} complete")
-        except TimeoutError:
-            self.Logger.debug("Timed out waiting for environment publish to complete...")
+            self.__run_with_timeout(api_function, id, result, while_match, timeout_minutes, poll_seconds, update_hook)
+            self.Logger.debug(f"{self.type} STATUS POLLING FABRIC API: {result} complete")
+
+            if not while_match:
+                state = api_function(id)
+            else:
+                state = result
+            
+            return state
+        except TimeoutError as e:
+            self.Logger.debug(f"{self.type} STATUS POLLING FABRIC API: TIMEOUT")
+
+            if raise_error:
+                raise e
+            
+            return None
 
 class FabricWorkspace(BaseFabricItem):
     def __init__(self, workspace_id:str, api_token:str):
@@ -361,11 +261,13 @@ class FabricLakehouse(BaseFabricItem):
         """
         data = {
             "displayName": name,
-            "description": f"Fabric Sync Lakehouse: {name}",
-            "creationPayload": {
-                "enableSchemas": enable_schemas
-            }
+            "description": f"Fabric Sync Lakehouse: {name}"
         }
+
+        if enable_schemas:
+            data["creationPayload"] = {
+                "enableSchemas" : enable_schemas
+                }
 
         return super().create(name, data)
 
@@ -445,14 +347,9 @@ class FabricEnvironment(BaseFabricItem):
         
         return None
     
-    def wait_for_publish(self, id) -> None:
-        """
-        Waits for the environment to be published
-        Args:
-            id (str): Environment ID
-        """
-        self._wait_status(self.get_publish_state, id, "running", 
-                          while_match=True, timeout_minutes=5, poll_seconds=15)
+    def wait_for_publish(self, id) -> str:
+        return self._wait_status(self.get_publish_state, id, "running", while_match=True, 
+                            timeout_minutes=5, poll_seconds=15, raise_error=False)
 
 class FabricOpenMirroredDatabase(BaseFabricItem):
     def __init__(self, workspace_id:str, api_token:str):
@@ -541,14 +438,9 @@ class FabricOpenMirroredDatabase(BaseFabricItem):
         response = self._do_fabric_item_command(id, "getMirroringStatus")
         return response.json()["status"]
     
-    def wait_for_mirroring(self, id:str, status:str) -> None:
-        """
-        Waits for the mirroring operation to complete
-        Args:
-            id (str): Mirrored Database ID
-        """
-        self._wait_status(self.get_mirroring_status, id, status, 
-                          while_match=True, timeout_minutes=1, poll_seconds=5)
+    def wait_for_mirroring(self, id:str, status:str) -> str:
+        return self._wait_status(self.get_mirroring_status, id, status, while_match=True, 
+                            timeout_minutes=1, poll_seconds=5)
 
 class FabricNotebook(BaseFabricItem):
     def __init__(self, workspace_id:str, api_token:str):
@@ -560,7 +452,7 @@ class FabricNotebook(BaseFabricItem):
         """
         super().__init__(FabricItemType.NOTEBOOK, workspace_id, api_token)
 
-    def upload(self, name:str, data:str) -> str:
+    def create(self, name:str, data:str, update_hook:callable) -> Response:
         """
         Uploads a notebook to Fabric
         Args:
@@ -585,7 +477,7 @@ class FabricNotebook(BaseFabricItem):
             }
         }
 
-        return self.rest_api_proxy.post(endpoint=self.uri, json=notebook_payload)
+        return super().create(name, notebook_payload, update_hook)
         
 class FabricAPI:
     def __init__(self, workspace_id:str, api_token:str):

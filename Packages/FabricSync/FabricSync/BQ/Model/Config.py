@@ -14,7 +14,6 @@ from FabricSync.BQ.Enum import (
     BigQueryObjectType, SyncLoadStrategy, SyncLoadType, SyncScheduleType, 
     ObjectFilterType
 )
-from FabricSync.BQ.Exceptions import SyncConfigurationError
 
 class SyncBaseModel(BaseModel):
     model_config = ConfigDict(
@@ -29,6 +28,24 @@ class SyncBaseModel(BaseModel):
     
     def model_dump_json(self, **kwargs) -> dict[str, Any]:
         return super().model_dump_json(by_alias=True, **kwargs)
+    
+    def is_field_set(self, item) -> bool:
+        return item in self.model_fields_set
+
+    def get_field_default(self, item) -> Any:
+        meta = self._get_field_meta(item)
+        
+        if not meta:
+            return None
+        
+        return meta.default
+
+    def _get_field_meta(self, item):
+        for _, meta in self.model_fields.items():
+            if meta.alias == item:
+                return meta
+        
+        return None
     
     def __getattr__(self, item):
         for field, meta in self.model_fields.items():
@@ -48,9 +65,6 @@ class ConfigLogging(SyncBaseModel):
     Telemetry:Optional[bool] = Field(alias="telemetry", default=True)
     TelemetryEndPoint:Optional[str]=Field(alias="telemetry_endpoint", default="prdbqsyncinsights")
     LogPath:Optional[str] = Field(alias="log_path", default="/lakehouse/default/Files/BQ_Sync_Process/logs/fabric_sync.log")
-
-class ConfigGCPDataset(SyncBaseModel):
-    Dataset:Optional[str] = Field(alias="dataset", default=None)
 
 class ConfigIntelligentMaintenance(SyncBaseModel):
     RowsChanged:Optional[float] = Field(alias="rows_changed", default=float(0.10))
@@ -75,7 +89,6 @@ class ConfigAsync(SyncBaseModel):
     Parallelism:Optional[int] = Field(alias="parallelism", default=10)
 
 class ConfigLakehouseTarget(SyncBaseModel):
-    TargetType:Optional[FabricDestinationType] = Field(alias="target_type", default=None)
     LakehouseID:Optional[str] = Field(alias="lakehouse_id", default=None)
     Lakehouse:Optional[str] = Field(alias="lakehouse", default=None)
     Schema:Optional[str] = Field(alias="schema", default=None)
@@ -138,7 +151,9 @@ class ConfigFabric(SyncBaseModel):
         else:
             return table
 
-
+class ConfigGCPDataset(SyncBaseModel):
+    Dataset:Optional[str] = Field(alias="dataset", default=None)
+    
 class ConfigGCPProject(SyncBaseModel):
     ProjectID:Optional[str] = Field(alias="project_id", default=None)
     Datasets:Optional[List[ConfigGCPDataset]] = Field(alias="datasets", default=[ConfigGCPDataset()])
@@ -179,9 +194,6 @@ class ConfigGCP(SyncBaseModel):
 class ConfigTableColumn(SyncBaseModel):
     Column:Optional[str] = Field(alias="column", default=None)
 
-class ConfigWatermarkColumn(SyncBaseModel):
-    Column:Optional[str] = Field(alias="column", default=None)
-
 class TypedColumn(SyncBaseModel):
     Name:Optional[str] = Field(alias="name", default=None)
     Type:Optional[str] = Field(alias="type", default=None)
@@ -207,7 +219,7 @@ class ConfigBQTableDefault (SyncBaseModel):
     Priority:Optional[int] = Field(alias="priority", default=100)
     LoadStrategy:Optional[SyncLoadStrategy] = Field(alias="load_strategy", default=None)
     LoadType:Optional[SyncLoadType] = Field(alias="load_type", default=None)
-    Interval:Optional[SyncScheduleType] = Field(alias="interval", default=None)
+    Interval:Optional[SyncScheduleType] = Field(alias="interval", default=SyncScheduleType.AUTO)
     Enabled:Optional[bool] = Field(alias="enabled", default=True)
     EnforceExpiration:Optional[bool] = Field(alias="enforce_expiration", default=False)
     AllowSchemaEvolution:Optional[bool] = Field(alias="allow_schema_evolution", default=False)
@@ -217,7 +229,23 @@ class ConfigBQTableDefault (SyncBaseModel):
 
     TableMaintenance:Optional[ConfigTableMaintenance] = Field(alias="table_maintenance", default=ConfigTableMaintenance())
 
-class ConfigBQTable (ConfigBQTableDefault):
+class ConfigBQTable (SyncBaseModel):
+    ProjectID:Optional[str] = Field(alias="project_id", default=None)
+    Dataset:Optional[str] = Field(alias="dataset", default=None)
+    ObjectType:Optional[BigQueryObjectType] = Field(alias="object_type", default=None)
+    Priority:Optional[int] = Field(alias="priority", default=None)
+    LoadStrategy:Optional[SyncLoadStrategy] = Field(alias="load_strategy", default=None)
+    LoadType:Optional[SyncLoadType] = Field(alias="load_type", default=None)
+    Interval:Optional[SyncScheduleType] = Field(alias="interval", default=None)
+    Enabled:Optional[bool] = Field(alias="enabled", default=None)
+    EnforceExpiration:Optional[bool] = Field(alias="enforce_expiration", default=None)
+    AllowSchemaEvolution:Optional[bool] = Field(alias="allow_schema_evolution", default=None)
+    FlattenTable:Optional[bool] = Field(alias="flatten_table", default=None)
+    FlattenInPlace:Optional[bool] = Field(alias="flatten_inplace", default=None)
+    ExplodeArrays:Optional[bool] = Field(alias="explode_arrays", default=None)
+
+    TableMaintenance:Optional[ConfigTableMaintenance] = Field(alias="table_maintenance", default=ConfigTableMaintenance())
+
     TableName:Optional[str] = Field(alias="table_name", default=None)
     SourceQuery:Optional[str] = Field(alias="source_query", default=None)
     Predicate:Optional[str] = Field(alias="predicate", default=None)
@@ -240,12 +268,6 @@ class ConfigBQTable (ConfigBQTableDefault):
             keys = [k.Column for k in self.Keys]
         
         return keys
-    
-    def apply_defaults(self, cfg:list[str], default:ConfigBQTableDefault) -> None:
-        for td in vars(default).items():
-            alias = self._get_alias(td[0])
-            if alias and alias not in cfg:
-                setattr(self, td[0], td[1])
 
 class ConfigOptimization(SyncBaseModel):
     UseApproximateRowCounts:Optional[bool] = Field(alias="use_approximate_row_counts", default=True)
@@ -333,30 +355,24 @@ class ConfigDataset(SyncBaseModel):
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
 
-    def apply_defaults(self, json_data) -> None:
+    def apply_defaults(self) -> None:
         if self.Fabric.EnableSchemas:
             if not self.Fabric.TargetLakehouseSchema:
                 self.Fabric.TargetLakehouseSchema = self.GCP.DefaultDataset
 
-        self.__apply_table_defaults(json_data)
+        self.__apply_table_defaults()
 
 
-    def __apply_table_defaults(self, json_data) -> None:
-        if self.TableDefaults and self.Tables:
-            for t in self.Tables: 
-                tbl_cfg = self.__get_table_json_config(json_data, t.TableName)
-
-                if tbl_cfg:
-                    t.apply_defaults(list(tbl_cfg.keys()), self.TableDefaults)
-    
-    def __get_table_json_config(self, json_data, tbl_nm:str) -> str:
-        if "tables" in json_data:
-            t = [t for t in json_data["tables"] if t["table_name"]==tbl_nm]
-
-            if t:
-                return t[0]
-        
-        return None
+    def __apply_table_defaults(self) -> None:
+        if self.is_field_set("TableDefaults") and self.is_field_set("Tables"):
+            for table in self.Tables:
+                default_fields = [f for f in table.model_fields 
+                    if not table.is_field_set(f) 
+                        and f in self.TableDefaults.model_fields 
+                        and self.TableDefaults.is_field_set(f)]
+                
+                for f in default_fields:
+                    setattr(table, f, getattr(self.TableDefaults, f))
         
     @classmethod
     def from_json(cls, path:str, with_defaults:bool=True) -> 'ConfigDataset':
@@ -365,7 +381,7 @@ class ConfigDataset(SyncBaseModel):
         config = ConfigDataset(**data)      
          
         if with_defaults:     
-            config.apply_defaults(data)
+            config.apply_defaults()
 
         return config
 
@@ -376,11 +392,11 @@ class ConfigDataset(SyncBaseModel):
                 data = json.load(f)
             return data
         else:
-            raise SyncConfigurationError(f"Configuration file not found ({path})")
+            raise Exception(f"Configuration file not found ({path})")
     
     def to_json(self, path:str) -> None:
         try:
             with open(path, 'w', encoding="utf-8") as f:
                 json.dump(self.model_dump(exclude_none=True, exclude_unset=True), f)
         except IOError as e:
-            raise SyncConfigurationError(f"Unable to save Configuration file to path ({path}): {e}")
+            raise Exception(f"Unable to save Configuration file to path ({path}): {e}")

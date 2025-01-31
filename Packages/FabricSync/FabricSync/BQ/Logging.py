@@ -10,14 +10,12 @@ from pyspark.sql import SparkSession
 from FabricSync.BQ.Enum import (
     SyncLogLevel, SyncStatus
 )
+from FabricSync.BQ.Enum import SparkSessionConfig
 from FabricSync.BQ.Constants import SyncConstants
-from FabricSync.BQ.Utils import Util
-from FabricSync.BQ.APIClient import RestAPIProxy
-from FabricSync.BQ.Core import (
-    ContextAwareBase, Session
-)
+from FabricSync.BQ.Http import RestAPIProxy
+from FabricSync.Meta import Version
 
-class SyncLogger(ContextAwareBase):
+class SyncLogger:
     def __init__(self) -> None:
         self.loop = None
 
@@ -29,7 +27,7 @@ class SyncLogger(ContextAwareBase):
     def _initialize_logger(self) -> None:
         self.logger = logging.getLogger(SyncConstants.FABRIC_LOG_NAME)        
         
-        LOG_LEVEL = (Util.assign_enum_name(SyncLogLevel, self.LogLevel)).value
+        LOG_LEVEL = (SyncLogLevel[self.LogLevel]).value
 
         logging.addLevelName(SyncLogLevel.SYNC_STATUS.value, "SYNC_STATUS")
         logging.addLevelName(SyncLogLevel.TELEMETRY.value, "TELEMETRY")
@@ -61,7 +59,7 @@ class SyncLogger(ContextAwareBase):
         if (self.logger.isEnabledFor(SyncLogLevel.TELEMETRY.value)):
             if self.Telemetry:
                 message["correlation_id"] = self.ApplicationID
-                message["sync_version"] = str(Session.CurrentVersion)
+                message["sync_version"] = str(Version.CurrentVersion)
 
                 self.send_telemetry(json.dumps(message))
                 #self.logger._log(SyncLogLevel.SYNC_STATUS.value, f"Telemetry: {message}", args, **kwargs)
@@ -104,7 +102,31 @@ class SyncLogger(ContextAwareBase):
                 logger.removeHandler(handler)
                 handler.close()
             logger.setLevel(logging.NOTSET)
-            logger.propagate = True  
+            logger.propagate = True
+    
+    @property
+    def Context(self) -> SparkSession:
+        return SparkSession.getActiveSession()
+
+    @property
+    def ApplicationID(self) -> str:
+        return self.Context.conf.get(f"{SyncConstants.SPARK_CONF_PREFIX}.{SparkSessionConfig.APPLICATION_ID.value}")
+    
+    @property
+    def TelemetryEndpoint(self) -> str:
+        return self.Context.conf.get(f"{SyncConstants.SPARK_CONF_PREFIX}.{SparkSessionConfig.TELEMETRY_ENDPOINT.value}")
+    
+    @property
+    def LogLevel(self) -> str:
+        return self.Context.conf.get(f"{SyncConstants.SPARK_CONF_PREFIX}.{SparkSessionConfig.LOG_LEVEL.value}")
+    
+    @property
+    def LogPath(self) -> str:
+        return self.Context.conf.get(f"{SyncConstants.SPARK_CONF_PREFIX}.{SparkSessionConfig.LOG_PATH.value}")
+    
+    @property
+    def Telemetry(self) -> str:
+        return self.Context.conf.get(f"{SyncConstants.SPARK_CONF_PREFIX}.{SparkSessionConfig.LOG_TELEMETRY.value}")
 
 class SyncLogHandler(logging.Handler):
     def __init__(self, name, target_handler) -> None:

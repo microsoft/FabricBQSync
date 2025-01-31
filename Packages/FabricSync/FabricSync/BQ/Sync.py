@@ -1,16 +1,15 @@
 from packaging import version as pv
 
-from FabricSync.BQ.SyncCore import SyncBase
+from FabricSync.BQ.SyncCore import (
+    SyncBase, Session
+)
 from FabricSync.BQ.Auth import (
     Credentials, TokenProvider
 )
 from FabricSync.BQ.Enum import (
     SyncScheduleType, FabricDestinationType
 )
-from FabricSync.BQ.SyncUtils import (
-    SyncUtil, SyncTimer
-)
-from FabricSync.BQ.Core import Session
+from FabricSync.BQ.Utils import SyncTimer
 from FabricSync.BQ.Loader import BQScheduleLoader
 from FabricSync.BQ.Metadata import BQMetadataLoader
 from FabricSync.BQ.Schedule import BQScheduler
@@ -20,7 +19,8 @@ from FabricSync.BQ.Expiration import BQDataRetention
 from FabricSync.BQ.Lakehouse import LakehouseCatalog
 from FabricSync.BQ.Metastore import FabricMetastore
 from FabricSync.BQ.APIClient import FabricAPI
-from FabricSync.Meta import Version
+from FabricSync.BQ.ModelValidation import UserConfigurationValidation
+from FabricSync.BQ.Model.Config import ConfigDataset
 
 class BQSync(SyncBase):
     def __init__(self, config_path:str, credentials:Credentials):
@@ -40,12 +40,20 @@ class BQSync(SyncBase):
         try:
             super().__init__(config_path, credentials)
 
-            self.__validate_app_versions(config_path)
+            if self.__requires_update():
+                self.__update_sync_runtime(config_path)
 
-            self.MetadataLoader = BQMetadataLoader()
-            self.Scheduler = BQScheduler()
-            self.Loader = BQScheduleLoader()
-            self.DataRetention = BQDataRetention()
+            config_validation = UserConfigurationValidation.validate(self.UserConfig)
+
+            if not config_validation:
+                self.MetadataLoader = BQMetadataLoader()
+                self.Scheduler = BQScheduler()
+                self.Loader = BQScheduleLoader()
+                self.DataRetention = BQDataRetention()
+            else:
+                self.Logger.sync_status(f"Failed to load BQ Sync with User Configuration errors:\r\n" +
+                    "\r\n".join(config_validation))
+
         except SyncConfigurationError as e:
             print(f"FAILED TO INITIALIZE FABRIC SYNC\r\n{e}")
 
@@ -54,34 +62,49 @@ class BQSync(SyncBase):
 
     def __validate_user_config(self, config_path:str):
         self.Logger.sync_status(f"Updating Fabric Sync user configuration...")
-        self.UserConfig.Version = str(Session.CurrentVersion)
-        self.UserConfig.Fabric.WorkspaceID = self.Context.conf.get("trident.workspace.id")
+        config = ConfigDataset.from_json(config_path, False)
+        config.Version = str(Session.CurrentVersion)
+        config.Fabric.WorkspaceID = self.Context.conf.get("trident.workspace.id")
 
-        fabric_api = FabricAPI(self.UserConfig.Fabric.WorkspaceID, 
+        #Override any configured workspace and use the current context
+        workspace_id = Session.Context.conf.get("trident.workspace.id")
+
+        fabric_api = FabricAPI(workspace_id, 
             self.TokenProvider.get_token(TokenProvider.FABRIC_TOKEN_SCOPE))    
 
-        self.UserConfig.Fabric.WorkspaceName = fabric_api.Workspace.get_name(self.UserConfig.Fabric.WorkspaceID)
-        self.UserConfig.Fabric.MetadataLakehouseID = fabric_api.Lakehouse.get_id(self.UserConfig.Fabric.MetadataLakehouse)
-        self.UserConfig.Fabric.TargetLakehouseID = fabric_api.Lakehouse.get_id(self.UserConfig.Fabric.TargetLakehouse)
+        config.Fabric.WorkspaceName = fabric_api.Workspace.get_name(workspace_id)
 
-        if not self.UserConfig.Fabric.TargetType:
-            self.UserConfig.Fabric.TargetType = FabricDestinationType.LAKEHOUSE
+        if self.UserConfig.Fabric.MetadataLakehouse:
+            config.Fabric.MetadataLakehouseID = fabric_api.Lakehouse.get_id(self.UserConfig.Fabric.MetadataLakehouse)
+
+        if not config.Fabric.TargetType:
+            config.Fabric.TargetType = FabricDestinationType.LAKEHOUSE
         
-        self.UserConfig.to_json(config_path, self.TokenProvider.get_token(TokenProvider.FABRIC_TOKEN_SCOPE))
-        self.load_user_config()
+        if self.UserConfig.Fabric.TargetLakehouse:
+            if config.Fabric.TargetType  == FabricDestinationType.LAKEHOUSE:
+                config.Fabric.TargetLakehouseID = fabric_api.Lakehouse.get_id(self.UserConfig.Fabric.TargetLakehouse)
+            else:
+                config.Fabric.TargetLakehouseID = fabric_api.OpenMirroredDatabase.get_id(self.UserConfig.Fabric.TargetLakehouse)
 
-    def __validate_app_versions(self, config_path:str):
+        config.to_json(config_path)
+        self.init_sync_session(config_path)
+
+    def __update_sync_runtime(self, config_path:str):
+            self.Logger.sync_status(f"Upgrading Fabric Sync metastore to v{str(Session.CurrentVersion)}...")
+            LakehouseCatalog.upgrade_metastore(self.UserConfig.Fabric.get_metadata_lakehouse())
+            
+            self.__validate_user_config(config_path)
+        
+    def __requires_update(self) -> bool:
         runtime_version = self.Version
         current_version = Session.CurrentVersion
 
         if current_version > runtime_version:
             self.Logger.sync_status(f"Fabric Sync Config Version: " +
                 f"{str(runtime_version)} - Runtime Version: {str(current_version)}")
-
-            self.Logger.sync_status(f"Upgrading Fabric Sync metastore to v{str(current_version)}...")
-            LakehouseCatalog.upgrade_metastore(self.UserConfig.Fabric.MetadataLakehouse)
-            
-            self.__validate_user_config(config_path)
+            return True
+        else:
+            return False
 
     def sync_metadata(self):
         """

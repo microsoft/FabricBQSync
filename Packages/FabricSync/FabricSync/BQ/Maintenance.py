@@ -25,9 +25,8 @@ from FabricSync.BQ.Auth import (
     Credentials
 )
 from FabricSync.BQ.Model.Maintenance import MaintenanceSchedule
-from FabricSync.BQ.SyncUtils import (
-    SyncUtil, SyncTimer
-)
+from FabricSync.BQ.SyncUtils import SyncUtil
+from FabricSync.BQ.Utils import SyncTimer
 from FabricSync.BQ.Constants import SyncConstants
 from FabricSync.BQ.Logging import Telemetry
 from FabricSync.BQ.Metastore import FabricMetastore

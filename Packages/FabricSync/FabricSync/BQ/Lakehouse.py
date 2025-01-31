@@ -117,7 +117,7 @@ class LakehouseCatalog(ContextAwareBase):
         cmds = []
         table_schema = "dbo" if enable_schemas else None
 
-        current_tables = cls.__rename_metastore_tables(metadata_lakehouse, table_schema)
+        current_tables = cls.__rename_metastore_tables(metadata_lakehouse)
 
         for tbl in SyncConstants.get_metadata_tables():
             schema = getattr(FabricMetastoreSchema(), tbl)
@@ -132,7 +132,7 @@ class LakehouseCatalog(ContextAwareBase):
             SparkProcessor.process_command_list(cmds)
     
     @classmethod
-    def __rename_metastore_tables(cls, metadata_lakehouse:str, table_schema:str) -> List[str]:
+    def __rename_metastore_tables(cls, metadata_lakehouse:str) -> List[str]:
         """
         Renames the metadata tables in the specified lakehouse to remove the 'bq_' prefix.
         Args:
@@ -143,7 +143,7 @@ class LakehouseCatalog(ContextAwareBase):
         current_tables = cls.get_catalog_tables(metadata_lakehouse)  
 
         renamed_tables = [
-            f"ALTER TABLE {metadata_lakehouse}.{cls.resolve_table_name(table_schema, t)} RENAME TO " +
+            f"ALTER TABLE {metadata_lakehouse}.{t} RENAME TO " +
                 f"{metadata_lakehouse}.{t.replace('bq_', '')}"                
                     for t in current_tables if "bq_" in t]
 

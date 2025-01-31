@@ -3,19 +3,17 @@ import os
 import json
 
 from pathlib import Path
-
 from typing import List, Literal, Tuple
-from logging import Logger
-
 from py4j.java_gateway import JavaObject
 from pyspark.sql import SparkSession
+from builtins import max as b
 
 from FabricSync.BQ.Model.Core import HDFSFile
 from FabricSync.BQ.Enum import FileSystemType
 from FabricSync.BQ.Lakehouse import LakehouseCatalog
-from FabricSync.BQ.Logging import SyncLogger
+from FabricSync.BQ.Core import LoggingBase
 
-class HadoopFileSystem:
+class HadoopFileSystem(LoggingBase):
     __FS_PATTERN = r"(s3\w*://|hdfs://|abfss://|dbfs://|file://|file:/).(.*)"
 
     def __init__(self: "HadoopFileSystem", pattern: str) -> None:
@@ -255,7 +253,6 @@ class OpenMirrorLandingZone(OneLakeFileSystem):
     """
     _lz_path = "Files/LandingZone/"
     _lz_table_schema_format = "{}.schema"
-    __logger = None
 
     def __init__(self, workspace_id:str, lakehouse_id:str, table_schema:str, table:str) -> None:
         """
@@ -270,18 +267,6 @@ class OpenMirrorLandingZone(OneLakeFileSystem):
 
         self._table_schema = table_schema
         self._table = table
-    
-    @property
-    def Logger(self) -> Logger:
-        """
-        Gets the logger for the OpenMirror landing zone.
-        Returns:
-            Logger: The logger for the OpenMirror landing zone.
-        """
-        if not self.__logger:
-            self.__logger = SyncLogger().get_logger()
-        
-        return self.__logger
 
     @property
     def _lz_relative_path(self) -> str:

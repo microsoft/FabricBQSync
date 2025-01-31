@@ -13,13 +13,10 @@ from typing import (
 from threading import Lock
 from delta.tables import DeltaTable
 
-from FabricSync.BQ.Utils import DeltaTableMaintenance
-from FabricSync.BQ.Model.Config import ConfigDataset
+from FabricSync.BQ.Utils import SyncTimer
 from FabricSync.BQ.Model.Schedule import SyncSchedule
 from FabricSync.BQ.Model.Core import BQQueryModel
-from FabricSync.BQ.SyncUtils import (
-    SyncUtil, SyncTimer
-)
+from FabricSync.BQ.SyncUtils import SyncUtil
 from FabricSync.BQ.Logging import Telemetry
 from FabricSync.BQ.Metastore import FabricMetastore
 from FabricSync.BQ.Mirror import OpenMirror
@@ -33,6 +30,7 @@ from FabricSync.BQ.SyncCore import ConfigBase
 from FabricSync.BQ.Enum import (
     SyncLoadType, SyncLoadStrategy, SyncStatus, FabricDestinationType, BQDataType, BQPartitionType
 )
+from FabricSync.BQ.Core import DeltaTableMaintenance
 
 class BQScheduleLoader(ConfigBase):    
     def __init__(self) -> None:
@@ -424,9 +422,9 @@ class BQScheduleLoader(ConfigBase):
             if task_part == schedule.TotalTableTasks:
                 self.Logger.sync_status(f"LAKEHOUSE - {schedule.LakehouseTableName} - Rows: {total_row_count}", verbose=True)
 
-                if total_row_count > 0:
+                if total_row_count == 0:
                     self.Logger.sync_status(f"LAKEHOUSE - Empty Sync - {schedule.LakehouseTableName}", verbose=True)
-                    schedule.IsEmpty = True
+                    schedule.IsEmpty = False
         else:
             schedule,df_bq = self.__merge_table(schedule, schedule.LakehouseTableName, df_bq)
 
@@ -638,7 +636,7 @@ class BQScheduleLoader(ConfigBase):
             msg = f"{msg}${schedule.PartitionId}"
 
         if not status:
-            self.Logger.sync_status(f"{msg}...")
+            self.Logger.sync_status(f"{msg}...", verbose=True)
         else:
             self.Logger.sync_status(f"FINISHED {msg} {status}...")
 
@@ -743,7 +741,6 @@ class BQScheduleLoader(ConfigBase):
 
                 for tbl in tbls:
                     if tbl.LakehouseTableName not in dedup:
-                        print(f"Dropping mirrored database tables: {tbl.LakehouseTableName}")
                         self.Logger.sync_status(f"Dropping mirrored database tables: {tbl.LakehouseTableName}", verbose=True)
                         OpenMirror.drop_mirrored_table(tbl)
                         dedup.append(tbl.LakehouseTableName)             
@@ -764,14 +761,10 @@ class BQScheduleLoader(ConfigBase):
         Returns:
             bool: True if the schedule is successfully processed; False otherwise.
         """
-        self.Logger.sync_status(f"Async schedule started with parallelism of {self.UserConfig.Async.Parallelism}...", verbose=True)
-        self.TableLocks = ThreadSafeDict()
-
-        if self.UserConfig.Fabric.TargetType==FabricDestinationType.MIRRORED_DATABASE:  
-            self.Logger.sync_status(f"Stopping Mirroring on {self.UserConfig.Fabric.TargetLakehouse} Database...") 
-            OpenMirror.stop_mirror(self.UserConfig.Fabric.TargetLakehouseID, self.FabricAPIToken)            
+        self.Logger.sync_status(f"Async schedule started with parallelism of {self.UserConfig.Async.Parallelism}...", verbose=True)         
 
         processor = QueueProcessor(num_threads=num_threads)
+        sync_stopped_mirror = False
 
         with SyncTimer() as t:
             schedule = FabricMetastore.get_schedule(schedule_type)
@@ -780,6 +773,13 @@ class BQScheduleLoader(ConfigBase):
             load_grps = [i["priority"] for i in schedule.select("priority").distinct().orderBy("priority").collect()]
 
             if load_grps:
+                self.TableLocks = ThreadSafeDict()
+
+                if self.UserConfig.Fabric.TargetType==FabricDestinationType.MIRRORED_DATABASE:  
+                    self.Logger.sync_status(f"Stopping Mirroring on {self.UserConfig.Fabric.TargetLakehouse} Database...") 
+                    OpenMirror.stop_mirror(self.UserConfig.Fabric.TargetLakehouseID, self.FabricAPIToken)   
+                    sync_stopped_mirror= True
+
                 for grp in load_grps:
                     self.MultiWrite = ThreadSafeDict()
 
@@ -823,7 +823,7 @@ class BQScheduleLoader(ConfigBase):
                 self.Logger.sync_status("Processing Sync Telemetry...", verbose=True)
                 FabricMetastore.process_load_group_telemetry(schedule_type)
        
-        if self.UserConfig.Fabric.TargetType==FabricDestinationType.MIRRORED_DATABASE:  
+        if self.UserConfig.Fabric.TargetType==FabricDestinationType.MIRRORED_DATABASE and sync_stopped_mirror:  
             self.Logger.sync_status(f"Starting Mirroring on {self.UserConfig.Fabric.TargetLakehouse} Database...") 
             OpenMirror.start_mirror(self.UserConfig.Fabric.TargetLakehouseID, self.FabricAPIToken)
 

@@ -6,12 +6,12 @@ from typing import (
     Any, List, Tuple
 )
 from queue import PriorityQueue
-from logging import Logger
 
 from FabricSync.BQ.Constants import SyncConstants
-from FabricSync.BQ.Core import ContextAwareBase
+from FabricSync.BQ.Core import (
+    ContextAwareBase, LoggingBase
+)
 from FabricSync.BQ.Model.Core import CommandSet
-from FabricSync.BQ.Logging import SyncLogger
 
 class ThreadSafeList():
     def __init__(self) -> None:
@@ -172,9 +172,7 @@ class ThreadSafeDict:
         with self._lock:
             return len(self._dict)
             
-class QueueProcessor:
-    __logger:Logger = None
-
+class QueueProcessor(LoggingBase):
     def __init__(self, num_threads) -> None:
         """
         Initializes a new instance of the QueueProcessor class.
@@ -185,18 +183,6 @@ class QueueProcessor:
         self.workQueue = PriorityQueue()
         self.exceptions = ThreadSafeList()
         self.exception_hook = None
-
-    @property
-    def Logger(self):
-        """
-        Gets the logger.
-        Returns:
-            Logger: The logger.
-        """
-        if self.__logger is None:
-            self.__logger = SyncLogger().get_logger()
-        
-        return self.__logger
 
     def process(self, sync_function, exception_hook=None) -> None:
         """

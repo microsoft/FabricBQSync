@@ -340,7 +340,6 @@ class SyncLoadType(str, BaseEnum):
     OVERWRITE = "OVERWRITE"
     APPEND = "APPEND"
     MERGE = "MERGE"
-    OPEN_MIRROR = "OPEN_MIRROR"
 
 class SyncStatus(str, BaseEnum):
     """

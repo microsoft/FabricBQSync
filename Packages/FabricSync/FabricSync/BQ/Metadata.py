@@ -1,11 +1,9 @@
 from typing import Tuple
-from FabricSync.BQ.Model.Config import (
-    ConfigBase
+from FabricSync.BQ.SyncCore import ConfigBase
+from FabricSync.BQ.Threading import QueueProcessor
+from FabricSync.BQ.Model.Core import (
+    InformationSchemaModel, BQQueryModel, PredicateType
 )
-from FabricSync.BQ.Core import (
-    PredicateType, QueueProcessor
-)
-from FabricSync.BQ.Model.Core import InformationSchemaModel, BQQueryModel
 from FabricSync.BQ.Enum import (
     SyncLoadType, BigQueryObjectType, SchemaView,BigQueryAPI
 )
@@ -15,9 +13,8 @@ from FabricSync.BQ.Exceptions import (
 from FabricSync.BQ.Constants import SyncConstants
 from FabricSync.BQ.Logging import Telemetry
 from FabricSync.BQ.Metastore import FabricMetastore
-from FabricSync.BQ.SyncUtils import (
-    SyncUtil, SyncTimer
-)
+from FabricSync.BQ.SyncUtils import SyncUtil
+from FabricSync.BQ.Utils import SyncTimer
 
 class BQMetadataLoader(ConfigBase):
     """

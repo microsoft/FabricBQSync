@@ -1,6 +1,5 @@
-
 from FabricSync.BQ.Metastore import FabricMetastore
-from FabricSync.BQ.Model.Config import ConfigBase
+from FabricSync.BQ.SyncCore import ConfigBase
 from FabricSync.BQ.Logging import Telemetry
 from FabricSync.BQ.Enum import SyncScheduleType
 

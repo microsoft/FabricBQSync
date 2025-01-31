@@ -1,5 +1,0 @@
-pydantic>=2.10.6
-pygithub>=2.5.0
-mlflow-skinny>=2.20.0
-google-cloud-bigquery>=3.29.0
-db-dtypes>=1.4.0

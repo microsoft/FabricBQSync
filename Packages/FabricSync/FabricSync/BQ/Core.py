@@ -1,14 +1,16 @@
-from pyspark.sql import SparkSession
+from pyspark.sql import (
+    SparkSession, DataFrame, Row
+)
+import logging
 from logging import Logger
 from packaging import version as pv
+from delta.tables import DeltaTable
 from typing import Any
+from pyspark.sql.functions import col
 
-from FabricSync.Meta import Version
 from FabricSync.BQ.Constants import SyncConstants
-from FabricSync.BQ.Logging import SyncLogger
-from FabricSync.BQ.Model.Config import ConfigDataset
 from FabricSync.BQ.Enum import SparkSessionConfig
-from FabricSync.BQ.Constants import SyncConstants
+from FabricSync.Meta import Version
 
 class classproperty(property):
     def __get__(self, owner_self, owner_cls):
@@ -21,7 +23,7 @@ class classproperty(property):
             The value of the property.
         """
         return self.fget(owner_cls)
-    
+
 class Session:
     _context:SparkSession = None
 
@@ -65,7 +67,8 @@ class Session:
         Returns:
             None
         """
-        cls.Context.conf.set(cls._get_setting_key(key), str(value))
+        if value != None:
+            cls.Context.conf.set(cls._get_setting_key(key), str(value))
     
     @classmethod
     def _get_setting_key(cls, key:SparkSessionConfig) -> str:
@@ -79,48 +82,10 @@ class Session:
         return f"{SyncConstants.SPARK_CONF_PREFIX}.{key.value}"
     
     @classmethod
-    def initialize_spark_session(cls, 
-            config:ConfigDataset, user_config_path:str=None, fabric_api_token:str=None) -> None:
-        """
-        Initialize a Spark session and configure Spark settings based on the provided config.
-        This function retrieves the current SparkSession (or creates one if it does not exist)
-        and updates various configuration settings such as Delta Lake properties, partition
-        overwrite mode, and custom application/logging metadata.
-        Parameters:
-            config (ConfigDataset): Contains application, logging, and telemetry settings.
-            user_config_path (str): The path to the user configuration file.
-            fabric_api_token (str): The Fabric API token.
-        Returns:
-            None
-        """
-        cls.Context.conf.set("spark.databricks.delta.vacuum.parallelDelete.enabled", "true")
-        cls.Context.conf.set("spark.databricks.delta.retentionDurationCheck.enabled", "false")
-        cls.Context.conf.set("spark.databricks.delta.properties.defaults.minWriterVersion", "7")
-        cls.Context.conf.set("spark.databricks.delta.properties.defaults.minReaderVersion", "3")
-        cls.Context.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
+    def print_session_settings(cls):        
+        [print(f"{cls._get_setting_key(k)}: {cls.get_setting(k)}") for k in list(SparkSessionConfig)]
 
-        cls.set_setting(SparkSessionConfig.APPLICATION_ID, config.ApplicationID)
-        cls.set_setting(SparkSessionConfig.NAME, config.ID)
-        cls.set_setting(SparkSessionConfig.LOG_PATH, config.Logging.LogPath)
-        cls.set_setting(SparkSessionConfig.LOG_LEVEL, config.Logging.LogLevel)
-        cls.set_setting(SparkSessionConfig.LOG_TELEMETRY, config.Logging.Telemetry)
-        cls.set_setting(SparkSessionConfig.TELEMETRY_ENDPOINT, f"{config.Logging.TelemetryEndPoint}.azurewebsites.net")
-
-        cls.set_setting(SparkSessionConfig.WORKSPACE_ID, config.Fabric.WorkspaceID)
-        cls.set_setting(SparkSessionConfig.VERSION, "0.0.0" if not config.Version else config.Version)
-        cls.set_setting(SparkSessionConfig.METADATA_LAKEHOUSE, config.Fabric.MetadataLakehouse)
-        cls.set_setting(SparkSessionConfig.METADATA_LAKEHOUSE_ID , config.Fabric.MetadataLakehouseID)
-        cls.set_setting(SparkSessionConfig.TARGET_LAKEHOUSE, config.Fabric.TargetLakehouse)
-        cls.set_setting(SparkSessionConfig.TARGET_LAKEHOUSE_ID, config.Fabric.TargetLakehouseID)
-        cls.set_setting(SparkSessionConfig.SCHEMA_ENABLED, config.Fabric.EnableSchemas)
-
-        if fabric_api_token:
-            cls.set_setting(SparkSessionConfig.FABRIC_API_TOKEN, fabric_api_token)
-
-        if user_config_path:
-            cls.set_setting(SparkSessionConfig.USER_CONFIG_PATH, user_config_path)
-
-class ContextAwareBase():
+class LoggingBase:
     _Logger:Logger = None
     
     @classproperty
@@ -131,10 +96,11 @@ class ContextAwareBase():
             Logger: The logger.
         """
         if cls._Logger is None:
-            cls._Logger = SyncLogger().get_logger()
+            cls._Logger = logging.getLogger(SyncConstants.FABRIC_LOG_NAME)
         
         return cls._Logger
     
+class ContextAwareBase(LoggingBase):    
     @classproperty
     def Context(cls) -> SparkSession:
         return Session.Context
@@ -218,7 +184,10 @@ class ContextAwareBase():
         Returns:
             str: The metadata lakehouse.
         """
-        return Session.get_setting(SparkSessionConfig.METADATA_LAKEHOUSE)
+        if Session.get_setting(SparkSessionConfig.METADATA_LAKEHOUSE):
+            return Session.get_setting(SparkSessionConfig.METADATA_LAKEHOUSE)
+        else:
+            return Session.Context.conf.get("spark.hadoop.trident.lakehouse.name")
     
     @classproperty
     def MetadataLakehouseID(cls) -> str:
@@ -227,7 +196,10 @@ class ContextAwareBase():
         Returns:
             str: The metadata lakehouse ID.
         """
-        return Session.get_setting(SparkSessionConfig.METADATA_LAKEHOUSE_ID)
+        if Session.get_setting(SparkSessionConfig.METADATA_LAKEHOUSE_ID):
+            return Session.get_setting(SparkSessionConfig.METADATA_LAKEHOUSE_ID)
+        else:
+            return Session.Context.conf.get("spark.hadoop.trident.lakehouse.id")
     
     @classproperty
     def MetadataLakehouseSchema(cls) -> str:
@@ -291,3 +263,84 @@ class ContextAwareBase():
             bool: The enable schemas.
         """
         return Session.get_setting(SparkSessionConfig.SCHEMA_ENABLED).lower() == "true"
+
+class DeltaTableMaintenance(ContextAwareBase):
+    __detail:Row = None
+
+    def __init__(self, table_name:str, table_path:str=None) -> None:
+        """
+        Initializes a new instance of the DeltaTableMaintenance class.
+        Args:
+            table_name (str): The table name.
+            table_path (str): The table path.
+        """
+        self.TableName = table_name
+
+        if table_path:
+            self.DeltaTable = DeltaTable.forPath(self.Context, table_path)
+        else:
+            self.DeltaTable = DeltaTable.forName(self.Context, table_name)
+    
+    @property
+    def CurrentTableVersion(self) -> int:
+        """
+        Gets the current table version.
+        Returns:
+            int: The current table version.
+        """
+        history = self.DeltaTable.history() \
+            .select(max(col("version")).alias("delta_version"))
+
+        return [r[0] for r in history.collect()][0]
+
+    @property
+    def Detail(self) -> DataFrame:
+        """
+        Gets the table detail.
+        Returns:
+            DataFrame: The table detail.
+        """
+        if not self.__detail:
+            self.__detail = self.DeltaTable.detail().collect()[0]
+        
+        return self.__detail
+    
+    def drop_partition(self, partition_filter:str) -> None:
+        """
+        Drops the partition.
+        Args:
+            partition_filter (str): The partition filter.
+        """
+        self.DeltaTable.delete(partition_filter)
+
+    def drop_table(self) -> None:
+        """
+        Drops the table.
+        """
+        self.Context.sql(f"DROP TABLE IF EXISTS {self.TableName}")
+    
+    def optimize_and_vacuum(self, partition_filter:str = None) -> None:
+        """
+        Optimizes and vacuums the table.
+        Args:
+            partition_filter (str): The partition filter.
+        """
+        self.optimize(partition_filter)
+        self.vacuum()
+    
+    def optimize(self, partition_filter:str = None) -> None:
+        """
+        Optimizes the table.
+        Args:
+            partition_filter (str): The partition filter.
+        """
+        if partition_filter:
+            self.DeltaTable.optimize().where(partition_filter).executeCompaction()
+        else:
+            self.DeltaTable.optimize().executeCompaction()
+
+    def vacuum(self) -> None:
+        """
+        Vacuums the table.
+        """
+        self.DeltaTable.vacuum(0)
