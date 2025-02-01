@@ -82,7 +82,7 @@ class ConfigMaintenance(SyncBaseModel):
 
 class ConfigTableMaintenance(SyncBaseModel):
     Enabled:Optional[bool] = Field(alias="enabled", default=False)
-    Interval:Optional[MaintenanceInterval] = Field(alias="interval", default=None)
+    Interval:Optional[MaintenanceInterval] = Field(alias="interval", default=MaintenanceInterval.AUTO)
                 
 class ConfigAsync(SyncBaseModel):
     Enabled:Optional[bool] = Field(alias="enabled", default=True)

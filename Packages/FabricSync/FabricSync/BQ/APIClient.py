@@ -304,33 +304,21 @@ class FabricEnvironment(BaseFabricItem):
         """
         self._do_fabric_item_command(id, "staging/publish")
     
-    def stage_file(self, id:str, file_path:str) -> str:
+    def stage_library(self, id:str, file:str, file_buffer) -> Response:
         """
         Stages a file to the environment
         Args:
             id (str): Environment ID
-            file_path (str): File path
+            file (str): File Name
+            file_buffer (byte[]): File Buffer
         Returns:
             str: Response from the Fabric API
         """
-        headers = {'Authorization': f"Bearer {self.token}"}
-        uri = f'workspaces/{self.workspace_id}/environments/{id}/staging/libraries'
-
-        with open(file_path,'rb') as file:        
-            files = {'file':(os.path.basename(file_path),file)}
-            response = self.rest_api_proxy.post(endpoint=uri, files=files, headers=headers)
+        headers = {'Authorization': f'Bearer {self.token}'}
+        files = {'file':(file,file_buffer)}
+        response = self.rest_api_proxy.post(endpoint=f"{self.uri}/{id}/staging/libraries", files=files, headers=headers)
     
         return response
-
-    def stage_libraries(self, id:str, files) -> None:
-        """
-        Stages files to the environment
-        Args:
-            id (str): Environment ID
-            files (list): List of file paths
-        """
-        for file in files:
-            self.stage_file(id, file)
     
     def get_publish_state(self, id) -> str:
         """
@@ -451,6 +439,9 @@ class FabricNotebook(BaseFabricItem):
             api_token (str): API Token
         """
         super().__init__(FabricItemType.NOTEBOOK, workspace_id, api_token)
+    
+    def get_definition(self, id:str) -> str:
+        return self._do_fabric_item_command(id, "getDefinition?format=ipynb")
 
     def create(self, name:str, data:str, update_hook:callable) -> Response:
         """
@@ -488,4 +479,4 @@ class FabricAPI:
         self.Lakehouse = FabricLakehouse(workspace_id, api_token)
         self.Environment = FabricEnvironment(workspace_id, api_token)
         self.OpenMirroredDatabase = FabricOpenMirroredDatabase(workspace_id, api_token)
-        self.Notebook = FabricNotebook(workspace_id, api_token)  
+        self.Notebook = FabricNotebook(workspace_id, api_token)

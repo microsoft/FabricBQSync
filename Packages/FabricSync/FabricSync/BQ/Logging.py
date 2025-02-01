@@ -1,10 +1,13 @@
 import logging
-import logging.handlers
+from logging import Logger
 import inspect
 import json
 import functools
 import asyncio
 import threading
+import os
+from uuid import uuid4
+import py4j
 from pyspark.sql import SparkSession
 
 from FabricSync.BQ.Enum import (
@@ -16,16 +19,15 @@ from FabricSync.BQ.Http import RestAPIProxy
 from FabricSync.Meta import Version
 
 class SyncLogger:
+    __default_log_path = "/lakehouse/default/Files/Fabric_Sync_Process/logs/fabric_sync.log"
+    __context:SparkSession = None
+    __logger:Logger = None
+    
     def __init__(self) -> None:
         self.loop = None
-
-        if SyncConstants.FABRIC_LOG_NAME not in logging.Logger.manager.loggerDict:
-            self._initialize_logger()
-        else:
-            self.logger = logging.getLogger(SyncConstants.FABRIC_LOG_NAME)
     
     def _initialize_logger(self) -> None:
-        self.logger = logging.getLogger(SyncConstants.FABRIC_LOG_NAME)        
+        self.__logger = logging.getLogger(SyncConstants.FABRIC_LOG_NAME)        
         
         LOG_LEVEL = (SyncLogLevel[self.LogLevel]).value
 
@@ -40,29 +42,31 @@ class SyncLogger:
 
         SYNC_LOG_HANDLER_NAME = "SYNC_LOG_HANDLER"
 
+        os.makedirs(os.path.dirname(self.LogPath), exist_ok=True)   
+
         handler = logging.handlers.TimedRotatingFileHandler(self.LogPath, 
             when="d", interval=1)
         handler.setFormatter(CustomJsonFormatter())
         handler.name = "SYNC_FILE_LOG_HANDLER"
         handler.setLevel(LOG_LEVEL)
 
-        self.logger.addHandler(SyncLogHandler(SYNC_LOG_HANDLER_NAME, handler))
+        self.__logger.addHandler(SyncLogHandler(SYNC_LOG_HANDLER_NAME, handler))
 
-        self.logger.setLevel(LOG_LEVEL)        
+        self.__logger.setLevel(LOG_LEVEL)        
 
     def sync_status(self, message, verbose:bool=False, *args, **kwargs) -> None:
-        if self.logger.isEnabledFor(SyncLogLevel.SYNC_STATUS.value):
-            if not verbose or (verbose and self.logger.isEnabledFor(logging.DEBUG)):
-                self.logger._log(SyncLogLevel.SYNC_STATUS.value, message, args, **kwargs)
+        if self.__logger.isEnabledFor(SyncLogLevel.SYNC_STATUS.value):
+            if not verbose or (verbose and self.__logger.isEnabledFor(logging.DEBUG)):
+                self.__logger._log(SyncLogLevel.SYNC_STATUS.value, message, args, **kwargs)
 
     def telemetry(self, message, *args, **kwargs) -> None:
-        if (self.logger.isEnabledFor(SyncLogLevel.TELEMETRY.value)):
+        if (self.__logger.isEnabledFor(SyncLogLevel.TELEMETRY.value)):
             if self.Telemetry:
                 message["correlation_id"] = self.ApplicationID
                 message["sync_version"] = str(Version.CurrentVersion)
 
                 self.send_telemetry(json.dumps(message))
-                #self.logger._log(SyncLogLevel.SYNC_STATUS.value, f"Telemetry: {message}", args, **kwargs)
+                #self.__logger._log(SyncLogLevel.SYNC_STATUS.value, f"Telemetry: {message}", args, **kwargs)
 
     def send_telemetry(self, payload) -> None:
         ct = threading.current_thread()
@@ -82,15 +86,29 @@ class SyncLogger:
             bound = functools.partial(api_proxy.post, endpoint="telemetry", data=payload)
             await self.loop.run_in_executor(None, bound)
         except Exception as e:
-            self.logger.error("Telemetry Send Failure")
+            self.__logger.error("Telemetry Send Failure")
 
     def record_factory(self, *args, **kwargs) -> logging.LogRecord:
         record = self.base_factory(*args, **kwargs)
         record.correlation_id = self.ApplicationID
         return record
 
-    def get_logger(self) -> logging.Logger:
-        return self.logger
+    @classmethod
+    def getLogger(cls) -> logging.Logger:
+        if not cls.__logger:
+            cls.__logger = SyncLogger().Logger
+        
+        return cls.__logger
+
+    @property
+    def Logger(self) -> logging.Logger:
+        if not self.__logger:
+            if SyncConstants.FABRIC_LOG_NAME not in logging.Logger.manager.loggerDict:
+                self._initialize_logger()
+            else:
+                self.__logger = logging.getLogger(SyncConstants.FABRIC_LOG_NAME)
+
+        return self.__logger
 
     def reset_logging() -> None:
         loggers = [logging.getLogger(name) for name in logging.root.manager.loggerDict]
@@ -106,11 +124,17 @@ class SyncLogger:
     
     @property
     def Context(self) -> SparkSession:
-        return SparkSession.getActiveSession()
+        if not self.__context:
+            self.__context = SparkSession.getActiveSession()
+
+        return self.__context
 
     @property
     def ApplicationID(self) -> str:
-        return self.Context.conf.get(f"{SyncConstants.SPARK_CONF_PREFIX}.{SparkSessionConfig.APPLICATION_ID.value}")
+        try:
+            return self.Context.conf.get(f"{SyncConstants.SPARK_CONF_PREFIX}.{SparkSessionConfig.APPLICATION_ID.value}")
+        except py4j.protocol.Py4JJavaError:
+            return str(uuid4())
     
     @property
     def TelemetryEndpoint(self) -> str:
@@ -118,15 +142,24 @@ class SyncLogger:
     
     @property
     def LogLevel(self) -> str:
-        return self.Context.conf.get(f"{SyncConstants.SPARK_CONF_PREFIX}.{SparkSessionConfig.LOG_LEVEL.value}")
+        try:
+            return self.Context.conf.get(f"{SyncConstants.SPARK_CONF_PREFIX}.{SparkSessionConfig.LOG_LEVEL.value}")
+        except py4j.protocol.Py4JJavaError:
+            return SyncLogLevel.SYNC_STATUS.name
     
     @property
     def LogPath(self) -> str:
-        return self.Context.conf.get(f"{SyncConstants.SPARK_CONF_PREFIX}.{SparkSessionConfig.LOG_PATH.value}")
+        try:
+            return self.Context.conf.get(f"{SyncConstants.SPARK_CONF_PREFIX}.{SparkSessionConfig.LOG_PATH.value}")
+        except py4j.protocol.Py4JJavaError:
+            return self.__default_log_path
     
     @property
     def Telemetry(self) -> str:
-        return self.Context.conf.get(f"{SyncConstants.SPARK_CONF_PREFIX}.{SparkSessionConfig.LOG_TELEMETRY.value}")
+        try:
+            return self.Context.conf.get(f"{SyncConstants.SPARK_CONF_PREFIX}.{SparkSessionConfig.LOG_TELEMETRY.value}")
+        except py4j.protocol.Py4JJavaError:
+            return False
 
 class SyncLogHandler(logging.Handler):
     def __init__(self, name, target_handler) -> None:

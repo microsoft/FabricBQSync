@@ -2,10 +2,14 @@ import requests
 from requests import RequestException
 from requests.models import Response
 import time
+import logging
+from logging import Logger
 
-from FabricSync.BQ.Core import LoggingBase
+from FabricSync.BQ.Constants import SyncConstants
 
-class RestAPIProxy(LoggingBase):
+class RestAPIProxy:
+    __logger:Logger = None
+
     def __init__(self, base_url, headers=None) -> None:
         """
         Rest API Proxy
@@ -16,6 +20,13 @@ class RestAPIProxy(LoggingBase):
         self.base_url = base_url
         self.headers = headers
 
+    @property
+    def Logger(self) -> Logger:
+        if not self.__logger:
+            self.__logger = logging.getLogger(SyncConstants.FABRIC_LOG_NAME)
+
+        return self.__logger
+    
     def get(self, endpoint, params=None, headers=None) -> Response:
         """
         Gets a resource from the API

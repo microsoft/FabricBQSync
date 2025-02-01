@@ -1,16 +1,20 @@
 from pyspark.sql import (
     SparkSession, DataFrame, Row
 )
-import logging
+from pyspark.sql.functions import (
+    max, col
+)
 from logging import Logger
 from packaging import version as pv
 from delta.tables import DeltaTable
 from typing import Any
 from pyspark.sql.functions import col
+import py4j
 
 from FabricSync.BQ.Constants import SyncConstants
 from FabricSync.BQ.Enum import SparkSessionConfig
 from FabricSync.Meta import Version
+from FabricSync.BQ.Logging import SyncLogger
 
 class classproperty(property):
     def __get__(self, owner_self, owner_cls):
@@ -54,8 +58,8 @@ class Session:
         """
         try:
             return cls.Context.conf.get(cls._get_setting_key(key))
-        except Exception:
-            return ""
+        except py4j.protocol.Py4JJavaError:
+            return None
     
     @classmethod
     def set_setting(cls, key:SparkSessionConfig, value:Any) -> None:
@@ -67,9 +71,13 @@ class Session:
         Returns:
             None
         """
-        if value != None:
-            cls.Context.conf.set(cls._get_setting_key(key), str(value))
+        cls.set_spark_conf(cls._get_setting_key(key), str(value))
     
+    @classmethod
+    def set_spark_conf(cls, key:str, value:str) -> None:
+        if value != None:
+            cls.Context.conf.set(key, value)
+
     @classmethod
     def _get_setting_key(cls, key:SparkSessionConfig) -> str:
         """
@@ -86,7 +94,7 @@ class Session:
         [print(f"{cls._get_setting_key(k)}: {cls.get_setting(k)}") for k in list(SparkSessionConfig)]
 
 class LoggingBase:
-    _Logger:Logger = None
+    __logger:Logger = None
     
     @classproperty
     def Logger(cls):
@@ -95,10 +103,10 @@ class LoggingBase:
         Returns:
             Logger: The logger.
         """
-        if cls._Logger is None:
-            cls._Logger = logging.getLogger(SyncConstants.FABRIC_LOG_NAME)
+        if cls.__logger is None:
+            cls.__logger = SyncLogger.getLogger()
         
-        return cls._Logger
+        return cls.__logger
     
 class ContextAwareBase(LoggingBase):    
     @classproperty
@@ -187,7 +195,7 @@ class ContextAwareBase(LoggingBase):
         if Session.get_setting(SparkSessionConfig.METADATA_LAKEHOUSE):
             return Session.get_setting(SparkSessionConfig.METADATA_LAKEHOUSE)
         else:
-            return Session.Context.conf.get("spark.hadoop.trident.lakehouse.name")
+            return Session.Context.conf.get("trident.lakehouse.name")
     
     @classproperty
     def MetadataLakehouseID(cls) -> str:
@@ -199,7 +207,7 @@ class ContextAwareBase(LoggingBase):
         if Session.get_setting(SparkSessionConfig.METADATA_LAKEHOUSE_ID):
             return Session.get_setting(SparkSessionConfig.METADATA_LAKEHOUSE_ID)
         else:
-            return Session.Context.conf.get("spark.hadoop.trident.lakehouse.id")
+            return Session.Context.conf.get("trident.lakehouse.id")
     
     @classproperty
     def MetadataLakehouseSchema(cls) -> str:

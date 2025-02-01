@@ -7,6 +7,7 @@ from typing import List, Literal, Tuple
 from py4j.java_gateway import JavaObject
 from pyspark.sql import SparkSession
 from builtins import max as b
+from io import BytesIO
 
 from FabricSync.BQ.Model.Core import HDFSFile
 from FabricSync.BQ.Enum import FileSystemType
@@ -22,67 +23,68 @@ class HadoopFileSystem(LoggingBase):
         Args:
             pattern (str): The Hadoop file system pattern to use.
         """
-        spark = SparkSession.getActiveSession()
-        hadoop, hdfs, fs_type = self.__get_hdfs(spark, pattern)
+        context = SparkSession.getActiveSession()
+        hadoop, hdfs, fs_type = self.__get_hdfs(context, pattern)
         self._hdfs = hdfs
         self._fs_type = fs_type
         self._hadoop = hadoop
-        self._jvm = spark.sparkContext._jvm
+        self._jvm = context.sparkContext._jvm
 
-    def write(self: "HadoopFileSystem", path: str, data: str, mode: Literal["a", "w"]) -> None:
-        """
-        Writes data to a file in the Hadoop file system.
-        Args:            
-            path (str): The path to the file to write.
-            data (str): The data to write to the file.
-            mode (Literal["a", "w"]): The write mode to use. Can be either "a" for append or "w" for write.
-        Raises:
-            Exception: If the file cannot be written.
-        """
-        if mode == "w":
+    def write(self: "HadoopFileSystem", path: str, data, mode: Literal["a", "w"] = "w") -> None:
+        if not isinstance(data, (str, bytes, bytearray, BytesIO)):
+            raise TypeError("data must be a str, bytes-like object or Bytes IO base is required, not '{}'".format(type(data).__name__))
+
+        if isinstance(data, str):
+            buffer = BytesIO(data.encode("utf-8"))
+        elif isinstance(data, (bytes, bytearray)):
+            buffer = BytesIO(data)
+        else:
+            buffer = data
+
+        if mode.lower() == "w":
             # org.apache.hadoop.fs.FileSystem.create(Path f, boolean overwrite)
             output_stream = self._hdfs.create(self._hadoop.fs.Path(path), True)  # type: ignore
-        elif mode == "a":
+        elif mode.lower() == "a":
             # org.apache.hadoop.fs.FileSystem.append(Path f)
             output_stream = self._hdfs.append(self._hadoop.fs.Path(path))  # type: ignore
 
         # org.apache.hadoop.fs.FSDataOutputStream
         try:
-            for b in data.encode("utf-8"):
-                output_stream.write(b)
+            with buffer as b:
+                b.seek(0)
+
+                while True:
+                    chunk = b.read(1024 * 1024)
+
+                    if not chunk:
+                        break
+
+                    output_stream.write(chunk)                
+
             output_stream.flush()
             output_stream.close()
         except Exception as e:
             output_stream.close()
             raise e
-
-    def read(self: "HadoopFileSystem", path: str) -> str:
-        """
-        Reads data from a file in the Hadoop file system.
-        Args:
-            path (str): The path to the file to read.
-        Returns:
-            str: The data read from the file.
-        Raises:
-            Exception: If the file cannot be read.
-        """
-        res = []
+    
+    def read(self: "HadoopFileSystem", path: str) -> BytesIO:
         # org.apache.hadoop.fs.FileSystem.open
         in_stream = self._hdfs.open(self._hadoop.fs.Path(path))  # type: ignore
 
         # open returns us org.apache.hadoop.fs.FSDataInputStream
-        try:
-            while True:
-                if in_stream.available() > 0:
-                    res.append(in_stream.readByte())
-                else:
-                    in_stream.close()
-                    break
-        except Exception as e:
-            in_stream.close()
-            raise e
+        buffer = bytearray()
 
-        return bytes(res).decode("utf-8")
+        try:
+            byte = in_stream.read()
+            while byte != -1:
+                buffer.append(byte)
+                byte = in_stream.read()
+        except Exception as e:
+            raise e
+        finally:
+            in_stream.close()
+
+        return bytes(buffer)
 
     def delete(self, target:str, recurse:bool=False) -> bool:
         """
@@ -137,15 +139,7 @@ class HadoopFileSystem(LoggingBase):
 
         return res
     
-    def __get_hdfs(self, spark: SparkSession, pattern: str) -> Tuple[JavaObject, JavaObject, FileSystemType]:
-        """
-        Gets the Hadoop file system object for the specified pattern.
-        Args:
-            spark (SparkSession): The Spark session to use.
-            pattern (str): The Hadoop file system pattern to use.
-        Returns:
-            Tuple[JavaObject, JavaObject, FileSystemType]: A tuple containing the Hadoop file system object, the Hadoop file system object, and the file system type.
-        """
+    def __get_hdfs(self, context: SparkSession, pattern: str) -> Tuple[JavaObject, JavaObject, FileSystemType]:
         match = re.match(self.__FS_PATTERN, pattern)
 
         if match is None:
@@ -156,8 +150,8 @@ class HadoopFileSystem(LoggingBase):
         fs_type = FileSystemType._from_pattern(match.groups()[0])
 
         # Java is accessible in runtime only and it is impossible to infer types here
-        hadoop = spark.sparkContext._jvm.org.apache.hadoop  # type: ignore
-        hadoop_conf = spark._jsc.hadoopConfiguration()  # type: ignore
+        hadoop = context.sparkContext._jvm.org.apache.hadoop  # type: ignore
+        hadoop_conf = context._jsc.hadoopConfiguration()  # type: ignore
         uri = hadoop.fs.Path(pattern).toUri()  # type: ignore
         hdfs = hadoop.fs.FileSystem.get(uri, hadoop_conf)  # type: ignore
 
@@ -202,17 +196,14 @@ class OneLakeFileSystem(HadoopFileSystem):
         """
         return os.path.join(self._base_uri, path)
 
-    def write(self, path: str, data: str, mode: Literal["a", "w"]) -> None:
-        """
-        Writes data to a file in the OneLake file system.
-        Args:
-            path (str): The path to the file to write.
-            data (str): The data to write to the file.
-            mode (Literal["a", "w"]): The write mode to use. Can be either "a" for append or "w" for write.
-        """
+    def write(self, path: str, data, mode: Literal["a", "w"]="w") -> None:
         super().write(self._get_onelake_path(path), data, mode)
     
-    def read(self, path: str) -> str:
+    def read_string(self: "HadoopFileSystem", path: str) -> BytesIO:
+        buffer = self.read(self._get_onelake_path(path))
+        return buffer.getvalue().decode("utf-8")
+    
+    def read(self, path: str) -> BytesIO:
         """
         Reads data from a file in the OneLake file system.
         Args:
@@ -304,26 +295,12 @@ class OpenMirrorLandingZone(OneLakeFileSystem):
         """
         return os.path.join(self._lz_uri, path)
 
-    def write(self, path: str, data: str, mode: Literal["a", "w"]) -> None:
-        """
-        Writes data to a file in the OpenMirror landing zone.
-        Args:
-            path (str): The path to the file to write.
-            data (str): The data to write to the file.
-            mode (Literal["a", "w"]): The write mode to use. Can be either "a" for append or "w" for write.
-        """
+    def write(self, path: str, data, mode: Literal["a", "w"] = "w") -> None:
         self.Logger.debug(f"Landing Zone Operation - WRITE ({mode}) - " +
                           f"{LakehouseCatalog.resolve_table_name(self._table_schema, self._table)} - {path}")
         super().write(path, data, mode)
     
-    def read(self, path: str) -> str:
-        """
-        Reads data from a file in the OpenMirror landing zone.
-        Args:
-            path (str): The path to the file to read.
-        Returns:
-            str: The data read from the file.
-        """
+    def read(self, path: str) -> BytesIO:
         self.Logger.debug(f"Landing Zone Operation - READ - " +
                           f"{LakehouseCatalog.resolve_table_name(self._table_schema, self._table)} - {path}")
         return super().read(path)

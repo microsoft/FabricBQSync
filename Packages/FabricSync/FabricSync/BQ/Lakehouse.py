@@ -71,32 +71,13 @@ class LakehouseCatalog(ContextAwareBase):
             cls.optimize_sync_metastore()
     
     @classmethod
-    def create_metastore_tables(cls, enable_schemas:bool = False) -> None:
-        """
-        Creates the required metadata tables in the Spark metastore using the defined schemas.
-        Args:
-            enable_schemas (bool): A flag indicating whether to use schemas in the table names.
-        Returns:
-            None
-        """
-        table_schema = "dbo" if enable_schemas else None
-
+    def create_metastore_tables(cls, table_path:str) -> None:
+        print(table_path)
         for tbl in SyncConstants.get_metadata_tables():
             schema = getattr(FabricMetastoreSchema(), tbl)
-            LakehouseCatalog.create_metastore_table_from_schema(table_schema, tbl, schema)
-            
-    @classmethod
-    def create_metastore_table_from_schema(cls, table_schema:str, table_name:str, schema:StructType) -> None:
-        """
-        Creates an empty table in the Spark metastore using the given schema.
-        Args:
-            table_name (str): The name of the metastore table to create.
-            schema (pyspark.sql.types.StructType): The schema defining the table structure.
-        Returns:
-            None
-        """
-        df = cls.Context.createDataFrame(data=cls.Context.sparkContext.emptyRDD(),schema=schema)
-        df.write.mode("OVERWRITE").saveAsTable(f"{cls.resolve_table_name(table_schema, table_name)}")
+            df = cls.Context.createDataFrame(data=cls.Context.sparkContext.emptyRDD(),schema=schema)
+            df.write.mode("OVERWRITE").format("delta").save(f"{table_path}/{tbl}")
+        
 
     @classmethod
     def upgrade_metastore(cls, metadata_lakehouse:str, enable_schemas:bool = False) -> None:
@@ -126,7 +107,9 @@ class LakehouseCatalog(ContextAwareBase):
                 df = cls.Context.table(tbl)
                 cmds.append(cls.__sync_schema(table_schema, tbl,  df.schema, schema))
             else:
-                cls.create_metastore_table_from_schema(table_schema, tbl, schema)
+                cls.create_metastore_table_from_schema(metadata_lakehouse, table_schema, tbl, schema)
+                df = cls.Context.createDataFrame(data=cls.Context.sparkContext.emptyRDD(),schema=schema)
+                df.write.mode("OVERWRITE").saveAsTable(cls.resolve_table_name(schema, tbl))
 
         if cmds:
             SparkProcessor.process_command_list(cmds)
@@ -154,15 +137,7 @@ class LakehouseCatalog(ContextAwareBase):
 
     @classmethod
     def resolve_table_name(cls, table_schema:str, table_name:str) -> str:
-        """
-        Resolves the table name to use in SQL commands based on the schema and table name.
-        Args:
-            table_name (str): The name of the table to update.
-            table_schema (str): The schema of the table to update.
-        Returns:
-            str: The resolved table name to use in SQL commands.
-        """
-        return table_name if not table_schema else f"{table_schema}.{table_name}"
+        return f"{table_name}" if not table_schema else f"{table_schema}.{table_name}"
                                                                  
     @classmethod
     def __sync_schema(cls, table_schema:str, table_name:str, source_schema:StructType, target_schema:StructType) -> List[str]:

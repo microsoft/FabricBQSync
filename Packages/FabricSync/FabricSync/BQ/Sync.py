@@ -51,6 +51,7 @@ class BQSync(SyncBase):
                 self.Loader = BQScheduleLoader()
                 self.DataRetention = BQDataRetention()
             else:
+                self.UserConfig = None
                 self.Logger.sync_status(f"Failed to load BQ Sync with User Configuration errors:\r\n" +
                     "\r\n".join(config_validation))
 
@@ -58,6 +59,9 @@ class BQSync(SyncBase):
             print(f"FAILED TO INITIALIZE FABRIC SYNC\r\n{e}")
 
     def update_user_config_for_current(self):
+        if not self._is_runtime_ready():
+            return
+            
         self.__validate_user_config(self.UserConfigPath)
 
     def __validate_user_config(self, config_path:str):
@@ -106,6 +110,13 @@ class BQSync(SyncBase):
         else:
             return False
 
+    def _is_runtime_ready(self) -> bool:
+        if not self.UserConfig:
+            self.Logger.sync_status("ERROR: Fabric Sync User Configuration must be loaded first. Please reload and try again.")
+            return False
+        else:
+            return True
+
     def sync_metadata(self):
         """
         Synchronizes metadata in the BQ environment.
@@ -114,7 +125,10 @@ class BQSync(SyncBase):
         detection of configuration settings.
         Raises:
             SyncBaseError: If a metadata update operation fails.
-        """    
+        """
+        if not self._is_runtime_ready():
+            return
+
         try:
             self.MetadataLoader.sync_metadata()
 
@@ -133,6 +147,8 @@ class BQSync(SyncBase):
         Raises:
             SyncBaseError: If any errors occur during metadata autodetection.
         """
+        if not self._is_runtime_ready():
+            return
 
         try:
             if self.UserConfig.Autodetect:
@@ -152,6 +168,8 @@ class BQSync(SyncBase):
         Raises:
             SyncBaseError: If there is a failure during metadata synchronization or schedule creation.
         """
+        if not self._is_runtime_ready():
+            return
 
         try:
             if sync_metadata:
@@ -169,6 +187,8 @@ class BQSync(SyncBase):
         and then invokes the SyncUtil utility to perform the actual
         optimization on the sync metadata metastore.
         """
+        if not self._is_runtime_ready():
+            return
 
         self.Logger.sync_status("Optimizing Sync Metadata Metastore...", verbose=True)
         LakehouseCatalog.optimize_sync_metastore()
@@ -184,6 +204,8 @@ class BQSync(SyncBase):
         Raises:
             SyncBaseError: If a synchronization-related error is encountered.
         """
+        if not self._is_runtime_ready():
+            return
 
         try:
             if build_schedule:

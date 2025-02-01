@@ -636,7 +636,7 @@ class BQScheduleLoader(ConfigBase):
             msg = f"{msg}${schedule.PartitionId}"
 
         if not status:
-            self.Logger.sync_status(f"{msg}...", verbose=True)
+            self.Logger.sync_status(f"{msg}...")
         else:
             self.Logger.sync_status(f"FINISHED {msg} {status}...")
 

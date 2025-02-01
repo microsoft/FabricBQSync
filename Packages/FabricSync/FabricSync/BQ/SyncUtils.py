@@ -3,7 +3,7 @@ from pyspark.sql import (
 )
 from pyspark.sql.functions import (
     to_date, to_timestamp, date_format, explode, try_to_number, col, lit,
-    count
+    count, max
 )
 from datetime import (
     datetime, date
@@ -14,12 +14,14 @@ from typing import (
 import warnings
 
 from FabricSync.BQ.Model.Config import (
-    ConfigObjectFilter, MappedColumn
+    ConfigDataset, ConfigObjectFilter, MappedColumn
 )
-from FabricSync.BQ.Core import ContextAwareBase
+from FabricSync.BQ.Core import (
+    ContextAwareBase, Session
+)
 from FabricSync.BQ.Enum import (
     ObjectFilterType, SupportedTypeConversion, BQPartitionType, CalendarInterval,
-    SyncLoadType, SyncLoadStrategy
+    SyncLoadType, SyncLoadStrategy, SparkSessionConfig
 )
 from FabricSync.BQ.Model.Schedule import SyncSchedule
 from FabricSync.BQ.Warnings import SyncUnsupportedConfigurationWarning
@@ -27,6 +29,51 @@ from FabricSync.BQ.Metastore import FabricMetastore
 from FabricSync.BQ.Exceptions import SyncConfigurationError
 
 class SyncUtil(ContextAwareBase):
+    @classmethod
+    def configure_context(cls, user_config:ConfigDataset, gcp_credential:str=None, 
+                                    config_path:str=None, token:str=None) -> None:
+        """
+        Initialize a Spark session and configure Spark settings based on the provided config.
+        This function retrieves the current SparkSession (or creates one if it does not exist)
+        and updates various configuration settings such as Delta Lake properties, partition
+        overwrite mode, and custom application/logging metadata.
+        Parameters:
+            config (ConfigDataset): Contains application, logging, and telemetry settings.
+            user_config_path (str): The path to the user configuration file.
+            fabric_api_token (str): The Fabric API token.
+        Returns:
+            None
+        """
+        Session.set_spark_conf("spark.databricks.delta.vacuum.parallelDelete.enabled", "true")
+        Session.set_spark_conf("spark.databricks.delta.retentionDurationCheck.enabled", "false")
+        Session.set_spark_conf("spark.databricks.delta.properties.defaults.minWriterVersion", "7")
+        Session.set_spark_conf("spark.databricks.delta.properties.defaults.minReaderVersion", "3")
+        Session.set_spark_conf("spark.sql.sources.partitionOverwriteMode", "dynamic")
+
+        if gcp_credential:
+            Session.set_spark_conf("credentials", gcp_credential)
+
+        Session.set_setting(SparkSessionConfig.APPLICATION_ID, user_config.ApplicationID)
+        Session.set_setting(SparkSessionConfig.NAME, user_config.ID)
+        Session.set_setting(SparkSessionConfig.LOG_PATH, user_config.Logging.LogPath)
+        Session.set_setting(SparkSessionConfig.LOG_LEVEL, user_config.Logging.LogLevel)
+        Session.set_setting(SparkSessionConfig.LOG_TELEMETRY, user_config.Logging.Telemetry)
+        Session.set_setting(SparkSessionConfig.TELEMETRY_ENDPOINT, f"{user_config.Logging.TelemetryEndPoint}.azurewebsites.net")
+
+        Session.set_setting(SparkSessionConfig.WORKSPACE_ID, user_config.Fabric.WorkspaceID)
+        Session.set_setting(SparkSessionConfig.VERSION, "0.0.0" if not user_config.Version else user_config.Version)
+        Session.set_setting(SparkSessionConfig.METADATA_LAKEHOUSE, user_config.Fabric.MetadataLakehouse)
+        Session.set_setting(SparkSessionConfig.METADATA_LAKEHOUSE_ID , user_config.Fabric.MetadataLakehouseID)
+        Session.set_setting(SparkSessionConfig.TARGET_LAKEHOUSE, user_config.Fabric.TargetLakehouse)
+        Session.set_setting(SparkSessionConfig.TARGET_LAKEHOUSE_ID, user_config.Fabric.TargetLakehouseID)
+        Session.set_setting(SparkSessionConfig.SCHEMA_ENABLED, user_config.Fabric.EnableSchemas)
+
+        if config_path:
+            Session.set_setting(SparkSessionConfig.USER_CONFIG_PATH, config_path)
+
+        if token:
+            Session.set_setting(SparkSessionConfig.FABRIC_API_TOKEN, token)
+
     @classmethod
     def build_filter_predicate(cls, filter:ConfigObjectFilter) -> str:
         """

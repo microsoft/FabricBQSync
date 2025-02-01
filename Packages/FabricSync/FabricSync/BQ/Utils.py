@@ -2,7 +2,9 @@ import base64 as b64
 import time
 import os
 import requests
-import urllib.request
+from io import (
+    BytesIO, StringIO
+)
 from pyspark.sql.types import StructType
 from contextlib import ContextDecorator
 from pyspark.sql import DataFrame
@@ -56,13 +58,23 @@ class SyncTimer(ContextDecorator):
         
 class Util():
     @staticmethod
+    def read_file_to_buffer(path:str) -> BytesIO:
+        buffer = BytesIO()
+
+        with open(path, 'rb') as f:
+            buffer = BytesIO(f.read())  
+
+        return buffer
+    
+    @staticmethod
     def read_file_to_string(path:str) -> str:
-        contents = ""
+        buffer = StringIO()
 
-        with open(path, 'r') as f:
-            contents = f.readlines()  
-
-        return contents
+        with buffer:
+            with open(path, 'r') as f:
+                buffer.write(f.read())
+            
+            return buffer.getvalue()
 
     @staticmethod
     def download_file(url:str, path:str):
@@ -75,13 +87,32 @@ class Util():
                         f.write(chunk)
 
     @staticmethod
-    def download_encoded_to_string(url:str) -> str:
-        contents = ""
+    def download_file_to_buffer(url:str):
+        buffer = BytesIO()
+        response = requests.get(url, stream=True)
 
-        for data in urllib.request.urlopen(url):
-            contents += data.decode('utf-8')
+        if response.status_code == 200:
+            for chunk in response.iter_content(chunk_size=1024):
+                if chunk: 
+                    buffer.write(chunk)
+        else:
+            raise Exception(f"Failed to download file from {url}")
         
-        return contents
+        return buffer
+
+    @staticmethod
+    def download_file_to_string(url:str) -> str:
+        response = requests.get(url, stream=True)
+        response.raise_for_status()
+
+        buffer = StringIO()
+
+        with buffer:
+            for chunk in response.iter_content(chunk_size=1024, decode_unicode=True):
+                if chunk:
+                    buffer.write(chunk)
+            
+            return buffer.getvalue()
     
     @staticmethod
     def ensure_paths(paths):
