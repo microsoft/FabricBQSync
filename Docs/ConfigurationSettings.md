@@ -1,5 +1,5 @@
-# Fabric BQ Sync User Config Map
-The BQ Sync accelerator offers robust user configuration for full control and optimization over the sync process. Multiple configurations are supported with the path to the in-scope configuration file provided at runtime.
+# Fabric Sync User Config Map
+The Fabric Sync accelerator offers robust user configuration for full control and optimization over the sync process. Multiple configurations are supported with the path to the in-scope configuration file provided at runtime.
 
 Configuration is broken down into the following sections:
 
@@ -34,7 +34,7 @@ Configuration is broken down into the following sections:
         <td>version</td>
         <td>STRING</td>
         <td>Assigned automatically</td>
-        <td>BQ Sync version</td>
+        <td>Fabric Sync version</td>
     </tr>
     <tr>
         <td>enable_data_expiration</td>
@@ -138,7 +138,7 @@ _____
         <td>metadata_lakehouse</td>
         <td>STRING</td>
         <td>None</td>
-        <td>REQUIRED. Fabric Lakehouse name for BQ Sync Metadata</td>
+        <td>REQUIRED. Fabric Lakehouse name for Fabric Sync Metadata</td>
     </tr>
     <tr>
         <td>target_lakehouse</td>
@@ -163,7 +163,7 @@ _____
 _____
 
 ## gcp
-The configuration specified here affects billing and perissions required on the BigQuery side. Most of the configuration provided are passed directly to the BigQuery APIs. Note that BQ Sync supports targeting of multiple projects and multiple datasets when required. For more information, please see the BigQuery API docs.
+The configuration specified here affects billing and perissions required on the BigQuery side. Most of the configuration provided are passed directly to the BigQuery APIs. Note that Fabric Sync supports targeting of multiple projects and multiple datasets when required. For more information, please see the BigQuery API docs.
 <table>
     <tr><th>JSON Setting</th><th>Value Type</th><th>Default</th><th>Description</th></tr>
     <tr>
@@ -236,7 +236,7 @@ The configuration specified here affects billing and perissions required on the 
         <td class="level1-item">credential</td>
         <td>STRING</td>
         <td>None</td>
-        <td>Base-64 encoded GCP Service Credential, created by default during BQ Sync install. At least one of either, credentials or credential_path must be provided. If both are provided, credentials will cause the credential_path to be ignored.</td>
+        <td>Base-64 encoded GCP Service Credential, created by default during Fabric Sync install. At least one of either, credentials or credential_path must be provided. If both are provided, credentials will cause the credential_path to be ignored.</td>
     </tr>
 </table>
 
@@ -249,13 +249,13 @@ _____
         <td>enabled</td>
         <td>BOOLEAN</td>
         <td>TRUE</td>
-        <td>Flag to enable/disable native thread-based parallelism within BQ Sync.</td>
+        <td>Flag to enable/disable native thread-based parallelism within Fabric Sync.</td>
     </tr>
     <tr>
         <td>parallelism</td>
         <td>INT</td>
         <td>10</td>
-        <td>Degree of parallelism used by BQ Sync when the enabled flag is TRUE. This setting should be optimized based on the size of workload and the configuration of your Spark environment.</td>
+        <td>Degree of parallelism used by Fabric Sync when the enabled flag is TRUE. This setting should be optimized based on the size of workload and the configuration of your Spark environment.</td>
     </tr>
 </table>
 

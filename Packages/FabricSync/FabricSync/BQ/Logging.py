@@ -200,7 +200,7 @@ class Telemetry():
 
                 r = func(*args, **kwargs)
 
-                Telemetry.log_telemetry("BQ Sync Accelerator Install", result=True)
+                Telemetry.log_telemetry("Fabric Sync Accelerator Install", result=True)
 
                 return r
             return wrapper
@@ -218,7 +218,7 @@ class Telemetry():
 
                 r =  func(*args, **kwargs)
 
-                Telemetry.log_telemetry("BQ Sync Accelerator Upgrade", result=True)
+                Telemetry.log_telemetry("Fabric Sync Accelerator Upgrade", result=True)
 
                 return r
             return wrapper

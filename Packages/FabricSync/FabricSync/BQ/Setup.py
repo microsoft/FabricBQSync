@@ -38,27 +38,52 @@ class Installer(ContextAwareBase):
         self._TokenProvider = TokenProvider(credential_provider)
         self._onelake = None
 
+    def _initialize_installer(self, data):
+        """
+        Initializes the installer.
+        Args:
+            data: The data.
+        """ 
+        self._data = data 
+
         self._default_path = "/lakehouse/default"
         self._working_path = "Files/Fabric_Sync_Process"
 
         self._config_path = f"{self._working_path}/config"
         self._libs_path = f"{self._working_path}/libs"
         self._logs_path = f"{self._working_path}/logs"
+        self._temp_path = f"{self._default_path}/{self._working_path}/tmp"
 
-    def _get_bq_spark_connector(self,spark_version, jar_path:str) -> str:
-        """
-        Downloads the BigQuery Spark connector jar for the given Spark version.
-        Args:
-            spark_version (str): The Spark version.
-            jar_path (str): The path to save the jar.
-        Returns:
-            str: The jar name.
-        """
+        self._data["version"] = str(Session.CurrentVersion)
+
+        if "reinitialize_existing_metadata" not in self._data:
+            self._data["reinitialize_existing_metadata"] = True
+
+        if "enable_schemas" not in self._data:
+            self._data["enable_schemas"] = False
+        
+        if "create_spark_environment" not in self._data:
+            self._data["create_spark_environment"] = False
+        
+        if "target_type" not in self._data:
+            self._data["target_type"] = FabricDestinationType.LAKEHOUSE
+
+        self._user_config = self._build_new_config()
+        SyncUtil.configure_context(user_config=self._user_config, 
+                                    token=self._TokenProvider.get_token(TokenProvider.FABRIC_TOKEN_SCOPE))  
+
+        self._fabric_api = FabricAPI(self.WorkspaceID, 
+                                    self._TokenProvider.get_token(TokenProvider.FABRIC_TOKEN_SCOPE))
+        
+        os.makedirs(os.path.dirname(self.LogPath), exist_ok=True) 
+        os.makedirs(self._temp_path, exist_ok=True) 
+
+    def _get_bq_spark_connector(self) -> str:
         g = Github() # type: ignore
         repo = g.get_repo("GoogleCloudDataproc/spark-bigquery-connector")
         latest_release = self._get_latest_bq_spark_connector(repo.get_releases())
 
-        sv = pv.parse(spark_version)
+        sv = pv.parse(self.Context.version)
         jar_name = f"spark-{sv.major}.{sv.minor}-bigquery-{latest_release.title}.jar"
 
         jars = [j for j in latest_release.get_assets() if j.name == jar_name]
@@ -67,9 +92,9 @@ class Installer(ContextAwareBase):
             jar = jars[0]
 
         url = jar.browser_download_url
-        buffer = Util.download_file_to_buffer(url)
-        
-        return (jar_name, buffer.read())
+        Util.download_file(url, f"{self._temp_path}/{jar_name}")
+
+        return jar_name
 
     def _get_latest_bq_spark_connector(self, releases):
         """
@@ -206,27 +231,7 @@ class Installer(ContextAwareBase):
                     self._fabric_api.Notebook.create(notebook["name"], json.dumps(nb),
                         lambda x: self.Logger.sync_status(f"{notebook['name']} {x}"))
             except HTTPError as e:
-                self.Logger.sync_status(f"Failed to deploy BQ Sync notebook to workspace: {notebook['name']}: {e}")
-
-    def _initialize_installer(self, data):
-        """
-        Initializes the installer.
-        Args:
-            data: The data.
-        """    
-        self._data = data 
-
-        self._data["version"] = str(Session.CurrentVersion)
-
-        self._user_config = self._build_new_config()
-        SyncUtil.configure_context(user_config=self._user_config, 
-                                    token=self._TokenProvider.get_token(TokenProvider.FABRIC_TOKEN_SCOPE))  
-
-        self._fabric_api = FabricAPI(self.WorkspaceID, 
-                                    self._TokenProvider.get_token(TokenProvider.FABRIC_TOKEN_SCOPE))
-        
-        if "reinitialize_existing_metadata" not in self._data:
-            self._data["reinitialize_existing_metadata"] = True
+                self.Logger.sync_status(f"Failed to deploy Fabric Sync notebook to workspace: {notebook['name']}: {e}")
 
     def _validate_lakehouse_schemas(self, lakehouse_id:str, lakehouse_name:str):
         has_schema = self._fabric_api.Lakehouse.has_schema(lakehouse_id)
@@ -243,7 +248,7 @@ class Installer(ContextAwareBase):
         return BytesIO(environments_yaml.encode('utf-8'))
 
 
-    def _create_or_update_environment(self, name:str, spark_jar:BytesIO) -> str:
+    def _create_or_update_environment(self, name:str) -> str:
         try:
             self.Logger.sync_status(f"Creating (or Updating) Fabric Spark Environment: {name}...")
             environment_id, created = self._fabric_api.Environment.get_or_create(name)
@@ -260,6 +265,7 @@ class Installer(ContextAwareBase):
 
             self._fabric_api.Environment.stage_library(environment_id, "environment.yml", self._get_environment_yaml())
 
+            spark_jar = Util.read_file_to_buffer(f"{self._temp_path}/{self._data['spark_jar']}")
             self._fabric_api.Environment.stage_library(environment_id, "spark-bigquery.jar", spark_jar)
             
             publish_state = self._fabric_api.Environment.get_publish_state(environment_id)
@@ -280,7 +286,7 @@ class Installer(ContextAwareBase):
 
                 data["asset_version"] = f"{Session.CurrentVersion.major}.0.0"
 
-                self.Logger.sync_status("Starting BQ Sync Installer...")
+                self.Logger.sync_status("Starting Fabric Sync Installer...")
 
                 if not os.path.isfile(self._data["gcp_credential_path"]):
                     raise SyncConfigurationError("""GCP Credentials not found.
@@ -344,10 +350,9 @@ class Installer(ContextAwareBase):
 
                 #Download the appropriate jar for the current spark runtime
                 self.Logger.sync_status("Downloading BigQuery Spark connector libraries..")
-                jar_name, spark_jar = self._get_bq_spark_connector(self.Context.version, self._libs_path)
-
-                self._data["spark_jar"] = jar_name
-                self._onelake.write(f"{self._libs_path}/{jar_name}", spark_jar)
+                self._data["spark_jar"] = self._get_bq_spark_connector()
+                self._onelake.copyFromLocalFile(
+                    f"{self._temp_path}/{self._data['spark_jar']}", f"{self._libs_path}/{self._data['spark_jar']}")
 
                 #Encode for embedding in config file
                 self.Logger.sync_status("Generating initial configuration file...")
@@ -356,19 +361,19 @@ class Installer(ContextAwareBase):
 
                 config_path = f"{self._config_path}/{self._user_config.ID.replace(' ', '_')}_v{self._user_config.Version}.json"
                 
-                self._onelake.write(config_path, self._user_config.model_dump_json(exclude_none=True, exclude_unset=True))
+                self._onelake.write(config_path, self._user_config.model_dump_json(exclude_none=True, exclude_unset=True, indent=4))
                 self._data["user_config_file_path"] = config_path
             
                 if self._data["create_spark_environment"]:
                     #Create a Fabric Spark Environment
                     self.Logger.sync_status("Creating/Updating Spark Environment...")
-                    self._create_or_update_environment(self._data["spark_environment_name"], spark_jar)
+                    self._create_or_update_environment(self._data["spark_environment_name"])
                 
                 #Get sync notebooks from Git, customize and install into the workspace
                 self.Logger.sync_status("Copying Fabric Sync artifacts to Fabric workspace...")
                 self._download_notebooks()
 
-            self.Logger.sync_status(f"BQ Sync Installer finished in {str(t)}!")
+            self.Logger.sync_status(f"Fabric Sync Installer finished in {str(t)}!")
         except SyncConfigurationError as e:
             self.Logger.sync_status(f"INSTALL CONFIGURATION FAILURE: {e}")
         except HTTPError as re:

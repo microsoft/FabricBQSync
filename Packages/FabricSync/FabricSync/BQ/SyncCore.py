@@ -2,12 +2,9 @@ from pyspark.sql import DataFrame
 from pyspark.sql.types import StructType
 
 from FabricSync.BQ.Validation import SqlValidator
-from FabricSync.BQ.Metastore import FabricMetastore
-from FabricSync.BQ.Enum import BigQueryAPI, SparkSessionConfig
+from FabricSync.BQ.Enum import BigQueryAPI
 
-from FabricSync.BQ.Core import (
-    ContextAwareBase, Session
-) 
+from FabricSync.BQ.Core import ContextAwareBase
 from FabricSync.BQ.Auth import (
     TokenProvider, Credentials, GCPAuth
 )
@@ -28,7 +25,7 @@ class ConfigBase(ContextAwareBase):
         """
         Gets the GCP credential.
         """
-        return self.Context.conf.get("credentials")
+        return Session.GCPCredentials
 
     def __get_bq_reader_config(self, query:BQQueryModel) -> dict:
         """
@@ -103,7 +100,6 @@ class ConfigBase(ContextAwareBase):
             DataFrame: The DataFrame.
         """
         cfg = self.__get_bq_reader_config(query)
-
         q = query.TableName if not query.Query else query.Query
 
         if query.Predicate:
@@ -181,7 +177,6 @@ class SyncBase(ContextAwareBase):
         self.load_user_config(config_path)
 
         self.Context.sql(f"USE {self.UserConfig.Fabric.get_metadata_lakehouse()}")
-        FabricMetastore.create_proxy_views()
 
     def load_user_config(self, config_path:str) -> None:
         """

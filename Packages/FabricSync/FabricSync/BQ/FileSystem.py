@@ -4,7 +4,9 @@ import json
 
 from pathlib import Path
 from typing import List, Literal, Tuple
-from py4j.java_gateway import JavaObject
+from py4j.java_gateway import (
+    JavaObject, java_import
+)
 from pyspark.sql import SparkSession
 from builtins import max as b
 from io import BytesIO
@@ -42,13 +44,10 @@ class HadoopFileSystem(LoggingBase):
             buffer = data
 
         if mode.lower() == "w":
-            # org.apache.hadoop.fs.FileSystem.create(Path f, boolean overwrite)
             output_stream = self._hdfs.create(self._hadoop.fs.Path(path), True)  # type: ignore
         elif mode.lower() == "a":
-            # org.apache.hadoop.fs.FileSystem.append(Path f)
             output_stream = self._hdfs.append(self._hadoop.fs.Path(path))  # type: ignore
 
-        # org.apache.hadoop.fs.FSDataOutputStream
         try:
             with buffer as b:
                 b.seek(0)
@@ -68,10 +67,7 @@ class HadoopFileSystem(LoggingBase):
             raise e
     
     def read(self: "HadoopFileSystem", path: str) -> BytesIO:
-        # org.apache.hadoop.fs.FileSystem.open
         in_stream = self._hdfs.open(self._hadoop.fs.Path(path))  # type: ignore
-
-        # open returns us org.apache.hadoop.fs.FSDataInputStream
         buffer = bytearray()
 
         try:
@@ -114,6 +110,11 @@ class HadoopFileSystem(LoggingBase):
 
         return result
 
+    def copyFromLocalFile(self, source:str, destination:str) -> None:
+        self._hdfs.copyFromLocalFile(
+            self._hadoop.fs.Path(source),
+            self._hadoop.fs.Path(destination))
+
     def glob(self, pattern: str) -> List[HDFSFile]:
         """
         Searches for files or directories in the Hadoop file system using a glob pattern.
@@ -146,6 +147,12 @@ class HadoopFileSystem(LoggingBase):
             raise ValueError(
                 f"Bad pattern or path. Got {pattern} but should be"
                 " one of `abfss://`, `s3://`, `s3a://`, `dbfs://`, `hdfs://`, `file://`")
+
+        java_import(context.sparkContext._jvm, "org.apache.hadoop.fs.FileSystem")
+        java_import(context.sparkContext._jvm, "org.apache.hadoop.fs.Path")
+        java_import(context.sparkContext._jvm, "org.apache.hadoop.fs.FileStatus")
+        java_import(context.sparkContext._jvm, "org.apache.hadoop.fs.FSDataInputStream")
+        java_import(context.sparkContext._jvm, "org.apache.hadoop.fs.FSDataOutputStream")
 
         fs_type = FileSystemType._from_pattern(match.groups()[0])
 
@@ -194,12 +201,17 @@ class OneLakeFileSystem(HadoopFileSystem):
         Returns:
             str: The full path for the file in the OneLake file system.
         """
-        return os.path.join(self._base_uri, path)
+        return os.path.join(self._base_uri, path.lstrip("/"))
+
+    def copyFromLocalFile(self, source:str, destination:str) -> None:
+        super().copyFromLocalFile(
+            source,
+            self._get_onelake_path(destination))
 
     def write(self, path: str, data, mode: Literal["a", "w"]="w") -> None:
         super().write(self._get_onelake_path(path), data, mode)
     
-    def read_string(self: "HadoopFileSystem", path: str) -> BytesIO:
+    def read_string(self: "HadoopFileSystem", path: str) -> str:
         buffer = self.read(self._get_onelake_path(path))
         return buffer.getvalue().decode("utf-8")
     
@@ -293,7 +305,14 @@ class OpenMirrorLandingZone(OneLakeFileSystem):
         Returns:
             str: The full path for the file in the OpenMirror landing zone.
         """
-        return os.path.join(self._lz_uri, path)
+        return os.path.join(self._lz_uri, path.lstrip("/"))
+
+    def copyFromLocalFile(self, source:str, destination:str) -> None:
+        self.Logger.debug(f"Landing Zone Operation - COPYFROMLOCALFILE - " +
+                          f"{LakehouseCatalog.resolve_table_name(self._table_schema, self._table)} " +
+                          f"{source} -> {destination}")
+
+        super().copyFromLocalFile(source, destination)
 
     def write(self, path: str, data, mode: Literal["a", "w"] = "w") -> None:
         self.Logger.debug(f"Landing Zone Operation - WRITE ({mode}) - " +
@@ -302,6 +321,11 @@ class OpenMirrorLandingZone(OneLakeFileSystem):
     
     def read(self, path: str) -> BytesIO:
         self.Logger.debug(f"Landing Zone Operation - READ - " +
+                          f"{LakehouseCatalog.resolve_table_name(self._table_schema, self._table)} - {path}")
+        return super().read(path)
+
+    def read_string(self: "HadoopFileSystem", path: str) -> str:
+        self.Logger.debug(f"Landing Zone Operation - READ (STRING) - " +
                           f"{LakehouseCatalog.resolve_table_name(self._table_schema, self._table)} - {path}")
         return super().read(path)
 

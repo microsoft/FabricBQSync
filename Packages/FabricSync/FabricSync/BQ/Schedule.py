@@ -2,6 +2,7 @@ from FabricSync.BQ.Metastore import FabricMetastore
 from FabricSync.BQ.SyncCore import ConfigBase
 from FabricSync.BQ.Logging import Telemetry
 from FabricSync.BQ.Enum import SyncScheduleType
+from FabricSync.BQ.SyncUtils import SyncUtil
 
 class BQScheduler(ConfigBase):
     def __init__(self):
@@ -21,7 +22,7 @@ class BQScheduler(ConfigBase):
         Returns:
             None
         """
-
+        SyncUtil.ensure_sync_views()
         self.Logger.sync_status(f"Scheduling {self.ID} for {schedule_type}...", verbose=True)
         FabricMetastore.build_schedule(schedule_type)        
         self.Logger.sync_status(f"Sync Schedule {self.ID}({schedule_type}) Ready...")

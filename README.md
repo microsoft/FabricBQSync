@@ -13,8 +13,8 @@ The accelerator includes an automated installer that can set up your Fabric work
 4. Upload your GCP Service Account credential json file to OneLake
 5. Update the configuration parameters:
 	- <code>loader_name</code> – custom name for the sync operation used in dashboards/reports (ex: HR Data Sync, BQ Sales Transaction Mirror)
-	- <code>metadata_lakehouse</code> - name of the lakehouse used to drive the BQ Sync process
-	- <code>target_lakehouse</code> - name of the lakehouse where the BQ Sync data will be landed
+	- <code>metadata_lakehouse</code> - name of the lakehouse used to drive the Fabric Sync process
+	- <code>target_lakehouse</code> - name of the lakehouse where the Fabric Sync data will be landed
 	- <code>gcp_project_id</code> - the GCP billing project id that contains the in-scope dataset
 	- <code>gcp_dataset_id</code> - the target BQ dataset name/id
 	- <code>gcp_credential_path</code> - the File API Path to your JSON credential file (Example: /lakehouse/default/Files/my-credential-file.json")
@@ -24,7 +24,7 @@ The installer performs the following actions:
 - Create the required Lakehouses, if they do not exists
 - Creates the metadata tables and required metadata
 - Downloads the correct version of your BQ Spark connector based on your configured spark runtime
-- Downloads the current BQ Sync python package
+- Downloads the current Fabric Sync python package
 - Creates an initial default user configuration file based on your config parameters
 - Installs a fully configured and ready to run BQ-Sync-Notebook into your workspace
 

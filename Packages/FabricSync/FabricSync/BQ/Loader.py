@@ -761,6 +761,7 @@ class BQScheduleLoader(ConfigBase):
         Returns:
             bool: True if the schedule is successfully processed; False otherwise.
         """
+        SyncUtil.ensure_sync_views()
         self.Logger.sync_status(f"Async schedule started with parallelism of {self.UserConfig.Async.Parallelism}...", verbose=True)         
 
         processor = QueueProcessor(num_threads=num_threads)

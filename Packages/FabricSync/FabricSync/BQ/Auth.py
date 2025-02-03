@@ -47,9 +47,6 @@ class GCPAuth:
             str: The encoded credentials.
         """
         credential_data = Util.read_file_to_string(path)
-        credential_data = [l.strip() for l in credential_data]
-        credential_data = ''.join(credential_data)
-
         return Util.encode_base64(credential_data)
     
     @classmethod

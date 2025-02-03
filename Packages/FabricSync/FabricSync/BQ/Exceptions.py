@@ -12,7 +12,7 @@ class SyncBaseError(Exception):
             data (SyncBaseModel): The data.
         """
         super().__init__()
-        self.title = "BQ Sync Base Error"
+        self.title = "Fabric Sync Base Error"
         self.data = data
         self.msg = msg
     

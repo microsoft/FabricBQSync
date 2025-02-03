@@ -1,8 +1,7 @@
 from packaging import version as pv
 
-from FabricSync.BQ.SyncCore import (
-    SyncBase, Session
-)
+from FabricSync.BQ.Core import Session
+from FabricSync.BQ.SyncCore import SyncBase
 from FabricSync.BQ.Auth import (
     Credentials, TokenProvider
 )
@@ -52,7 +51,7 @@ class BQSync(SyncBase):
                 self.DataRetention = BQDataRetention()
             else:
                 self.UserConfig = None
-                self.Logger.sync_status(f"Failed to load BQ Sync with User Configuration errors:\r\n" +
+                self.Logger.sync_status(f"Failed to load Fabric Sync with User Configuration errors:\r\n" +
                     "\r\n".join(config_validation))
 
         except SyncConfigurationError as e:
@@ -131,9 +130,7 @@ class BQSync(SyncBase):
 
         try:
             self.MetadataLoader.sync_metadata()
-
-            if self.UserConfig.Autodetect:
-                self.MetadataLoader.auto_detect_config()
+            self.sync_autodetect()
         except SyncBaseError as e:
             self.Logger.error(f"BQ Metadata Update Failed: {e}")
     

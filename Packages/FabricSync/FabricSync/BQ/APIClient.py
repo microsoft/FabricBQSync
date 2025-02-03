@@ -455,7 +455,7 @@ class FabricNotebook(BaseFabricItem):
         encode_data = Util.encode_base64(data)
         notebook_payload = {
             "displayName": name,
-            "description": f"Fabric BQ Sync: {name}",
+            "description": f"Fabric Sync: {name}",
             "definition": {
                 "format": "ipynb",
                 "parts": [

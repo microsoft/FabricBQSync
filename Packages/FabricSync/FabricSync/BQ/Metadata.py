@@ -345,7 +345,8 @@ class BQMetadataLoader(ConfigBase):
             None: The function processes the metadata synchronization for the information schema views.
         Notes:
             - The function logs status messages if the metadata synchronization fails.
-        """     
+        """
+        SyncUtil.ensure_sync_views()
         self.Logger.sync_status(f"BQ Metadata Update with BQ {'STANDARD' if self.UserConfig.GCP.API.UseStandardAPI == True else 'STORAGE'} API...")
         with SyncTimer() as t:
             self.Context.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
@@ -353,7 +354,6 @@ class BQMetadataLoader(ConfigBase):
             self.Context.conf.set("spark.sql.sources.partitionOverwriteMode", "static")
 
         if not self.has_exception:
-            FabricMetastore.create_proxy_views()
             self.Logger.sync_status(f"BQ Metadata Update completed in {str(t)}...")
         else:
             raise MetadataSyncError(msg="BQ Metadata sync failed. Please check the logs.")  
@@ -369,6 +369,7 @@ class BQMetadataLoader(ConfigBase):
         Notes:
             - The function logs status messages if the auto-detection process fails.
         """
+        SyncUtil.ensure_sync_views()
         self.Logger.sync_status("Auto-detecting schema/configuration...", verbose=True)
 
         with SyncTimer() as t:

@@ -51,6 +51,7 @@ class SparkSessionConfig(str, BaseEnum):
     SCHEMA_ENABLED = "schema_enabled"
     FABRIC_API_TOKEN = "fabric_api_token"
     USER_CONFIG_PATH = "user_config_path"
+    SYNC_VIEW_STATE = "sync_view_state"
 
 class FileSystemType(str, BaseEnum):
     """

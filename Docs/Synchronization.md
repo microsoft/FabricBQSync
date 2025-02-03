@@ -1,4 +1,4 @@
-# Fabric BQ Synchronization
+# Fabric Synchronization
 
 Synchronization runs at object-level. Where an object can be a table, view, materialized view or even a table partition depending on previously described configuration process. Currently both sequential and asynchronous options are available for the synchronization process.
 The sequential option synchronizes table-by-table, individually and is primarily provided as dev/test mechanism or when the process is run in an environment where data or resources are extremely constrained.

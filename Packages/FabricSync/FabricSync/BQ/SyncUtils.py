@@ -51,28 +51,34 @@ class SyncUtil(ContextAwareBase):
         Session.set_spark_conf("spark.sql.sources.partitionOverwriteMode", "dynamic")
 
         if gcp_credential:
-            Session.set_spark_conf("credentials", gcp_credential)
+            Session.GCPCredentials = gcp_credential
 
-        Session.set_setting(SparkSessionConfig.APPLICATION_ID, user_config.ApplicationID)
-        Session.set_setting(SparkSessionConfig.NAME, user_config.ID)
-        Session.set_setting(SparkSessionConfig.LOG_PATH, user_config.Logging.LogPath)
-        Session.set_setting(SparkSessionConfig.LOG_LEVEL, user_config.Logging.LogLevel)
-        Session.set_setting(SparkSessionConfig.LOG_TELEMETRY, user_config.Logging.Telemetry)
-        Session.set_setting(SparkSessionConfig.TELEMETRY_ENDPOINT, f"{user_config.Logging.TelemetryEndPoint}.azurewebsites.net")
+        Session.ApplicationID = user_config.ApplicationID
+        Session.ID = user_config.ID
+        Session.LogPath = user_config.Logging.LogPath
+        Session.LogLevel = user_config.Logging.LogLevel
+        Session.Telemetry = user_config.Logging.Telemetry
+        Session.TelemetryEndPoint = f"{user_config.Logging.TelemetryEndPoint}.azurewebsites.net"
 
-        Session.set_setting(SparkSessionConfig.WORKSPACE_ID, user_config.Fabric.WorkspaceID)
-        Session.set_setting(SparkSessionConfig.VERSION, "0.0.0" if not user_config.Version else user_config.Version)
-        Session.set_setting(SparkSessionConfig.METADATA_LAKEHOUSE, user_config.Fabric.MetadataLakehouse)
-        Session.set_setting(SparkSessionConfig.METADATA_LAKEHOUSE_ID , user_config.Fabric.MetadataLakehouseID)
-        Session.set_setting(SparkSessionConfig.TARGET_LAKEHOUSE, user_config.Fabric.TargetLakehouse)
-        Session.set_setting(SparkSessionConfig.TARGET_LAKEHOUSE_ID, user_config.Fabric.TargetLakehouseID)
-        Session.set_setting(SparkSessionConfig.SCHEMA_ENABLED, user_config.Fabric.EnableSchemas)
+        Session.WorkspaceID = user_config.Fabric.WorkspaceID
+        Session.Version = "0.0.0" if not user_config.Version else user_config.Version
+        Session.MetadataLakehouse = user_config.Fabric.MetadataLakehouse
+        Session.MetadataLakehouseID = user_config.Fabric.MetadataLakehouseID
+        Session.TargetLakehouse = user_config.Fabric.TargetLakehouse
+        Session.TargetLakehouseID = user_config.Fabric.TargetLakehouseID
+        Session.SchemaEnabled = user_config.Fabric.EnableSchemas
 
         if config_path:
-            Session.set_setting(SparkSessionConfig.USER_CONFIG_PATH, config_path)
+            Session.UserConfigPath = config_path
 
         if token:
-            Session.set_setting(SparkSessionConfig.FABRIC_API_TOKEN, token)
+            Session.FabricAPIToken = token
+
+    @classmethod
+    def ensure_sync_views(cls):
+        if not Session.SyncViewState:
+            FabricMetastore.create_proxy_views()
+            Session.SyncViewState = True
 
     @classmethod
     def build_filter_predicate(cls, filter:ConfigObjectFilter) -> str:
