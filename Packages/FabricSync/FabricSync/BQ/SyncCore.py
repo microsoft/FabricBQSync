@@ -20,13 +20,6 @@ class ConfigBase(ContextAwareBase):
     def __init__(self) -> None:
         self.UserConfig = ConfigDataset.from_json(self.UserConfigPath)
 
-    @property
-    def GCPCredential(self) -> str:
-        """
-        Gets the GCP credential.
-        """
-        return Session.GCPCredentials
-
     def __get_bq_reader_config(self, query:BQQueryModel) -> dict:
         """
         Returns the configuration dictionary for the BigQuery Spark Connector.

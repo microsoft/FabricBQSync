@@ -366,7 +366,6 @@ class Telemetry():
 
                 row = func_args["row"]
                 params = row.asDict()
-                print(params)
 
                 Telemetry.log_telemetry("BQ Data Expiration Enforcement", result=True, data=params)
 

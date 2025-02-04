@@ -72,7 +72,6 @@ class LakehouseCatalog(ContextAwareBase):
     
     @classmethod
     def create_metastore_tables(cls, table_path:str) -> None:
-        print(table_path)
         for tbl in SyncConstants.get_metadata_tables():
             schema = getattr(FabricMetastoreSchema(), tbl)
             df = cls.Context.createDataFrame(data=cls.Context.sparkContext.emptyRDD(),schema=schema)

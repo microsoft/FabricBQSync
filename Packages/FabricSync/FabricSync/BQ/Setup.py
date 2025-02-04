@@ -18,12 +18,14 @@ from FabricSync.BQ.Model.Config import ConfigDataset
 from FabricSync.BQ.FileSystem import OneLakeFileSystem
 from FabricSync.BQ.Enum import FabricDestinationType
 from FabricSync.BQ.Core import (
-    TokenProvider, ContextAwareBase, Session
+    ContextAwareBase, Session
 )
 from FabricSync.BQ.Exceptions import (
-    SyncInstallError, SyncConfigurationError
+    SyncConfigurationError
 )
-from FabricSync.BQ.Auth import GCPAuth
+from FabricSync.BQ.Auth import (
+    GCPAuth, TokenProvider
+)
 from FabricSync.BQ.SyncUtils import SyncUtil
 
 class Installer(ContextAwareBase):
@@ -149,6 +151,9 @@ class Installer(ContextAwareBase):
                     "load_all": True
                 }
             },
+            "optimization": {
+                    "use_approximate_row_counts": True
+            },
             "fabric": {
                 "workspace_id": self.WorkspaceID,
                 "enable_schemas": self._data["enable_schemas"],
@@ -159,6 +164,12 @@ class Installer(ContextAwareBase):
             "gcp": {
                 "gcp_credentials":{
                     "credential": "NOT_SET"
+                },
+                "api":{
+                    "materialization_project_id": self._data["gcp_project_id"],
+                    "materialization_dataset": self._data["gcp_dataset_id"],
+                    "billing_project_id": self._data["gcp_project_id"],
+                    "use_standard_api": True
                 },
                 "projects": [
                 {
@@ -231,7 +242,7 @@ class Installer(ContextAwareBase):
                     self._fabric_api.Notebook.create(notebook["name"], json.dumps(nb),
                         lambda x: self.Logger.sync_status(f"{notebook['name']} {x}"))
             except HTTPError as e:
-                self.Logger.sync_status(f"Failed to deploy Fabric Sync notebook to workspace: {notebook['name']}: {e}")
+                self.Logger.sync_status(f"Failed to deploy BQ Sync notebook to workspace: {notebook['name']}: {e}")
 
     def _validate_lakehouse_schemas(self, lakehouse_id:str, lakehouse_name:str):
         has_schema = self._fabric_api.Lakehouse.has_schema(lakehouse_id)
@@ -244,7 +255,7 @@ class Installer(ContextAwareBase):
                 raise SyncConfigurationError(f"Invalid Configuration: {lakehouse_name} lakehouse already exists and IS schema-enabled.")
 
     def _get_environment_yaml(self) -> BytesIO:
-        environments_yaml = f"dependencies:\r\n- pip:\r\n  - fabricsync>={str(Session.CurrentVersion)}"
+        environments_yaml = f"dependencies:\r\n- pip:\r\n  - fabricsync"
         return BytesIO(environments_yaml.encode('utf-8'))
 
 
@@ -286,7 +297,7 @@ class Installer(ContextAwareBase):
 
                 data["asset_version"] = f"{Session.CurrentVersion.major}.0.0"
 
-                self.Logger.sync_status("Starting Fabric Sync Installer...")
+                self.Logger.sync_status("Starting BQ Sync Installer...")
 
                 if not os.path.isfile(self._data["gcp_credential_path"]):
                     raise SyncConfigurationError("""GCP Credentials not found.
@@ -373,7 +384,7 @@ class Installer(ContextAwareBase):
                 self.Logger.sync_status("Copying Fabric Sync artifacts to Fabric workspace...")
                 self._download_notebooks()
 
-            self.Logger.sync_status(f"Fabric Sync Installer finished in {str(t)}!")
+            self.Logger.sync_status(f"BQ Sync Installer finished in {str(t)}!")
         except SyncConfigurationError as e:
             self.Logger.sync_status(f"INSTALL CONFIGURATION FAILURE: {e}")
         except HTTPError as re:

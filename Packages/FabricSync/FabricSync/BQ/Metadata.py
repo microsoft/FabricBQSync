@@ -346,7 +346,6 @@ class BQMetadataLoader(ConfigBase):
         Notes:
             - The function logs status messages if the metadata synchronization fails.
         """
-        SyncUtil.ensure_sync_views()
         self.Logger.sync_status(f"BQ Metadata Update with BQ {'STANDARD' if self.UserConfig.GCP.API.UseStandardAPI == True else 'STORAGE'} API...")
         with SyncTimer() as t:
             self.Context.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")

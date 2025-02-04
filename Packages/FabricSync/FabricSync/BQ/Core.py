@@ -111,10 +111,11 @@ class Session:
     
     @classproperty
     def Version(cls) -> pv.Version:
-        return pv.parse(Session.get_setting(SparkSessionConfig.VERSION, "0.0.0"))
+        c = Session.get_setting(SparkSessionConfig.VERSION, "0.0.0")
+        return pv.parse(c)
     
     @Version.setter
-    def Version(cls, value:str):
+    def Version(cls, value:Any):
         cls.set_setting(SparkSessionConfig.VERSION, value)
     
     @classproperty
@@ -266,169 +267,85 @@ class LoggingBase:
         
         return cls.__logger
     
+    @classproperty
+    def ApplicationID(cls) -> str:
+        return Session.ApplicationID
+    
+    @classproperty
+    def ID(cls) -> str:
+        return Session.ID
+    
+    @classproperty
+    def Version(cls) -> pv.Version:
+        return Session.Version
+    
+    @classproperty
+    def TelemetryEndpoint(cls) -> str:
+        return Session.TelemetryEndpoint
+    
+    @classproperty
+    def LogLevel(cls) -> str:
+        return Session.LogLevel
+    
+    @classproperty
+    def LogPath(cls) -> str:
+        return Session.LogPath
+    
+    @classproperty
+    def Telemetry(cls) -> str:
+        return Session.Telemetry
+    
 class ContextAwareBase(LoggingBase):    
     @classproperty
     def Context(cls) -> SparkSession:
         return Session.Context
 
     @classproperty
-    def ApplicationID(cls) -> str:
-        """
-        Gets the application ID.
-        Returns:
-            """
-        return Session.get_setting(SparkSessionConfig.APPLICATION_ID)
-    
-    @classproperty
-    def ID(cls) -> str:
-        """
-        Gets the sync ID.
-        Returns:
-            str: The sync ID.
-        """
-        return Session.get_setting(SparkSessionConfig.NAME)
-    
-    @classproperty
-    def Version(cls) -> pv.Version:
-        """
-        Gets the version.
-        Returns:
-            Version: The configured runtine version.
-        """
-        return pv.parse(Session.get_setting(SparkSessionConfig.VERSION))
-    
-    @classproperty
-    def TelemetryEndpoint(cls) -> str:
-        """
-        Gets the telemetry endpoint.
-        Returns:
-            """
-        return Session.get_setting(SparkSessionConfig.TELEMETRY_ENDPOINT)
-    
-    @classproperty
-    def LogLevel(cls) -> str:
-        """
-        Gets the log level.
-        Returns:
-            """
-        return Session.get_setting(SparkSessionConfig.LOG_LEVEL)
-    
-    @classproperty
-    def LogPath(cls) -> str:
-        """
-        Gets the log path.
-        Returns:
-            str: The log path.
-        """
-        return Session.get_setting(SparkSessionConfig.LOG_PATH)
-    
-    @classproperty
-    def Telemetry(cls) -> str:
-        """
-        Gets the telemetry.
-        Returns:
-            
-            """
-        return Session.get_setting(SparkSessionConfig.LOG_TELEMETRY)
-
-    @classproperty
     def WorkspaceID(cls) -> str:
-        """
-        Gets the workspace ID.
-        Returns:
-            str: The workspace ID.
-        """
-        if Session.get_setting(SparkSessionConfig.WORKSPACE_ID):
-            return Session.get_setting(SparkSessionConfig.WORKSPACE_ID)
-        else:
-            return Session.Context.conf.get("trident.workspace.id")
+        return Session.WorkspaceID
     
     @classproperty
     def MetadataLakehouse(cls) -> str:
-        """
-        Gets the metadata lakehouse.
-        Returns:
-            str: The metadata lakehouse.
-        """
-        if Session.get_setting(SparkSessionConfig.METADATA_LAKEHOUSE):
-            return Session.get_setting(SparkSessionConfig.METADATA_LAKEHOUSE)
-        else:
-            return Session.Context.conf.get("trident.lakehouse.name")
+        return Session.MetadataLakehouse
     
     @classproperty
     def MetadataLakehouseID(cls) -> str:
-        """
-        Gets the metadata lakehouse ID.
-        Returns:
-            str: The metadata lakehouse ID.
-        """
-        if Session.get_setting(SparkSessionConfig.METADATA_LAKEHOUSE_ID):
-            return Session.get_setting(SparkSessionConfig.METADATA_LAKEHOUSE_ID)
-        else:
-            return Session.Context.conf.get("trident.lakehouse.id")
+        return Session.MetadataLakehouseID
     
     @classproperty
     def MetadataLakehouseSchema(cls) -> str:
-        """
-        Gets the metadata lakehouse schema.
-        Returns:
-            str: The metadata lakehouse schema.
-        """
-        return Session.get_setting(SparkSessionConfig.METADATA_LAKEHOUSE_SCHEMA)
+        return Session.MetadataLakehouseSchema
     
     @classproperty
     def TargetLakehouse(cls) -> str:
-        """
-        Gets the target lakehouse.
-        Returns:
-            str: The target lakehouse.
-        """
-        return Session.get_setting(SparkSessionConfig.TARGET_LAKEHOUSE)
+        return Session.TargetLakehouse
     
     @classproperty
     def TargetLakehouseID(cls) -> str:
-        """
-        Gets the target lakehouse ID.
-        Returns:
-            str: The target lakehouse ID.
-        """
-        return Session.get_setting(SparkSessionConfig.TARGET_LAKEHOUSE_ID)
+        return Session.TargetLakehouseID
     
     @classproperty
     def TargetLakehouseSchema(cls) -> str:
-        """
-        Gets the target lakehouse schema.
-        Returns:
-            str: The target lakehouse schema.
-        """
-        return Session.get_setting(SparkSessionConfig.TARGET_LAKEHOUSE_SCHEMA)
+        return Session.TargetLakehouseSchema
     
     @classproperty
     def FabricAPIToken(cls) -> str:
-        """
-        Gets the target lakehouse schema.
-        Returns:
-            str: The target lakehouse schema.
-        """
-        return Session.get_setting(SparkSessionConfig.FABRIC_API_TOKEN)
+        return Session.FabricAPIToken
 
     @classproperty
     def UserConfigPath(cls) -> str:
-        """
-        Gets the user config path.
-        Returns:
-            str: The user config path.
-        """
-        return Session.get_setting(SparkSessionConfig.USER_CONFIG_PATH)
+        return Session.UserConfigPath
 
     @classproperty
     def EnableSchemas(cls) -> bool:
+        return Session.EnableSchemas
+    
+    @classproperty
+    def GCPCredential(cls) -> str:
         """
-        Gets the flag for enable schemas.
-        Returns:
-            bool: The enable schemas.
+        Gets the GCP credential.
         """
-        return Session.get_setting(SparkSessionConfig.SCHEMA_ENABLED, "").lower() == "true"
+        return Session.GCPCredentials
 
 class DeltaTableMaintenance(ContextAwareBase):
     __detail:Row = None

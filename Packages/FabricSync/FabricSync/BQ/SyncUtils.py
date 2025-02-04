@@ -5,6 +5,7 @@ from pyspark.sql.functions import (
     to_date, to_timestamp, date_format, explode, try_to_number, col, lit,
     count, max
 )
+from packaging import version as pv
 from datetime import (
     datetime, date
 )
@@ -61,7 +62,10 @@ class SyncUtil(ContextAwareBase):
         Session.TelemetryEndPoint = f"{user_config.Logging.TelemetryEndPoint}.azurewebsites.net"
 
         Session.WorkspaceID = user_config.Fabric.WorkspaceID
-        Session.Version = "0.0.0" if not user_config.Version else user_config.Version
+
+        if user_config.Version:
+            Session.Version = pv.parse(user_config.Version)
+
         Session.MetadataLakehouse = user_config.Fabric.MetadataLakehouse
         Session.MetadataLakehouseID = user_config.Fabric.MetadataLakehouseID
         Session.TargetLakehouse = user_config.Fabric.TargetLakehouse

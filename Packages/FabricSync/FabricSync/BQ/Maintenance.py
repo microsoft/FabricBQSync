@@ -796,7 +796,6 @@ class FabricSyncMaintenance(SyncBase):
             MaintenanceSchedule: Maintenance Schedule
         """
         if schedule.RunVacuum:
-            print(f"VACUUM {schedule.FabricLakehousePath} RETAIN {schedule.RetentionHours} HOURS")
             self.Context.sql(f"VACUUM {schedule.FabricLakehousePath} RETAIN {schedule.RetentionHours} HOURS")
             schedule.LastVacuum = datetime.now()
             schedule.LastMaintenance = datetime.now()

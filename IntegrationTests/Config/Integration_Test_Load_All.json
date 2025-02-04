@@ -41,10 +41,6 @@
           "credential": ""
         }
     },
-    "async": {
-      "enabled": true,
-      "parallelism": 10
-    },
     "logging": {
         "log_level": "SYNC_STATUS",
         "telemetry": true,

@@ -51,11 +51,11 @@ class BQSync(SyncBase):
                 self.DataRetention = BQDataRetention()
             else:
                 self.UserConfig = None
-                self.Logger.sync_status(f"Failed to load Fabric Sync with User Configuration errors:\r\n" +
+                self.Logger.sync_status(f"Failed to load BQ Sync with User Configuration errors:\r\n" +
                     "\r\n".join(config_validation))
 
         except SyncConfigurationError as e:
-            print(f"FAILED TO INITIALIZE FABRIC SYNC\r\n{e}")
+            self.Logger.sync_status(f"FAILED TO INITIALIZE FABRIC SYNC\r\n{e}")
 
     def update_user_config_for_current(self):
         if not self._is_runtime_ready():
@@ -99,12 +99,9 @@ class BQSync(SyncBase):
             self.__validate_user_config(config_path)
         
     def __requires_update(self) -> bool:
-        runtime_version = self.Version
-        current_version = Session.CurrentVersion
-
-        if current_version > runtime_version:
+        if Session.CurrentVersion > self.Version:
             self.Logger.sync_status(f"Fabric Sync Config Version: " +
-                f"{str(runtime_version)} - Runtime Version: {str(current_version)}")
+                f"{str(self.Version)} - Runtime Version: {str(Session.CurrentVersion)}")
             return True
         else:
             return False
