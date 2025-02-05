@@ -4,6 +4,7 @@ from requests.exceptions import HTTPError
 from io import BytesIO
 import json
 import os
+import shutil
 import uuid
 import random
 import time
@@ -387,6 +388,12 @@ class Installer(ContextAwareBase):
                 self._download_notebooks()
 
             self.Logger.sync_status(f"BQ Sync Installer finished in {str(t)}!")
+
+            try:
+                shutil.rmtree(self._temp_path)
+                self.Logger.debug(f"Installer Temp Directory '{self._temp_path}' has been deleted.")
+            except FileNotFoundError:
+                self.Logger.debug(f"Installer Temp Directory '{self._temp_path}' does not exist.")
         except SyncConfigurationError as e:
             self.Logger.sync_status(f"INSTALL CONFIGURATION FAILURE: {e}")
         except HTTPError as re:
