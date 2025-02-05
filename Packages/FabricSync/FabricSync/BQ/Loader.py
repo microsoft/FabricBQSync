@@ -514,9 +514,6 @@ class BQScheduleLoader(ConfigBase):
             Tuple[SyncSchedule, DataFrame]: A tuple containing the updated SyncSchedule and the potentially
             modified DataFrame after saving to the mirrored database landing zone.
         """
-
-        df, observation = self.__apply_task_tracker_observation(schedule, df)
-        df = OpenMirror.save_to_landing_zone(schedule, df)
         has_lock = False
 
         if schedule.TotalTableTasks > 1:
@@ -524,6 +521,8 @@ class BQScheduleLoader(ConfigBase):
             lock.acquire()
 
         try:
+            df, observation = self.__apply_task_tracker_observation(schedule, df)
+            df = OpenMirror.save_to_landing_zone(schedule, df)
             task_part, total_row_count = self.__increment_task_tracker(schedule.LakehouseTableName, observation)
 
             if task_part == schedule.TotalTableTasks:

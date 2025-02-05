@@ -196,12 +196,14 @@ class Installer(ContextAwareBase):
         randomizer = f"0000{random.randint(1, 1000)}"
         suffix = randomizer[-4:]
 
+        url_suffix = "-Environment" if self._data["create_spark_environment"] else ""
+
         git_notebooks = [
                     {"name": f"Fabric-Sync-Notebook-v{self._data['version']}", 
-                        "url": f"{Installer.GIT_URL}/Notebooks/v{self._data['asset_version']}/BQ-Sync.ipynb",
+                        "url": f"{Installer.GIT_URL}/Notebooks/v{self._data['asset_version']}/Fabric-Sync{url_suffix}.ipynb",
                         "lakehouse_only": False},
                     {"name": f"Fabric-Sync-Maintenance-v{self._data['version']}", 
-                        "url": f"{Installer.GIT_URL}/Notebooks/v{self._data['asset_version']}/BQ-Sync-Maintenance.ipynb",
+                        "url": f"{Installer.GIT_URL}/Notebooks/v{self._data['asset_version']}/Fabric-Sync-Maintenance{url_suffix}.ipynb",
                         "lakehouse_only": True}
                     ]
         

@@ -363,12 +363,15 @@ class MaintenanceInterval(str, BaseEnum):
     """
     Represents the possible maintenance intervals for scheduled maintenance tasks.
     Attributes:
-        DAILY (str): Indicates that the maintenance task should run daily.
-        WEEKLY (str): Indicates that the maintenance task should run weekly.
+        YEARLY (str): Indicates that the maintenance task should run yearly.
         MONTHLY (str): Indicates that the maintenance task should run monthly.
+        WEEKLY (str): Indicates that the maintenance task should run weekly.
+        DAILY (str): Indicates that the maintenance task should run daily.
+        AUTO (str): Indicates that the maintenance task should run automatically.
     """
     YEAR = "YEAR"
     MONTH = "MONTH"
+    WEEK = "WEEK"
     DAY = "DAY"
     HOUR = "HOUR"
     AUTO = "AUTO"
