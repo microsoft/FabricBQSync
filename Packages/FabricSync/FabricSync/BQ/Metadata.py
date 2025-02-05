@@ -1,16 +1,20 @@
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import *
-from pyspark.sql.types import *
-from delta.tables import *
-import traceback
-
-from .Model.Config import *
-from .Core import *
-from .DeltaTableUtility import *
-from .Enum import *
-from .Exceptions import *
-from .Constants import SyncConstants
-from .SyncUtils import SyncUtil
+from typing import Tuple
+from FabricSync.BQ.SyncCore import ConfigBase
+from FabricSync.BQ.Threading import QueueProcessor
+from FabricSync.BQ.Model.Core import (
+    InformationSchemaModel, BQQueryModel, PredicateType
+)
+from FabricSync.BQ.Enum import (
+    SyncLoadType, BigQueryObjectType, SchemaView,BigQueryAPI
+)
+from FabricSync.BQ.Exceptions import (
+    MetadataSyncError
+)
+from FabricSync.BQ.Constants import SyncConstants
+from FabricSync.BQ.Logging import Telemetry
+from FabricSync.BQ.Metastore import FabricMetastore
+from FabricSync.BQ.SyncUtils import SyncUtil
+from FabricSync.BQ.Utils import SyncTimer
 
 class BQMetadataLoader(ConfigBase):
     """
@@ -20,18 +24,35 @@ class BQMetadataLoader(ConfigBase):
         the Lakehouse Delta tables
     2. Autodetect table sync configuration based on defined metadata & heuristics
     """
-    def __init__(self, context:SparkSession, user_config, gcp_credential:str):
+    def __init__(self) -> None:
         """
-        Initializes the Loader class.
+        Constructor for BQMetadataLoader class that initializes the schema models for the BigQuery information schema views.
         Args:
-            context (SparkSession): The Spark session context.
-            user_config: User configuration settings.
-            gcp_credential (str): Google Cloud Platform credential string.
+            user_config: The user configuration object
+        Returns:
+            None
         """
-        super().__init__(context, user_config, gcp_credential)
-        self.load_bq_information_schema_models()
+        super().__init__()
+        self.__load_bq_information_schema_models()
 
-    def sync_bq_information_schema_core(self, project:str, dataset:str, type:BigQueryObjectType, mode:LoadType):
+    def __sync_bq_information_schema_core(self, project:str, dataset:str, type:BigQueryObjectType, mode:SyncLoadType)-> None:
+        """
+        Synchronize BigQuery information schema objects (tables, views, or materialized views) for a specified
+        GCP project and dataset based on the provided configuration and sync load type.
+        Args:
+            project (str): The GCP project ID where the BigQuery dataset resides.
+            dataset (str): The name of the BigQuery dataset to be synchronized.
+            type (BigQueryObjectType): The type of BigQuery object to process (e.g., BASE_TABLE, VIEW, MATERIALIZED_VIEW).
+            mode (SyncLoadType): The data load mode (e.g., overwrite or append).
+        Returns:
+            None: The function writes the synchronized metadata to a Spark-managed table as defined by the schema model.
+        Notes:
+            - The sync process filters objects based on user configuration (e.g., whether to load all tables or apply specific filters).
+            - Leverages different BigQuery APIs (STANDARD or STORAGE) depending on user settings.
+            - Automatically builds and applies predicates to the query model to limit synchronized objects.
+            - Logs status messages if metadata synchronization is skipped.
+        """
+
         is_enabled = False
 
         match type:
@@ -59,7 +80,7 @@ class BQMetadataLoader(ConfigBase):
             qm = {
                 "ProjectId": project,
                 "Dataset": dataset,
-                "Query": schema_model.get_base_sql(project, dataset),
+                "Query": schema_model.get_base_sql(self.ID, project, dataset),
                 "API": bq_api,
                 "Cached": False
             }
@@ -117,15 +138,31 @@ class BQMetadataLoader(ConfigBase):
             if not df:
                 df = schema_model.get_empty_df(self.Context)
         else:
-            self.Logger.sync_status(f"Metadata Sync for {view} SKIPPED (Not Enabled in Config)...")
+            self.Logger.sync_status(f"Metadata Sync for {view} SKIPPED (Not Enabled in Config)...", verbose=True)
             df = schema_model.get_empty_df(self.Context)
         
-        df.write.mode(str(mode)).saveAsTable(f"{self.UserConfig.Fabric.MetadataLakehouse}.{schema_model.TableName}")
+        df.write.partitionBy("sync_id").mode(mode.value).saveAsTable(f"{schema_model.TableName}")
 
-    def sync_bq_information_schema_table_dependent(self, project:str, dataset:str, view:SchemaView, mode:LoadType): 
+    def __sync_bq_information_schema_table_dependent(self, project:str, dataset:str, view:SchemaView, mode:SyncLoadType)-> None: 
+        """
+        Synchronize BigQuery information schema objects (columns, key column usage, partitions, table constraints, table options) for a specified
+        GCP project and dataset based on the provided configuration and sync load type.
+        Args:
+            project (str): The GCP project ID where the BigQuery dataset resides.
+            dataset (str): The name of the BigQuery dataset to be synchronized.
+            view (SchemaView): The type of BigQuery object to process (e.g., COLUMNS, KEY_COLUMN_USAGE, PARTITIONS, TABLE_CONSTRAINTS, TABLE_OPTIONS).
+            mode (SyncLoadType): The data load mode (e.g., overwrite or append).
+        Returns:
+            None: The function writes the synchronized metadata to a Spark-managed table as defined by the schema model.
+        Notes:
+            - The sync process filters objects based on user configuration (e.g., whether to load all tables or apply specific filters).
+            - Leverages different BigQuery APIs (STANDARD or STORAGE) depending on user settings.
+            - Automatically builds and applies predicates to the query model to limit synchronized objects.
+            - Logs status messages if metadata synchronization is skipped.
+        """
         schema_model = self.schema_models[view]
 
-        bql = schema_model.get_base_sql(project, dataset, alias="c")
+        bql = schema_model.get_base_sql(self.ID, project, dataset, alias="c")
         bql = bql + \
             f" JOIN {project}.{dataset}.{SchemaView.INFORMATION_SCHEMA_TABLES} t ON t.table_catalog=c.table_catalog AND t.table_schema=c.table_schema AND t.table_name=c.table_name"
 
@@ -171,14 +208,23 @@ class BQMetadataLoader(ConfigBase):
         if not df:
             df = schema_model.get_empty_df(self.Context)
 
-        df.write.mode(str(mode)).saveAsTable(f"{self.UserConfig.Fabric.MetadataLakehouse}.{schema_model.TableName}")
+        df.write.mode(mode.value).partitionBy("sync_id").saveAsTable(f"{schema_model.TableName}")
 
-    def load_bq_information_schema_models(self):
+    def __load_bq_information_schema_models(self) -> None:
+        """
+        Load the schema models for the BigQuery information schema views.
+        Args:
+            None
+        Returns:
+            None: The function initializes the schema models for the information schema views.
+        Notes:
+            - The schema models are used to define the schema of the Delta tables that store the BigQuery information schema metadata.
+        """
         self.schema_models = {}
 
         self.schema_models[SchemaView.INFORMATION_SCHEMA_TABLES] = InformationSchemaModel.define(SchemaView.INFORMATION_SCHEMA_TABLES, 
-            "table_catalog,table_schema,table_name,table_type,creation_time,ddl", 
-            '{"fields":[{"metadata":{},"name":"table_catalog","nullable":true,"type":"string"},{"metadata":{},"name":"table_schema","nullable":true,"type":"string"},{"metadata":{},"name":"table_name","nullable":true,"type":"string"},{"metadata":{},"name":"table_type","nullable":true,"type":"string"},{"metadata":{},"name":"creation_time","nullable":true,"type":"timestamp"},{"metadata":{},"name":"ddl","nullable":true,"type":"string"}],"type":"struct"}')
+            "table_catalog,table_schema,table_name,table_type,creation_time,ddl,is_change_history_enabled", 
+            '{"fields":[{"metadata":{},"name":"table_catalog","nullable":true,"type":"string"},{"metadata":{},"name":"table_schema","nullable":true,"type":"string"},{"metadata":{},"name":"table_name","nullable":true,"type":"string"},{"metadata":{},"name":"table_type","nullable":true,"type":"string"},{"metadata":{},"name":"creation_time","nullable":true,"type":"timestamp"},{"metadata":{},"name":"ddl","nullable":true,"type":"string"},{"metadata":{},"name":"is_change_history_enabled","nullable":true,"type":"string"}],"type":"struct"}')
 
         self.schema_models[SchemaView.INFORMATION_SCHEMA_VIEWS] = InformationSchemaModel.define(SchemaView.INFORMATION_SCHEMA_VIEWS, 
             "table_catalog,table_schema,table_name,view_definition",
@@ -207,16 +253,30 @@ class BQMetadataLoader(ConfigBase):
         self.schema_models[SchemaView.INFORMATION_SCHEMA_TABLE_OPTIONS] = InformationSchemaModel.define(SchemaView.INFORMATION_SCHEMA_TABLE_OPTIONS, 
             "table_catalog,table_schema,table_name,option_name,option_type,option_value",
             '{"fields":[{"metadata":{},"name":"table_catalog","nullable":true,"type":"string"},{"metadata":{},"name":"table_schema","nullable":true,"type":"string"},{"metadata":{},"name":"table_name","nullable":true,"type":"string"},{"metadata":{},"name":"option_name","nullable":true,"type":"string"},{"metadata":{},"name":"option_type","nullable":true,"type":"string"},{"metadata":{},"name":"option_value","nullable":true,"type":"string"}],"type":"struct"}')
-    
-    def cleanup_metadata_cache(self):
-        metadata_views = SyncConstants.get_information_schema_views()
-        list(map(lambda x: self.Context.sql(f"DROP TABLE IF EXISTS BQ_{x.replace('.', '_')}"), metadata_views))
 
-    def thread_exception_handler(self, value):
-        self.Logger.error(msg=f"ERROR {value}: {traceback.format_exc()}")
+    def __thread_exception_handler(self, value:Tuple):
+        """
+        Thread exception handler for the async metadata update process.
+        Args:
+            value (tuple): The tuple containing the thread exception information.
+        Returns:
+            None: The function logs the exception information.
+        """
+        #self.Logger.error(msg=f"ERROR {value}: {traceback.format_exc()}")
+        self.Logger.error(msg=f"ERROR - {value[1]} FAILED: {value[2]}")
 
-    def async_bq_metadata(self):
-        self.Logger.sync_status(f"Async metadata update with parallelism of {self.UserConfig.Async.Parallelism}...")
+    def __async_bq_metadata(self) -> None:
+        """
+        Asynchronously update the BigQuery metadata for the information schema views.
+        Args:
+            None
+        Returns:
+            None: The function processes the metadata update for the information schema views.
+        Notes:
+            - The function uses a queue processor to handle the asynchronous metadata update process.
+            - The function logs status messages if the metadata update fails.
+        """
+        self.Logger.sync_status(f"Async metadata update with parallelism of {self.UserConfig.Async.Parallelism}...", verbose=True)
 
         processor = QueueProcessor(num_threads=self.UserConfig.Async.Parallelism)
 
@@ -229,7 +289,7 @@ class BQMetadataLoader(ConfigBase):
                 case _:
                     processor.put((2,view))
 
-        processor.process(self.metadata_sync, self.thread_exception_handler)
+        processor.process(self.__metadata_sync, self.__thread_exception_handler)
 
         if processor.has_exceptions:
             self.has_exception = True            
@@ -237,50 +297,81 @@ class BQMetadataLoader(ConfigBase):
         else:
             self.has_exception = False
 
-    def metadata_sync(self, value):
+    def __metadata_sync(self, value:Tuple) -> None:
+        """
+        Synchronize the BigQuery metadata for the specified information schema view.
+        Args:
+            value (tuple): The tuple containing the view information.
+        Returns:
+            None: The function processes the metadata synchronization for the specified view.
+        Notes:
+            - The function logs status messages if the metadata synchronization fails.
+        """
         view = SchemaView[value[1]]
-        self.Logger.sync_status(f"Syncing metadata for {view}...")
+        self.Logger.sync_status(f"Syncing metadata for {view}...", verbose=True)
 
-        mode = LoadType.OVERWRITE
+        mode = SyncLoadType.OVERWRITE
 
         with SyncTimer() as t:
-            #Clean-up existing table
-            self.Context.sql(f"DROP TABLE IF EXISTS BQ_{str(view).replace('.', '_')}")
+            schema_model = self.schema_models[view]
+            #Clean-up existing data
+            #if self.Context.catalog.tableExists(schema_model.TableName):
+            #    self.Context.sql(f"DELETE FROM {schema_model.TableName} WHERE sync_id='{self.ID}'")
 
             for p in self.UserConfig.GCP.Projects:
                 for d in p.Datasets:
                     match view:
                         case SchemaView.INFORMATION_SCHEMA_TABLES:
-                            self.sync_bq_information_schema_core(project=p.ProjectID, dataset=d.Dataset, type=BigQueryObjectType.BASE_TABLE, mode=mode)
+                            self.__sync_bq_information_schema_core(project=p.ProjectID, dataset=d.Dataset, type=BigQueryObjectType.BASE_TABLE, mode=mode)
                         case SchemaView.INFORMATION_SCHEMA_VIEWS:
-                            self.sync_bq_information_schema_core(project=p.ProjectID, dataset=d.Dataset, type=BigQueryObjectType.VIEW, mode=mode)
+                            self.__sync_bq_information_schema_core(project=p.ProjectID, dataset=d.Dataset, type=BigQueryObjectType.VIEW, mode=mode)
                         case SchemaView.INFORMATION_SCHEMA_MATERIALIZED_VIEWS:
-                            self.sync_bq_information_schema_core(project=p.ProjectID, dataset=d.Dataset, type=BigQueryObjectType.MATERIALIZED_VIEW, mode=mode)
+                            self.__sync_bq_information_schema_core(project=p.ProjectID, dataset=d.Dataset, type=BigQueryObjectType.MATERIALIZED_VIEW, mode=mode)
                         case _:
-                            self.sync_bq_information_schema_table_dependent(project=p.ProjectID, dataset=d.Dataset, view=view, mode=mode)
+                            self.__sync_bq_information_schema_table_dependent(project=p.ProjectID, dataset=d.Dataset, view=view, mode=mode)
                     
-                    if mode == LoadType.OVERWRITE:
-                        mode = LoadType.APPEND
+                    if mode == SyncLoadType.OVERWRITE:
+                        mode = SyncLoadType.APPEND
         
         self.Logger.sync_status(f"Syncing metadata for {view} completed in {str(t)}...")
 
     @Telemetry.Metadata_Sync
-    def sync_metadata(self):        
+    def sync_metadata(self) -> None:   
+        """
+        Synchronize the BigQuery metadata for the information schema views.
+        Args:
+            None
+        Returns:
+            None: The function processes the metadata synchronization for the information schema views.
+        Notes:
+            - The function logs status messages if the metadata synchronization fails.
+        """
         self.Logger.sync_status(f"BQ Metadata Update with BQ {'STANDARD' if self.UserConfig.GCP.API.UseStandardAPI == True else 'STORAGE'} API...")
         with SyncTimer() as t:
-            self.async_bq_metadata()
+            self.Context.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
+            self.__async_bq_metadata()
+            self.Context.conf.set("spark.sql.sources.partitionOverwriteMode", "static")
 
         if not self.has_exception:
-            self.Metastore.create_proxy_views()
             self.Logger.sync_status(f"BQ Metadata Update completed in {str(t)}...")
         else:
             raise MetadataSyncError(msg="BQ Metadata sync failed. Please check the logs.")  
 
     @Telemetry.Auto_Discover
-    def auto_detect_config(self):
-        self.Logger.sync_status("Auto-detecting schema/configuration...")
+    def auto_detect_config(self) -> None:
+        """
+        Auto-detect the schema and configuration for the BigQuery tables based on the defined metadata and heuristics.
+        Args:
+            None
+        Returns:
+            None: The function auto-detects the schema and configuration for the BigQuery tables.
+        Notes:
+            - The function logs status messages if the auto-detection process fails.
+        """
+        SyncUtil.ensure_sync_views()
+        self.Logger.sync_status("Auto-detecting schema/configuration...", verbose=True)
 
         with SyncTimer() as t:
-            self.Metastore.auto_detect_profiles(self.UserConfig.ID)
+            FabricMetastore.auto_detect_profiles()
         
         self.Logger.sync_status(f"Auto-detect schema/configuration completed in {str(t)}...")

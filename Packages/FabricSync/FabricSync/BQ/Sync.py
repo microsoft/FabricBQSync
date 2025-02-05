@@ -1,80 +1,231 @@
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import *
-from pyspark.sql.types import *
-from delta.tables import *
-import random
+from packaging import version as pv
 
-from .Model.Config import *
-from .Core import *
-from .Enum import *
-from .SyncUtils import *
-from .Loader import BQScheduleLoader
-from .Metadata import BQMetadataLoader
-from .Schedule import BQScheduler
-from .Logging import *
-from .Exceptions import *
-from .Expiration import BQDataRetention
+from FabricSync.BQ.Core import Session
+from FabricSync.BQ.SyncCore import SyncBase
+from FabricSync.BQ.Auth import (
+    Credentials, TokenProvider
+)
+from FabricSync.BQ.Enum import (
+    SyncScheduleType, FabricDestinationType
+)
+from FabricSync.BQ.Utils import SyncTimer
+from FabricSync.BQ.Loader import BQScheduleLoader
+from FabricSync.BQ.Metadata import BQMetadataLoader
+from FabricSync.BQ.Schedule import BQScheduler
+from FabricSync.BQ.Logging import Telemetry
+from FabricSync.BQ.Exceptions import SyncBaseError, SyncConfigurationError
+from FabricSync.BQ.Expiration import BQDataRetention
+from FabricSync.BQ.Lakehouse import LakehouseCatalog
+from FabricSync.BQ.Metastore import FabricMetastore
+from FabricSync.BQ.APIClient import FabricAPI
+from FabricSync.BQ.ModelValidation import UserConfigurationValidation
+from FabricSync.BQ.Model.Config import ConfigDataset
 
 class BQSync(SyncBase):
-    def __init__(self, context:SparkSession, config_path:str):
-        super().__init__(context, config_path, clean_session=True)
+    def __init__(self, config_path:str, credentials:Credentials):
+        """
+        Initializes the synchronization process for BigQuery by configuring logging, scheduling, and data retention.
+        Args:
+            config_path (str): The path to the sync configuration file.
+            credentials (Credentials): The provider used to obtain necessary authentication credentials.
+        Sets:
+            self.Logger: Handles sync logging and status updates.
+            self.MetadataLoader: Manages metadata operations for BigQuery.
+            self.Scheduler: Orchestrates schedules for data loading tasks.
+            self.Loader: Executes scheduled loads into BigQuery.
+            self.DataRetention: Applies data retention policies in BigQuery.
+        """
 
-        self.MetadataLoader = BQMetadataLoader(context, self.UserConfig, self.GCPCredential)
-        self.Scheduler = BQScheduler(context, self.UserConfig, self.GCPCredential)
-        self.Loader = BQScheduleLoader(context, self.UserConfig, self.GCPCredential)
-        self.DataRetention = BQDataRetention(context, self.UserConfig, self.GCPCredential)
+        try:
+            super().__init__(config_path, credentials)
+
+            if self.__requires_update():
+                self.__update_sync_runtime(config_path)
+
+            config_validation = UserConfigurationValidation.validate(self.UserConfig)
+
+            if not config_validation:
+                self.MetadataLoader = BQMetadataLoader()
+                self.Scheduler = BQScheduler()
+                self.Loader = BQScheduleLoader()
+                self.DataRetention = BQDataRetention()
+            else:
+                self.UserConfig = None
+                self.Logger.sync_status(f"Failed to load BQ Sync with User Configuration errors:\r\n" +
+                    "\r\n".join(config_validation))
+
+        except SyncConfigurationError as e:
+            self.Logger.sync_status(f"FAILED TO INITIALIZE FABRIC SYNC\r\n{e}")
+
+    def update_user_config_for_current(self):
+        if not self._is_runtime_ready():
+            return
+            
+        self.__validate_user_config(self.UserConfigPath)
+
+    def __validate_user_config(self, config_path:str):
+        self.Logger.sync_status(f"Updating Fabric Sync user configuration...")
+        config = ConfigDataset.from_json(config_path, False)
+        config.Version = str(Session.CurrentVersion)
+        config.Fabric.WorkspaceID = self.Context.conf.get("trident.workspace.id")
+
+        #Override any configured workspace and use the current context
+        workspace_id = Session.Context.conf.get("trident.workspace.id")
+
+        fabric_api = FabricAPI(workspace_id, 
+            self.TokenProvider.get_token(TokenProvider.FABRIC_TOKEN_SCOPE))    
+
+        config.Fabric.WorkspaceName = fabric_api.Workspace.get_name(workspace_id)
+
+        if self.UserConfig.Fabric.MetadataLakehouse:
+            config.Fabric.MetadataLakehouseID = fabric_api.Lakehouse.get_id(self.UserConfig.Fabric.MetadataLakehouse)
+
+        if not config.Fabric.TargetType:
+            config.Fabric.TargetType = FabricDestinationType.LAKEHOUSE
+        
+        if self.UserConfig.Fabric.TargetLakehouse:
+            if config.Fabric.TargetType  == FabricDestinationType.LAKEHOUSE:
+                config.Fabric.TargetLakehouseID = fabric_api.Lakehouse.get_id(self.UserConfig.Fabric.TargetLakehouse)
+            else:
+                config.Fabric.TargetLakehouseID = fabric_api.OpenMirroredDatabase.get_id(self.UserConfig.Fabric.TargetLakehouse)
+
+        config.to_json(config_path)
+        self.init_sync_session(config_path)
+
+    def __update_sync_runtime(self, config_path:str):
+            self.Logger.sync_status(f"Upgrading Fabric Sync metastore to v{str(Session.CurrentVersion)}...")
+            LakehouseCatalog.upgrade_metastore(self.UserConfig.Fabric.get_metadata_lakehouse())
+            
+            self.__validate_user_config(config_path)
+        
+    def __requires_update(self) -> bool:
+        if Session.CurrentVersion > self.Version:
+            self.Logger.sync_status(f"Fabric Sync Config Version: " +
+                f"{str(self.Version)} - Runtime Version: {str(Session.CurrentVersion)}")
+            return True
+        else:
+            return False
+
+    def _is_runtime_ready(self) -> bool:
+        if not self.UserConfig:
+            self.Logger.sync_status("ERROR: Fabric Sync User Configuration must be loaded first. Please reload and try again.")
+            return False
+        else:
+            return True
 
     def sync_metadata(self):
+        """
+        Synchronizes metadata in the BQ environment.
+        This method triggers the metadata synchronization using the MetadataLoader instance.
+        If 'Autodetect' is enabled in the user's configuration, it performs automatic
+        detection of configuration settings.
+        Raises:
+            SyncBaseError: If a metadata update operation fails.
+        """
+        if not self._is_runtime_ready():
+            return
+
         try:
             self.MetadataLoader.sync_metadata()
-
-            if self.UserConfig.Autodetect:
-                self.MetadataLoader.auto_detect_config()
+            self.sync_autodetect()
         except SyncBaseError as e:
             self.Logger.error(f"BQ Metadata Update Failed: {e}")
     
-    def build_schedule(self, schedule_type:str = str(ScheduleType.AUTO), sync_metadata:bool = True):
+    def sync_autodetect(self):
+        """
+        Automatically updates BigQuery metadata if autodetection is enabled.
+        This method checks if autodetection is enabled in the user configuration.
+        If enabled, it creates the necessary proxy views and attempts to
+        autodetect the metadata configuration. Logs an error if metadata
+        autodetection fails.
+        Raises:
+            SyncBaseError: If any errors occur during metadata autodetection.
+        """
+        if not self._is_runtime_ready():
+            return
+
+        try:
+            if self.UserConfig.Autodetect:
+                self.MetadataLoader.auto_detect_config()
+        except SyncBaseError as e:
+            self.Logger.error(f"BQ Metadata Autodetect Failed: {e}")
+
+    def build_schedule(self, schedule_type:SyncScheduleType = SyncScheduleType.AUTO, sync_metadata:bool = True):
+        """
+        Builds or updates the synchronization schedule in BigQuery.
+        This method triggers metadata synchronization if requested, or creates
+        proxy views directly if metadata syncing is skipped. Afterwards, it
+        instructs the Scheduler to build the schedule based on the given schedule type.
+        Args:
+            schedule_type (SyncScheduleType, optional): The type of schedule to create (e.g., manual or automatic).
+            sync_metadata (bool, optional): Determines whether to synchronize metadata before building the schedule.
+        Raises:
+            SyncBaseError: If there is a failure during metadata synchronization or schedule creation.
+        """
+        if not self._is_runtime_ready():
+            return
+
         try:
             if sync_metadata:
                 self.sync_metadata()
-            else:
-                self.Metastore.create_proxy_views()
 
-            self.Scheduler.build_schedule(schedule_type=ScheduleType[schedule_type])
+            self.Scheduler.build_schedule(schedule_type)
         except SyncBaseError as e:
             self.Logger.error(f"BQ Scheduler Failed: {e}")
 
     @Telemetry.Delta_Maintenance(maintainence_type="SYNC_METADATA")
     def optimize_metadata_tbls(self):
-        self.Logger.sync_status("Optimizing Sync Metadata Metastore...")
-        SyncUtil.optimize_bq_sync_metastore(self.Context)
+        """
+        Optimize metadata tables in the sync metastore.
+        Logs a status message indicating the optimization process
+        and then invokes the SyncUtil utility to perform the actual
+        optimization on the sync metadata metastore.
+        """
+        if not self._is_runtime_ready():
+            return
 
-    def run_schedule(self, schedule_type:str, build_schedule:bool=True, sync_metadata:bool=False, optimize_metadata:bool=True):
+        self.Logger.sync_status("Optimizing Sync Metadata Metastore...", verbose=True)
+        LakehouseCatalog.optimize_sync_metastore()
+
+    def run_schedule(self, schedule_type:SyncScheduleType, build_schedule:bool=True, sync_metadata:bool=False, optimize_metadata:bool=True):
+        """
+        Runs the data synchronization schedule, optionally building and synchronizing metadata.
+        Args:
+            schedule_type (SyncScheduleType): The type of schedule to run (e.g., incremental or full).
+            build_schedule (bool, optional): If True, builds the schedule before running. Defaults to True.
+            sync_metadata (bool, optional): If True, performs metadata synchronization. Defaults to False.
+            optimize_metadata (bool, optional): If True, optimizes metadata tables after synchronization. Defaults to True.
+        Raises:
+            SyncBaseError: If a synchronization-related error is encountered.
+        """
+        if not self._is_runtime_ready():
+            return
+
         try:
             if build_schedule:
-                self.build_schedule(schedule_type=schedule_type, sync_metadata=sync_metadata)
+                self.build_schedule(schedule_type, sync_metadata)
 
-            if self.UserConfig.Fabric.EnableSchemas:
-                self.Metastore.ensure_schemas(self.UserConfig.Fabric.WorkspaceId, self.UserConfig.ID)
+            if self.UserConfig.Fabric.EnableSchemas and self.UserConfig.Fabric.TargetType==FabricDestinationType.LAKEHOUSE:
+                FabricMetastore.ensure_schemas(self.UserConfig.Fabric.WorkspaceName)
 
-            initial_loads = self.Loader.run_schedule(self.UserConfig.ID, schedule_type)
+            initial_loads = self.Loader.run_schedule(schedule_type)
             
             if initial_loads:
-                self.Logger.sync_status("Committing Sync Table Configuration...")
-                self.Metastore.commit_table_configuration(self.UserConfig.ID, schedule_type)
+                self.Logger.sync_status("Committing Sync Table Configuration...", verbose=True)
+                FabricMetastore.commit_table_configuration(schedule_type)
             
             if self.UserConfig.EnableDataExpiration:
-                self.Logger.sync_status(f"Data Expiration started...")
+                self.Logger.sync_status(f"Data Expiration started...", verbose=True)
                 with SyncTimer() as t:
                     self.DataRetention.execute()
                 self.Logger.sync_status(f"Data Expiration completed in {str(t)}...")
             
             if optimize_metadata:
-                self.Logger.sync_status(f"Metastore Metadata Optimization started...")
+                self.Logger.sync_status(f"Metastore Metadata Optimization started...", verbose=True)
                 with SyncTimer() as t:
                     self.optimize_metadata_tbls()
                 self.Logger.sync_status(f"Metastore Metadata Optimization completed in {str(t)}...")
             
             self.Logger.sync_status("Run Schedule Done!!")
         except SyncBaseError as e:
-            self.Logger.error(f"Run Schedule Failed: {e}")     
+            self.Logger.error(f"Run Schedule Failed: {e}")

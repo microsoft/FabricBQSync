@@ -1,5 +1,0 @@
-pydantic
-PyGithub
-mlflow-skinny
-google-cloud-bigquery
-db-dtypes

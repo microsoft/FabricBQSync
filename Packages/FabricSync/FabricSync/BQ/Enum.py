@@ -2,36 +2,168 @@ from enum import Enum
 
 class BaseEnum(Enum):
     """
-    BaseEnum is a subclass of the Enum class that provides a custom string representation.
-    Methods:
-        __str__(): Returns the string representation of the enum value.
+    Base Enum class.
     """
-
-    pass
-
     def __str__(self):
+        """
+        Returns the string representation of the enum.
+        Returns:
+            str: The string representation of the enum.
+        """
         return str(self.value)
 
-class MaintenanceStrategy(BaseEnum):
+class SparkSessionConfig(str, BaseEnum):
+    """
+    Represents the possible Spark session configurations.
+    Attributes:
+        APPLICATION_ID (str): The application ID.
+        VERSION (str): The version.
+        NAME (str): The application name.
+        LOG_PATH (str): The log path.
+        LOG_LEVEL (str): The log level.
+        LOG_TELEMETRY (str): The log telemetry.
+        TELEMETRY_ENDPOINT (str): The telemetry endpoint.
+        WORKSPACE_ID (str): The workspace ID.
+        METADATA_LAKEHOUSE (str): The metadata lakehouse.
+        METADATA_LAKEHOUSE_SCHEMA (str): The metadata lakehouse schema.
+        METADATA_LAKEHOUSE_ID (str): The metadata lakehouse ID.
+        TARGET_LAKEHOUSE (str): The target lakehouse.
+        TARGET_LAKEHOUSE_SCHEMA (str): The target lakehouse schema.
+        TARGET_LAKEHOUSE_ID (str): The target lakehouse ID.
+        SCHEMA_ENABLED (str): The schema enabled.
+        FABRIC_API_TOKEN (str): The Fabric API token.
+        USER_CONFIG_PATH (str): The user config path.
+    """
+    APPLICATION_ID = "application_id"
+    VERSION = "version"
+    NAME = "name"
+    LOG_PATH = "log_path"
+    LOG_LEVEL = "log_level"
+    LOG_TELEMETRY = "log_telemetry"
+    TELEMETRY_ENDPOINT = "telemetry_endpoint"
+    WORKSPACE_ID = "workspace_id"
+    METADATA_LAKEHOUSE = "metadata_lakehouse"
+    METADATA_LAKEHOUSE_SCHEMA = "metadata_lakehouse_schema"
+    METADATA_LAKEHOUSE_ID = "metadata_lakehouse_id"
+    TARGET_LAKEHOUSE = "target_lakehouse"
+    TARGET_LAKEHOUSE_SCHEMA = "target_lakehouse_schema"
+    TARGET_LAKEHOUSE_ID = "target_lakehouse_id"
+    SCHEMA_ENABLED = "schema_enabled"
+    FABRIC_API_TOKEN = "fabric_api_token"
+    USER_CONFIG_PATH = "user_config_path"
+    SYNC_VIEW_STATE = "sync_view_state"
+
+class FileSystemType(str, BaseEnum):
+    """
+    FileSystemType is an enumeration of supported file system types.
+    Attributes:
+        ABFSS (str): Azure Blob File System Storage.
+        DBFS (str): Databricks File System.
+        HDFS (str): Hadoop Distributed File System.
+        S3 (str): Amazon S3.
+        LOCAL (str): Local file system.
+        UNKNOWN (str): Unknown file system.
+    """
+    ABFSS = "ABFSS"
+    DBFS = "DBFS"
+    HDFS = "HDFS"
+    S3 = "S3"
+    LOCAL = "LOCAL"
+    UNKNOWN = "UNKNOWN"
+
+    @classmethod
+    def _from_pattern(cls, pattern: str) -> "FileSystemType":
+        """
+        Returns the file system type based on the provided pattern.
+        Args:
+            pattern (str): The file system pattern.
+        Returns:
+            FileSystemTypes: The file system type.
+        """
+        return {
+            "abfss://": cls.ABFSS,
+            "s3://": cls.S3,
+            "s3a://": cls.S3,
+            "dbfs://": cls.DBFS,
+            "hdfs://": cls.HDFS,
+            "file://": cls.LOCAL,
+        }.get(pattern, cls.UNKNOWN)
+    
+class FabricItemType(str, BaseEnum):
+    """
+    A string-based enumeration representing different item types in Fabric.
+    Attributes:
+        WORKSPACE: Represents a Fabric workspace.
+        ENVIRONMENT: Represents a Fabric environment.
+        LAKEHOUSE: Represents a Fabric lakehouse.
+        MIRRORED_DATABASE: Represents a mirrored database within Fabric.
+        NOTEBOOK: Represents a Fabric notebook.
+    """
+    
+    WORKSPACE = "workspaces"
+    ENVIRONMENT = "environments"
+    LAKEHOUSE = "lakehouses"
+    MIRRORED_DATABASE = "mirroredDatabases"
+    NOTEBOOK = "notebooks"
+
+class LakehouseFileFormat(str, BaseEnum):
+    """
+    The LakehouseFileFormat class enumerates supported file formats within a lakehouse environment.
+    Attributes:
+        DELTA (str): Represents the Delta file format, often used for transactional data storage.
+        PARQUET (str): Represents the Parquet file format, commonly used for efficient, columnar data storage.
+    """
+    DELTA = "delta"
+    PARQUET = "parquet"
+
+class FabricDestinationType(str, BaseEnum):
+    """
+    FabricDestinationType is an enumeration that defines different possible destinations for data in
+    Fabric applications. The enumerations include:
+        LAKEHOUSE: Represents a lakehouse environment for data storage and analytics.
+        MIRRORED_DATABASE: Represents a mirrored database environment for data synchronization.
+    Use these enum values to configure the destination type for Fabric pipelines or integrations.
+    """
+
+    LAKEHOUSE = "LAKEHOUSE"
+    MIRRORED_DATABASE = "MIRRORED_DATABASE"
+
+class FabricCDCType(str, BaseEnum):
+    """
+    FabricCDCType is an integer-based enumeration defining possible change data capture (CDC) operations.
+    Attributes:
+        INSERT (int): Indicates that a record was inserted.
+        UPDATE (int): Indicates that a record was updated.
+        DELETE (int): Indicates that a record was deleted.
+        UPSERT (int): Indicates that a record was inserted or updated (upsert operation).
+    """
+
+    INSERT = "0"
+    UPDATE = "1"
+    DELETE = "2"
+    UPSERT = "4"
+
+class MaintenanceStrategy(str, BaseEnum):
+    """
+    MaintenanceStrategy is an enumeration of possible maintenance strategies.
+    Attributes:
+        SCHEDULED (str): Indicates that maintenance tasks are performed on a set schedule.
+        INTELLIGENT (str): Indicates that maintenance tasks are performed based on intelligent heuristics or conditions.
+    """
     SCHEDULED="SCHEDULED"
     INTELLIGENT="INTELLIGENT"
 
-class SupportedTypeConversion(BaseEnum):
+class SupportedTypeConversion(str, BaseEnum):
     """
-    Enum class for supported type conversions.
-    Attributes:
-        STRING_TO_DATE (str): Conversion from string to date.
-        STRING_TO_TIMESTAMP (str): Conversion from string to timestamp.
-        STRING_TO_INT (str): Conversion from string to integer.
-        STRING_TO_LONG (str): Conversion from string to long integer.
-        STRING_TO_DECIMAL (str): Conversion from string to decimal.
-        DATE_TO_STRING (str): Conversion from date to string.
-        TIMESTAMP_TO_STRING (str): Conversion from timestamp to string.
-        INT_TO_STRING (str): Conversion from integer to string.
-        DECIMAL_TO_STRING (str): Conversion from decimal to string.
-        LONG_TO_STRING (str): Conversion from long integer to string.
+    Represents the set of supported type conversions for configuring data transformations in BigQuery.
+    Each member corresponds to a specific source-to-target type mapping, such as:
+    - Converting a STRING value to a DATE or TIMESTAMP for date/time operations.
+    - Converting a STRING value to an INT, LONG, or DECIMAL for numerical operations.
+    - Converting a DATE or TIMESTAMP back into a STRING for readability.
+    - Converting numeric types (INT, LONG, DECIMAL) to STRING for flexible data processing.
+    This enumeration helps ensure consistent data handling across different stages of data engineering
+    pipelines, allowing for reliable and predictable type casting in BigQuery.
     """
-
     STRING_TO_DATE = "STRING_TO_DATE"
     STRING_TO_TIMESTAMP = "STRING_TO_TIMESTAMP"
     STRING_TO_INT = "STRING_TO_INT"
@@ -43,41 +175,59 @@ class SupportedTypeConversion(BaseEnum):
     DECIMAL_TO_STRING = "DECIMAL_TO_STRING"
     LONG_TO_STRING = "LONG_TO_STRING"
 
-class ObjectFilterType(BaseEnum):
+class ObjectFilterType(str, BaseEnum):
     """
-    Enum class representing the type of object filter.
-    Attributes:
-        INCLUDE (str): Represents an inclusion filter type.
-        EXCLUDE (str): Represents an exclusion filter type.
+    Defines possible filter behaviors for objects.
+    INCLUDE: Indicates that the matching objects should be included.
+    EXCLUDE: Indicates that the matching objects should be excluded.
     """
-
     INCLUDE = "INCLUDE"
     EXCLUDE = "EXCLUDE"
 
-class PredicateType(BaseEnum):
+class PredicateType(str, BaseEnum):
     """
-    Enum class representing predicate types for logical operations.
+    Represents a string-based predicate type enumeration.
+    This enumeration extends both str and BaseEnum, allowing its members
+    to behave like strings while also providing Enum-like semantics.
     Attributes:
-        AND (str): Represents the logical AND operation.
-        OR (str): Represents the logical OR operation.
+        AND: Logical AND predicate.
+        OR: Logical OR predicate.
     """
-
     AND = "AND"
     OR = "OR"
-    
-class SyncLogLevel(BaseEnum):
-    """
-    SyncLogLevel is an enumeration that defines various levels of logging for synchronization processes.
-    Attributes:
-        DEBUG (int): Debug-level messages, typically used for development and troubleshooting (value: 10).
-        INFO (int): Informational messages that highlight the progress of the application (value: 20).
-        WARNING (int): Warning messages that indicate a potential issue or important situation (value: 30).
-        SYNC_STATUS (int): Messages specifically related to the status of synchronization (value: 34).
-        TELEMETRY (int): Messages related to telemetry data (value: 35).
-        ERROR (int): Error messages indicating a failure in the application (value: 40).
-        CRITICAL (int): Critical messages indicating a severe failure that may cause the application to terminate (value: 50).
-    """
 
+class SyncLogLevelName(str, BaseEnum):
+    """
+    Represents the possible log level names used for synchronization events.
+    Attributes:
+        DEBUG (str): Logs detailed debug information.
+        INFO (str): Logs general information about system operations.
+        WARNING (str): Logs warnings that may signal potential issues.
+        SYNC_STATUS (str): Logs the current status of a synchronization process.
+        TELEMETRY (str): Logs telemetry data for analysis.
+        ERROR (str): Logs errors that disrupt normal operation.
+        CRITICAL (str): Logs critical conditions affecting the system's stability.
+    """
+    DEBUG = "DEBUG"
+    INFO = "INFO"
+    WARNING = "WARNING"
+    SYNC_STATUS = "SYNC_STATUS"
+    TELEMETRY = "TELEMETRY"
+    ERROR = "ERROR"
+    CRITICAL = "CRITICAL"
+
+class SyncLogLevel(int, BaseEnum):
+    """
+    Represents the possible log levels used for synchronization events.
+    Attributes:
+        DEBUG (int): Logs detailed debug information.
+        INFO (int): Logs general information about system operations.
+        WARNING (int): Logs warnings that may signal potential issues.
+        SYNC_STATUS (int): Logs the current status of a synchronization process.
+        TELEMETRY (int): Logs telemetry data for analysis.
+        ERROR (int): Logs errors that disrupt normal operation.
+        CRITICAL (int): Logs critical conditions affecting the system's stability.
+    """
     DEBUG = 10
     INFO = 20
     WARNING = 30
@@ -86,78 +236,88 @@ class SyncLogLevel(BaseEnum):
     ERROR = 40
     CRITICAL = 50
 
-class SyncLogFileInterval(BaseEnum):
+class SyncLogFileInterval(str, BaseEnum):
     """
-    Enum representing the intervals for sync log files.
+    Represents the possible log file intervals used for synchronization events.
     Attributes:
-        HOUR (str): Represents an hourly interval.
-        DAY (str): Represents a daily interval.
-        WEEK (str): Represents a weekly interval.
-        MONTH (str): Represents a monthly interval.
+        MINUTE (str): Logs are stored in minute intervals.
+        HOUR (str): Logs are stored in hourly
+        DAY (str): Logs are stored in daily intervals.
+        WEEK (str): Logs are stored in weekly intervals.
+        MONTH (str): Logs are stored in monthly intervals.
     """
-
     HOUR = "H"
     DAY = "D"
     WEEK = "W"
     MONTH = "M"
     
-class BigQueryObjectType(BaseEnum):
+class BigQueryObjectType(str, BaseEnum):
     """
-    BigQueryObjectType is an enumeration that represents different types of BigQuery objects.
+    Represents the possible object types in BigQuery.
     Attributes:
-        BASE_TABLE (str): Represents a base table in BigQuery.
+        TABLE (str): Represents a standard table in BigQuery.
         VIEW (str): Represents a view in BigQuery.
         MATERIALIZED_VIEW (str): Represents a materialized view in BigQuery.
     """
-
     BASE_TABLE = "BASE_TABLE"
     VIEW = "VIEW"
     MATERIALIZED_VIEW = "MATERIALIZED_VIEW"
 
-class LoadStrategy(BaseEnum):
+class SyncLoadStrategy(str, BaseEnum):
     """
-    LoadStrategy is an enumeration that defines different strategies for loading data.
+    Represents the possible load strategies for synchronization tasks.
     Attributes:
-        FULL (str): Represents a full data load strategy.
-        PARTITION (str): Represents a partition-based data load strategy.
-        WATERMARK (str): Represents a watermark-based data load strategy.
-        TIME_INGESTION (str): Represents a time ingestion-based data load strategy.
+        OVERWRITE (str): Overwrites existing data with new data.
+        APPEND (str): Appends new data to existing data.
+        MERGE (str): Merges new data with existing data.
+        OPEN_MIRROR (str): Opens a mirror of the source data.
     """
-
     FULL = "FULL"
     PARTITION = "PARTITION"
     WATERMARK = "WATERMARK"
     TIME_INGESTION = "TIME_INGESTION"
+    CDC_APPEND = "CDC_APPEND"
+    CDC = "CDC"
 
-class PartitionType(BaseEnum):
+class BQPartitionType(str, BaseEnum):
     """
-    PartitionType is an enumeration that defines different types of partitioning strategies.
+    Represents the possible partition types in BigQuery.
     Attributes:
-        TIME (str): Represents partitioning by time.
-        RANGE (str): Represents partitioning by range.
-        TIME_INGESTION (str): Represents partitioning by time of ingestion.
+        DAY (str): Represents a daily partition.
+        MONTH (str): Represents a monthly partition.
+        YEAR (str): Represents a yearly partition.
     """
-
     TIME = "TIME"
     RANGE = "RANGE"
     TIME_INGESTION = "TIME_INGESTION"
 
-class BQDataType(BaseEnum):
+class BQDataType(str, BaseEnum):
     """
-    BQDataType is an enumeration that represents various BigQuery data types.
+    Represents the possible data types in BigQuery.
     Attributes:
+        STRING (str): Represents a string data type.
+        FLOAT64 (str): Represents a float64 data type.
+        NUMERIC (str): Represents a numeric data type.
+        BIGNUMERIC (str): Represents a bignumeric data type.
+        DECIMAL (str): Represents a decimal data type.
+        BIGDECIMAL (str): Represents a bigdecimal data type.
         TIMESTAMP (str): Represents a timestamp data type.
         DATE (str): Represents a date data type.
         TIME (str): Represents a time data type.
-        INT64 (str): Represents a 64-bit integer data type.
-        INT (str): Represents an integer data type.
-        SMALLINT (str): Represents a small integer data type.
+        INT64 (str): Represents an int64 data type.
+        INT (str): Represents an int data type.
+        SMALLINT (str): Represents a smallint data type.
         INTEGER (str): Represents an integer data type.
-        BIGINT (str): Represents a big integer data type.
-        TINYINT (str): Represents a tiny integer data type.
-        BYTEINT (str): Represents a byte-sized integer data type.
+        BIGINT (str): Represents a bigint data type.
+        TINYINT (str): Represents a tinyint data type.
+        BYTEINT (str): Represents a byteint data type.
     """
-
+    STRING = "STRING"
+    FLOAT64 = "FLOAT64"
+    NUMERIC = "NUMERIC"
+    BIGNUMERIC = "BIGNUMERIC"
+    DECIMAL = "DECIMAL"
+    BIGDECIMAL = "BIGDECIMAL"
     TIMESTAMP = "TIMESTAMP"
     DATE = "DATE"
     TIME = "TIME"
@@ -169,64 +329,77 @@ class BQDataType(BaseEnum):
     TINYINT = "TINYINT"
     BYTEINT = "BYTEINT"
 
-class LoadType(BaseEnum):
+class SyncLoadType(str, BaseEnum):
     """
-    LoadType is an enumeration that defines different types of load operations.
+    Represents the possible load types for synchronization tasks.
     Attributes:
-        OVERWRITE (str): Represents an operation that overwrites existing data.
-        APPEND (str): Represents an operation that appends new data to existing data.
-        MERGE (str): Represents an operation that merges new data with existing data.
+        OVERWRITE (str): Overwrites existing data with new data.
+        APPEND (str): Appends new data to existing data.
+        MERGE (str): Merges new data with existing data.
+        OPEN_MIRROR (str): Opens a mirror of the source data.
     """
-
     OVERWRITE = "OVERWRITE"
     APPEND = "APPEND"
     MERGE = "MERGE"
 
-class SyncStatus(BaseEnum):
+class SyncStatus(str, BaseEnum):
     """
-    SyncStatus is an enumeration representing the various states of a synchronization process.
+    Represents the possible statuses for synchronization tasks.
     Attributes:
-        COMPLETE (str): Indicates that the synchronization process has completed successfully.
-        SKIPPED (str): Indicates that the synchronization process was skipped.
-        FAILED (str): Indicates that the synchronization process has failed.
-        EXPIRED (str): Indicates that the synchronization process has expired.
-        SCHEDULED (str): Indicates that the synchronization process is scheduled to run.
+        RUNNING (str): Indicates that the synchronization task is currently running.
+        COMPLETE (str): Indicates that the synchronization task has completed successfully.
+        SKIPPED (str): Indicates that the synchronization task was skipped.
+        FAILED (str): Indicates that the synchronization task has failed.
+        EXPIRED (str): Indicates that the synchronization task has expired.
+        SCHEDULED (str): Indicates that the synchronization task is scheduled to run.
     """
-
     COMPLETE = "COMPLETE"
     SKIPPED = "SKIPPED"
     FAILED = "FAILED"
     EXPIRED = "EXPIRED"
     SCHEDULED = "SCHEDULED"
 
-class CalendarInterval(BaseEnum):
+class MaintenanceInterval(str, BaseEnum):
     """
-    Enum class representing different calendar intervals.
+    Represents the possible maintenance intervals for scheduled maintenance tasks.
     Attributes:
-        YEAR (str): Represents a yearly interval.
-        MONTH (str): Represents a monthly interval.
-        DAY (str): Represents a daily interval.
-        HOUR (str): Represents an hourly interval.
+        YEARLY (str): Indicates that the maintenance task should run yearly.
+        MONTHLY (str): Indicates that the maintenance task should run monthly.
+        WEEKLY (str): Indicates that the maintenance task should run weekly.
+        DAILY (str): Indicates that the maintenance task should run daily.
+        AUTO (str): Indicates that the maintenance task should run automatically.
     """
+    YEAR = "YEAR"
+    MONTH = "MONTH"
+    WEEK = "WEEK"
+    DAY = "DAY"
+    HOUR = "HOUR"
+    AUTO = "AUTO"
 
+class CalendarInterval(str, BaseEnum):
+    """
+    Represents the possible calendar intervals for scheduled tasks.
+    Attributes:
+        DAILY (str): Indicates that the task should run daily.
+        WEEKLY (str): Indicates that the task should run weekly.
+        MONTHLY (str): Indicates that the task should run monthly.
+    """
     YEAR = "YEAR"
     MONTH = "MONTH"
     DAY = "DAY"
     HOUR = "HOUR"
 
-class ScheduleType(BaseEnum):
+class SyncScheduleType(str, BaseEnum):
     """
-    Enum class representing different types of schedules.
+    Represents the possible schedule types for synchronization tasks.
     Attributes:
-        AUTO (str): Represents an automatic schedule type.
+        AUTO (str): Indicates that the synchronization task should run automatically.
     """
-
     AUTO = "AUTO"
 
-class SchemaView(BaseEnum):
+class SchemaView(str, BaseEnum):
     """
-    SchemaView is an enumeration class that extends BaseEnum. It contains constants representing various 
-    INFORMATION_SCHEMA views in BigQuery.
+    Represents the possible schema views for BigQuery.
     Attributes:
         INFORMATION_SCHEMA_TABLES (str): Represents the INFORMATION_SCHEMA.TABLES view.
         INFORMATION_SCHEMA_PARTITIONS (str): Represents the INFORMATION_SCHEMA.PARTITIONS view.
@@ -235,9 +408,8 @@ class SchemaView(BaseEnum):
         INFORMATION_SCHEMA_TABLE_OPTIONS (str): Represents the INFORMATION_SCHEMA.TABLE_OPTIONS view.
         INFORMATION_SCHEMA_KEY_COLUMN_USAGE (str): Represents the INFORMATION_SCHEMA.KEY_COLUMN_USAGE view.
         INFORMATION_SCHEMA_VIEWS (str): Represents the INFORMATION_SCHEMA.VIEWS view.
-        INFORMATION_SCHEMA_MATERIALIZED_VIEWS (str): Represents the INFORMATION_SCHEMA.MATERIALIZED_VIEWS view.
+        INFORMATION_SCHEMA_MATERIALIZED_VIEWS (str): Represents the INFORMATION_SCHEMA.MATERIALIZED_VIEWS view
     """
-
     INFORMATION_SCHEMA_TABLES = "INFORMATION_SCHEMA.TABLES"
     INFORMATION_SCHEMA_PARTITIONS = "INFORMATION_SCHEMA.PARTITIONS"
     INFORMATION_SCHEMA_COLUMNS = "INFORMATION_SCHEMA.COLUMNS"
@@ -247,13 +419,22 @@ class SchemaView(BaseEnum):
     INFORMATION_SCHEMA_VIEWS = "INFORMATION_SCHEMA.VIEWS"
     INFORMATION_SCHEMA_MATERIALIZED_VIEWS = "INFORMATION_SCHEMA.MATERIALIZED_VIEWS"
 
-class BigQueryAPI(BaseEnum):
+class BigQueryAPI(str, BaseEnum):
     """
-    Enum representing different BigQuery API types.
+    Represents the possible BigQuery API endpoints.
     Attributes:
-        STANDARD (str): Represents the standard BigQuery API.
-        STORAGE (str): Represents the BigQuery storage API.
+        STORAGE (str): Represents the BigQuery Storage API.
+        STANDARD (str): Represents the BigQuery API.
     """
-
     STANDARD = "STANDARD",
     STORAGE = "STORAGE"
+
+class SyncConfigState(str, BaseEnum):
+    """
+    Represents the possible states for a synchronization configuration.
+    Attributes:
+        INIT (str): Indicates that the configuration is in the initialization state.
+        COMMIT (str): Indicates that the configuration has been committed.
+    """
+    INIT = "INIT"
+    COMMIT = "COMMIT"

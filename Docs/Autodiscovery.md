@@ -1,4 +1,4 @@
-# Fabric BQ Sync AutoDiscovery
+# Fabric Sync AutoDiscovery
 
 The autodiscovery process is responsible for applying a set of built-in huerstics to the available BigQuery metadata to discover the most optimal approach for syncing data between BigQuery and the Fabric Lakehouse.
 

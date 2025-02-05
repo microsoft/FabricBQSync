@@ -49,10 +49,6 @@
           "credential": ""
         }
     },
-    "async": {
-      "enabled": true,
-      "parallelism": 10
-    },
     "logging": {
         "log_level": "SYNC_STATUS",
         "log_path": "/lakehouse/default/Files/BQ_Sync_Process/logs/fabric_sync.log"
