@@ -135,16 +135,40 @@ _____
         <td>Fabric Workspace Id (UUID)</td>
     </tr>
     <tr>
+        <td>metadata_lakehouse_id</td>
+        <td>STRING</td>
+        <td>None</td>
+        <td>REQUIRED. Fabric Lakehouse UUID for Fabric Sync Metadata</td>
+    </tr>
+    <tr>
         <td>metadata_lakehouse</td>
         <td>STRING</td>
         <td>None</td>
         <td>REQUIRED. Fabric Lakehouse name for Fabric Sync Metadata</td>
     </tr>
     <tr>
+        <td>metadata_schema</td>
+        <td>STRING</td>
+        <td>dbo</td>
+        <td>Fabric Lakehouse schema for Fabric Sync Metadata</td>
+    </tr>
+    <tr>
         <td>target_lakehouse</td>
         <td>STRING</td>
         <td>None</td>
         <td>REQUIRED. Fabric Lakehouse name for mirrored/sync'd data</td>
+    </tr>
+    <tr>
+        <td>target_lakehouse_id</td>
+        <td>STRING</td>
+        <td>None</td>
+        <td>REQUIRED. Fabric Lakehouse UUID for mirrored/sync'd data</td>
+    </tr>
+    <tr>
+        <td>target_schema</td>
+        <td>STRING</td>
+        <td>None</td>
+        <td>Fabric Lakehouse default schema for mirrored/sync'd data</td>
     </tr>
     <tr>
         <td>enable_schemas</td>
@@ -172,7 +196,13 @@ The configuration specified here affects billing and perissions required on the 
     <tr>
         <td class="level1-item">use_standard_api</td>
         <td>BOOLEAN</td>
-        <td>FALSE</td>
+        <td>TRUE</td>
+        <td>Enables the Standard Big Query API for Metadata Sync operations. See Optimization docs for more details.</td>
+    </tr>
+    <tr>
+        <td class="level1-item">use_cdc</td>
+        <td>BOOLEAN</td>
+        <td>TRUE</td>
         <td>Enables the Standard Big Query API for Metadata Sync operations. See Optimization docs for more details.</td>
     </tr>
     <tr>
@@ -267,7 +297,7 @@ _____
     <tr>
         <td>use_approximate_row_counts</td>
         <td>BOOLEAN</td>
-        <td>False</td>
+        <td>TRUE</td>
         <td>Enable/Disable the approximate row count optimization. Applies to all tables with the configuration scope. See Optimization docs for more details.</td>
     </tr>
 </table>

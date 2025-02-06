@@ -11,6 +11,7 @@ Welcome to the technical documents for Fabric Sync project. Please check back re
 
 ##### Technical Overview
 - [Autodiscovery](Autodiscovery.md)
+- [Fabric Mirror Destinations](Destinations.md)
 - [BigQuery Object Types](ObjectTypes.md) 
 - [Configuration](Configuration.md)
     - [Table Configuration](TableConfiguration.md)

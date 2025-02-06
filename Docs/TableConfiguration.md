@@ -36,6 +36,14 @@ The predicate setting accepts any valid BigQuery WHERE clause SQL-constraint (se
 "predicate": "country_region='APAC'"
 ```
 
+### Destination Mapping
+By default, tables are mapped to the default lakehouse using the source table name. If schemas are enabled, the dataset name is used as the schema. You can override this behavior configuring the <code>lakehouse_target</code>:
+
+- <code>lakehouse_id</code> - the UUID of the Fabric Lakehouse/Mirrored Database
+- <code>lakehouse</code> - the display name of the Fabric Lakehouse/Mirrored Database
+- <code>schema</code> - lakehouse schema
+- <code>table_name</code> - the destination table name
+
 ### Fabric Partitioning
 
 The default behavior for the Fabric Sync Accelerator is to reproduce the BigQuery partitioning-schema within the Fabric Lakehouse, when applicable. If you need to alter or change the partitioning schema in the Lakehouse, you can override the BigQuery partitioning schema using the <code>lakehouse_target</code>.<code>partition_by</code> setting.

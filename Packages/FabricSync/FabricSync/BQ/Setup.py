@@ -244,8 +244,8 @@ class Installer(ContextAwareBase):
 
                     self._fabric_api.Notebook.create(notebook["name"], json.dumps(nb),
                         lambda x: self.Logger.sync_status(f"{notebook['name']} {x}"))
-            except HTTPError as e:
-                self.Logger.sync_status(f"Failed to deploy BQ Sync notebook to workspace: {notebook['name']}: {e}")
+            except Exception as e:
+                self.Logger.sync_status(f"Failed to deploy Fabric Sync notebook to workspace: {notebook['name']}: {e}")
 
     def _validate_lakehouse_schemas(self, lakehouse_id:str, lakehouse_name:str):
         has_schema = self._fabric_api.Lakehouse.has_schema(lakehouse_id)
@@ -387,7 +387,7 @@ class Installer(ContextAwareBase):
                 self.Logger.sync_status("Copying Fabric Sync artifacts to Fabric workspace...")
                 self._download_notebooks()
 
-            self.Logger.sync_status(f"BQ Sync Installer finished in {str(t)}!")
+            self.Logger.sync_status(f"Fabric Sync Installer finished in {str(t)}!")
 
             try:
                 shutil.rmtree(self._temp_path)

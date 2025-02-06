@@ -1,10 +1,25 @@
-# Fabric BQ (BigQuery) Sync
+# Fabric Sync for BigQuery
 
 This project is provided as an accelerator to help synchronize or migrate data from Google BigQuery to Fabric. The primary use cases for this accelerator are:
  - BigQuery customers who wish to continue to leverage their existing investments and data estate while optimizing their PowerBI experience and reducing overall analytics TCO
  - BigQuery customers who wish to migrate all or part of their data estate to Microsoft Fabric
 
-# Getting Started for New Installs
+# v2.1 
+Version 2.1 adds support for:
+- Lakehouse Schemas (Fabric Preview)
+- Mirrored Database/Open Mirroring (Fabric Preview)
+- CDC APPEND and CDC Load Strategies (BigQuery Preview)
+- Shared metastore support
+- Installer Updates
+	- Automatic mapping Notebook configuration
+	- Create/Configure Fabric Spark Environment
+- Inline/Automatic Upgrades for v2.0 and greater
+- New defaults:
+	- <code>use_cdc</code> enabled by default
+	- GCP API <code>use_standard_api</code> enabled by default
+	- Optimization <code>use_approximate_row_counts</code> enabled by default
+
+# Getting Started
 
 The accelerator includes an automated installer that can set up your Fabric workspace and install all required dependencies automatically. To use the installer:
 1. Download the current version Installer notebook
@@ -14,19 +29,24 @@ The accelerator includes an automated installer that can set up your Fabric work
 5. Update the configuration parameters:
 	- <code>loader_name</code> – custom name for the sync operation used in dashboards/reports (ex: HR Data Sync, BQ Sales Transaction Mirror)
 	- <code>metadata_lakehouse</code> - name of the lakehouse used to drive the Fabric Sync process
-	- <code>target_lakehouse</code> - name of the lakehouse where the Fabric Sync data will be landed
+	- <code>target_lakehouse</code> - name of the lakehouse where your BQ data will be synced to
 	- <code>gcp_project_id</code> - the GCP billing project id that contains the in-scope dataset
 	- <code>gcp_dataset_id</code> - the target BQ dataset name/id
 	- <code>gcp_credential_path</code> - the File API Path to your JSON credential file (Example: /lakehouse/default/Files/my-credential-file.json")
+	- <code>enable_schemas</code> - flag to enable Fabric lakehouse schemas (Schemas REQUIRED for Mirrored Databases)
+	- <code>target_type</code> - Fabric LAKEHOUSE or MIRRORED_DATABASE
+	- <code>create_spark_environment</code> - flag to create a Fabric Spark environment as part of installation
+	- <code>spark_environment_name</code> - name for Fabric Spark Environment item
 6. Run the installer notebook
 
 The installer performs the following actions:
-- Create the required Lakehouses, if they do not exists
+- Creates the Fabric Sync metadata Lakehouse, if it does not exist
+- Creates the Fabric Sync mirror target (LAKEHOUSE or MIRRORED_DATABASE), if it does not exist
 - Creates the metadata tables and required metadata
 - Downloads the correct version of your BQ Spark connector based on your configured spark runtime
-- Downloads the current Fabric Sync python package
 - Creates an initial default user configuration file based on your config parameters
-- Installs a fully configured and ready to run BQ-Sync-Notebook into your workspace
+- Creates a Fabric Spark Environment with required libraries, if configured
+- Installs a fully configured and ready-to-run Fabric-Sync-Notebook into your workspace
 
 # Upgrading to Current Version
 

@@ -51,7 +51,7 @@ class BQSync(SyncBase):
                 self.DataRetention = BQDataRetention()
             else:
                 self.UserConfig = None
-                self.Logger.sync_status(f"Failed to load BQ Sync with User Configuration errors:\r\n" +
+                self.Logger.sync_status(f"Failed to load Fabric Sync with User Configuration errors:\r\n" +
                     "\r\n".join(config_validation))
 
         except SyncConfigurationError as e:
