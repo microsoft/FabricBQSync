@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "FabricSync"
-version = "2.1.0"
+version = "2.1.1"
 dependencies = [
   "pydantic>=2.10.6",
   "pygithub>=2.5.0",

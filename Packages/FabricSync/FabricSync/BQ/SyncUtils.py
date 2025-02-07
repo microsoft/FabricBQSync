@@ -17,9 +17,8 @@ import warnings
 from FabricSync.BQ.Model.Config import (
     ConfigDataset, ConfigObjectFilter, MappedColumn
 )
-from FabricSync.BQ.Core import (
-    ContextAwareBase, Session
-)
+from FabricSync.BQ.Core import ContextAwareBase
+from FabricSync.BQ.SessionManager import Session
 from FabricSync.BQ.Enum import (
     ObjectFilterType, SupportedTypeConversion, BQPartitionType, CalendarInterval,
     SyncLoadType, SyncLoadStrategy, SparkSessionConfig

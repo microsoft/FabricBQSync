@@ -10,10 +10,10 @@ from typing import (
 
 from FabricSync.BQ.Utils import Util
 from FabricSync.BQ.Enum import FabricItemType
-from FabricSync.BQ.Core import LoggingBase
+from FabricSync.BQ.Core import ContextAwareBase
 from FabricSync.BQ.Http import RestAPIProxy
 
-class BaseFabricItem(LoggingBase):
+class BaseFabricItem(ContextAwareBase):
     def __init__(self, type:FabricItemType, workspace_id:str, api_token:str):
         """
         Base Fabric Item API Client

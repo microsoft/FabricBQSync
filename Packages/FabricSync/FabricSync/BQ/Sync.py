@@ -1,6 +1,3 @@
-from packaging import version as pv
-
-from FabricSync.BQ.Core import Session
 from FabricSync.BQ.SyncCore import SyncBase
 from FabricSync.BQ.Auth import (
     Credentials, TokenProvider
@@ -20,6 +17,7 @@ from FabricSync.BQ.Metastore import FabricMetastore
 from FabricSync.BQ.APIClient import FabricAPI
 from FabricSync.BQ.ModelValidation import UserConfigurationValidation
 from FabricSync.BQ.Model.Config import ConfigDataset
+from FabricSync.BQ.SessionManager import Session
 
 class BQSync(SyncBase):
     def __init__(self, config_path:str, credentials:Credentials):

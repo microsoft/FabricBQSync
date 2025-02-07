@@ -14,9 +14,9 @@ from io import BytesIO
 from FabricSync.BQ.Model.Core import HDFSFile
 from FabricSync.BQ.Enum import FileSystemType
 from FabricSync.BQ.Lakehouse import LakehouseCatalog
-from FabricSync.BQ.Core import LoggingBase
+from FabricSync.BQ.Core import ContextAwareBase
 
-class HadoopFileSystem(LoggingBase):
+class HadoopFileSystem(ContextAwareBase):
     __FS_PATTERN = r"(s3\w*://|hdfs://|abfss://|dbfs://|file://|file:/).(.*)"
 
     def __init__(self: "HadoopFileSystem", pattern: str) -> None:
@@ -25,8 +25,7 @@ class HadoopFileSystem(LoggingBase):
         Args:
             pattern (str): The Hadoop file system pattern to use.
         """
-        context = SparkSession.getActiveSession()
-        hadoop, hdfs, fs_type = self.__get_hdfs(context, pattern)
+        hadoop, hdfs, fs_type = self.__get_hdfs(self.Context, pattern)
         self._hdfs = hdfs
         self._fs_type = fs_type
         self._hadoop = hadoop

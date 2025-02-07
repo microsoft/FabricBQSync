@@ -7,15 +7,10 @@ from pyspark.sql.functions import (
 from logging import Logger
 from packaging import version as pv
 from delta.tables import DeltaTable
-from typing import Any
 from pyspark.sql.functions import col
-import py4j
 
-from FabricSync.BQ.Constants import SyncConstants
-from FabricSync.BQ.Enum import SparkSessionConfig
-from FabricSync.Meta import Version
 from FabricSync.BQ.Logging import SyncLogger
-
+from FabricSync.BQ.SessionManager import Session
 class classproperty(property):
     def __get__(self, owner_self, owner_cls):
         """
@@ -28,13 +23,10 @@ class classproperty(property):
         """
         return self.fget(owner_cls)
 
-class Session:
-    _context:SparkSession = None
+class ContextAwareBase:   
+    __context:SparkSession = None
+    __logger:Logger = None
 
-    @classproperty
-    def CurrentVersion(cls) -> pv.Version:
-        return pv.parse(Version.CurrentVersion)
-    
     @classproperty
     def Context(cls) -> SparkSession:
         """
@@ -42,221 +34,13 @@ class Session:
         Returns:
             SparkSession: The Spark context.
         """
-        if not cls._context:
-            cls._context = SparkSession.getActiveSession()
+        if not cls.__context:
+            cls.__context = SparkSession.getActiveSession()
 
-        return cls._context
-    
-    @classmethod
-    def get_setting(cls, key:SparkSessionConfig, default:Any = None) -> str:
-        """
-        Get the setting.
-        Args:
-            key (SparkSessionConfig): The key.
-        Returns:
-            str: The setting.
-        """
-        try:
-            return cls.Context.conf.get(cls._get_setting_key(key))
-        except py4j.protocol.Py4JJavaError:
-            return default
-    
-    @classmethod
-    def set_setting(cls, key:SparkSessionConfig, value:Any) -> None:
-        """
-        Set the setting.
-        Args:
-            key (SparkSessionConfig): The key.
-            value (str): The value.
-        Returns:
-            None
-        """
-        cls.set_spark_conf(cls._get_setting_key(key), str(value))
-    
-    @classmethod
-    def set_spark_conf(cls, key:str, value:str) -> None:
-        if value != None:
-            cls.Context.conf.set(key, value)
-
-    @classmethod
-    def _get_setting_key(cls, key:SparkSessionConfig) -> str:
-        """
-        Get the setting key.
-        Args:
-            key (SparkSessionConfig): The key.
-        Returns:
-            str: The setting key.
-        """
-        return f"{SyncConstants.SPARK_CONF_PREFIX}.{key.value}"
-    
-    @classmethod
-    def print_session_settings(cls):        
-        [print(f"{cls._get_setting_key(k)}: {cls.get_setting(k)}") for k in list(SparkSessionConfig)]
+        return cls.__context
     
     @classproperty
-    def ApplicationID(cls) -> str:
-        return Session.get_setting(SparkSessionConfig.APPLICATION_ID)
-    
-    @ApplicationID.setter
-    def ApplicationID(cls, value:str):
-        cls.set_setting(SparkSessionConfig.APPLICATION_ID, value)
-    
-    @classproperty
-    def ID(cls) -> str:
-        return Session.get_setting(SparkSessionConfig.NAME)
-    
-    @ID.setter
-    def ID(cls, value:str):
-        cls.set_setting(SparkSessionConfig.NAME, value)
-    
-    @classproperty
-    def Version(cls) -> pv.Version:
-        c = Session.get_setting(SparkSessionConfig.VERSION, "0.0.0")
-        return pv.parse(c)
-    
-    @Version.setter
-    def Version(cls, value:Any):
-        cls.set_setting(SparkSessionConfig.VERSION, value)
-    
-    @classproperty
-    def TelemetryEndpoint(cls) -> str:
-        return Session.get_setting(SparkSessionConfig.TELEMETRY_ENDPOINT)
-    
-    @TelemetryEndpoint.setter
-    def TelemetryEndpoint(cls, value:str):
-        cls.set_setting(SparkSessionConfig.TELEMETRY_ENDPOINT, value)
-    
-    @classproperty
-    def LogLevel(cls) -> str:
-        return Session.get_setting(SparkSessionConfig.LOG_LEVEL)
-    
-    @LogLevel.setter
-    def LogLevel(cls, value:str):
-        cls.set_setting(SparkSessionConfig.LOG_LEVEL, value)
-
-    @classproperty
-    def LogPath(cls) -> str:
-        return Session.get_setting(SparkSessionConfig.LOG_PATH)
-    
-    @LogPath.setter
-    def LogPath(cls, value:str):
-        cls.set_setting(SparkSessionConfig.LOG_PATH, value)
-    
-    @classproperty
-    def Telemetry(cls) -> str:
-        return Session.get_setting(SparkSessionConfig.LOG_TELEMETRY)
-
-    @Telemetry.setter
-    def Telemetry(cls, value:str):
-        cls.set_setting(SparkSessionConfig.LOG_TELEMETRY, value)
-
-    @classproperty
-    def WorkspaceID(cls) -> str:
-        if Session.get_setting(SparkSessionConfig.WORKSPACE_ID):
-            return Session.get_setting(SparkSessionConfig.WORKSPACE_ID)
-        else:
-            return Session.Context.conf.get("trident.workspace.id")
-    
-    @WorkspaceID.setter
-    def WorkspaceID(cls, value:str):
-        cls.set_setting(SparkSessionConfig.WORKSPACE_ID, value)
-
-    @classproperty
-    def MetadataLakehouse(cls) -> str:
-        if Session.get_setting(SparkSessionConfig.METADATA_LAKEHOUSE):
-            return Session.get_setting(SparkSessionConfig.METADATA_LAKEHOUSE)
-        else:
-            return Session.Context.conf.get("trident.lakehouse.name")
-    
-    @MetadataLakehouse.setter
-    def MetadataLakehouse(cls, value:str):
-        cls.set_setting(SparkSessionConfig.METADATA_LAKEHOUSE, value)
-
-    @classproperty
-    def MetadataLakehouseID(cls) -> str:
-        if Session.get_setting(SparkSessionConfig.METADATA_LAKEHOUSE_ID):
-            return Session.get_setting(SparkSessionConfig.METADATA_LAKEHOUSE_ID)
-        else:
-            return Session.Context.conf.get("trident.lakehouse.id")
-    
-    @MetadataLakehouseID.setter
-    def MetadataLakehouseID(cls, value:str):
-        cls.set_setting(SparkSessionConfig.METADATA_LAKEHOUSE_ID, value)
-
-    @classproperty
-    def MetadataLakehouseSchema(cls) -> str:
-        return Session.get_setting(SparkSessionConfig.METADATA_LAKEHOUSE_SCHEMA)
-    
-    @MetadataLakehouseSchema.setter
-    def MetadataLakehouseSchema(cls, value:str):
-        cls.set_setting(SparkSessionConfig.METADATA_LAKEHOUSE_SCHEMA, value)
-
-    @classproperty
-    def TargetLakehouse(cls) -> str:
-        return Session.get_setting(SparkSessionConfig.TARGET_LAKEHOUSE)
-    
-    @TargetLakehouse.setter
-    def TargetLakehouse(cls, value:str):
-        cls.set_setting(SparkSessionConfig.TARGET_LAKEHOUSE, value)
-
-    @classproperty
-    def TargetLakehouseID(cls) -> str:
-        return Session.get_setting(SparkSessionConfig.TARGET_LAKEHOUSE_ID)
-    
-    @TargetLakehouseID.setter
-    def TargetLakehouseID(cls, value:str):
-        cls.set_setting(SparkSessionConfig.TARGET_LAKEHOUSE_ID, value)
-
-    @classproperty
-    def TargetLakehouseSchema(cls) -> str:
-        return Session.get_setting(SparkSessionConfig.TARGET_LAKEHOUSE_SCHEMA)
-    
-    @TargetLakehouseSchema.setter
-    def TargetLakehouseSchema(cls, value:str):
-        cls.set_setting(SparkSessionConfig.TARGET_LAKEHOUSE_SCHEMA, value)
-
-    @classproperty
-    def FabricAPIToken(cls) -> str:
-        return Session.get_setting(SparkSessionConfig.FABRIC_API_TOKEN)
-
-    @FabricAPIToken.setter
-    def FabricAPIToken(cls, value:str):
-        cls.set_setting(SparkSessionConfig.FABRIC_API_TOKEN, value)
-
-    @classproperty
-    def UserConfigPath(cls) -> str:
-        return Session.get_setting(SparkSessionConfig.USER_CONFIG_PATH)
-
-    @UserConfigPath.setter
-    def UserConfigPath(cls, value:str):
-        cls.set_setting(SparkSessionConfig.USER_CONFIG_PATH, value)
-
-    @classproperty
-    def EnableSchemas(cls) -> bool:
-        return Session.get_setting(SparkSessionConfig.SCHEMA_ENABLED, "").lower() == "true"
-
-    @EnableSchemas.setter
-    def EnableSchemas(cls, value:str):
-        cls.set_setting(SparkSessionConfig.SCHEMA_ENABLED, value)
-
-    @classproperty
-    def SyncViewState(cls) -> bool:
-        """
-        Gets the flag for enable schemas.
-        Returns:
-            bool: The enable schemas.
-        """
-        return Session.get_setting(SparkSessionConfig.SYNC_VIEW_STATE, "").lower() == "true"
-    
-    @SyncViewState.setter
-    def SyncViewState(cls, value:bool) -> None:
-        cls.set_setting(SparkSessionConfig.SYNC_VIEW_STATE, value)
-
-class LoggingBase:
-    __logger:Logger = None
-    
-    @classproperty
-    def Logger(cls):
+    def Logger(cls) -> Logger:
         """
         Gets the logger.
         Returns:
@@ -294,11 +78,6 @@ class LoggingBase:
     @classproperty
     def Telemetry(cls) -> str:
         return Session.Telemetry
-    
-class ContextAwareBase(LoggingBase):    
-    @classproperty
-    def Context(cls) -> SparkSession:
-        return Session.Context
 
     @classproperty
     def WorkspaceID(cls) -> str:
@@ -342,9 +121,6 @@ class ContextAwareBase(LoggingBase):
     
     @classproperty
     def GCPCredential(cls) -> str:
-        """
-        Gets the GCP credential.
-        """
         return Session.GCPCredentials
 
 class DeltaTableMaintenance(ContextAwareBase):
