@@ -18,9 +18,8 @@ from FabricSync.BQ.Logging import Telemetry
 from FabricSync.BQ.Model.Config import ConfigDataset
 from FabricSync.BQ.FileSystem import OneLakeFileSystem
 from FabricSync.BQ.Enum import FabricDestinationType
-from FabricSync.BQ.Core import (
-    ContextAwareBase, Session
-)
+from FabricSync.BQ.Core import ContextAwareBase
+from FabricSync.BQ.SessionManager import Session
 from FabricSync.BQ.Exceptions import (
     SyncConfigurationError
 )

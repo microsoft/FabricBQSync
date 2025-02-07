@@ -8,9 +8,7 @@ from typing import (
 from queue import PriorityQueue
 
 from FabricSync.BQ.Constants import SyncConstants
-from FabricSync.BQ.Core import (
-    ContextAwareBase, LoggingBase
-)
+from FabricSync.BQ.Core import ContextAwareBase
 from FabricSync.BQ.Model.Core import CommandSet
 
 class ThreadSafeList():
@@ -172,7 +170,7 @@ class ThreadSafeDict:
         with self._lock:
             return len(self._dict)
             
-class QueueProcessor(LoggingBase):
+class QueueProcessor(ContextAwareBase):
     def __init__(self, num_threads) -> None:
         """
         Initializes a new instance of the QueueProcessor class.

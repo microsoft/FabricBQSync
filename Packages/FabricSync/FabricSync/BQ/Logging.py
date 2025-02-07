@@ -6,20 +6,17 @@ import functools
 import asyncio
 import threading
 import os
-from uuid import uuid4
-import py4j
 from pyspark.sql import SparkSession
 
 from FabricSync.BQ.Enum import (
     SyncLogLevel, SyncStatus
 )
-from FabricSync.BQ.Enum import SparkSessionConfig
+from FabricSync.BQ.SessionManager import Session
 from FabricSync.BQ.Constants import SyncConstants
 from FabricSync.BQ.Http import RestAPIProxy
 from FabricSync.Meta import Version
 
 class SyncLogger:
-    __default_log_path = "/lakehouse/default/Files/Fabric_Sync_Process/logs/fabric_sync.log"
     __context:SparkSession = None
     __logger:Logger = None
     
@@ -77,7 +74,6 @@ class SyncLogger:
                 asyncio.set_event_loop(self.loop)
             else:
                 self.loop = asyncio.get_event_loop()
-        
         t = self.loop.create_task(self.send_telemetry_to_api(payload))
 
     async def send_telemetry_to_api(self, payload) -> None:
@@ -131,35 +127,23 @@ class SyncLogger:
 
     @property
     def ApplicationID(self) -> str:
-        try:
-            return self.Context.conf.get(f"{SyncConstants.SPARK_CONF_PREFIX}.{SparkSessionConfig.APPLICATION_ID.value}")
-        except py4j.protocol.Py4JJavaError:
-            return str(uuid4())
+        return Session.ApplicationID
     
     @property
     def TelemetryEndpoint(self) -> str:
-        return self.Context.conf.get(f"{SyncConstants.SPARK_CONF_PREFIX}.{SparkSessionConfig.TELEMETRY_ENDPOINT.value}")
+        return Session.TelemetryEndpoint
     
     @property
     def LogLevel(self) -> str:
-        try:
-            return self.Context.conf.get(f"{SyncConstants.SPARK_CONF_PREFIX}.{SparkSessionConfig.LOG_LEVEL.value}")
-        except py4j.protocol.Py4JJavaError:
-            return SyncLogLevel.SYNC_STATUS.name
+        return Session.LogLevel
     
     @property
     def LogPath(self) -> str:
-        try:
-            return self.Context.conf.get(f"{SyncConstants.SPARK_CONF_PREFIX}.{SparkSessionConfig.LOG_PATH.value}")
-        except py4j.protocol.Py4JJavaError:
-            return self.__default_log_path
+        return Session.LogPath
     
     @property
     def Telemetry(self) -> str:
-        try:
-            return self.Context.conf.get(f"{SyncConstants.SPARK_CONF_PREFIX}.{SparkSessionConfig.LOG_TELEMETRY.value}")
-        except py4j.protocol.Py4JJavaError:
-            return False
+        return Session.Telemetry
 
 class SyncLogHandler(logging.Handler):
     def __init__(self, name, target_handler) -> None:
@@ -180,8 +164,6 @@ class CustomJsonFormatter(logging.Formatter):
 
 class Telemetry(): 
     def log_telemetry(operation:str, result=None, data=None) -> None:
-        import logging
-
         payload = {
             "operation":operation,
             "result": result
@@ -190,7 +172,7 @@ class Telemetry():
         if data:
             payload["operation_data"] = data
 
-        logging.Logger.telemetry(payload)
+        SyncLogger.getLogger().telemetry(payload)
 
     def Install(func_=None):
         def _decorator(func):
@@ -200,7 +182,7 @@ class Telemetry():
 
                 r = func(*args, **kwargs)
 
-                Telemetry.log_telemetry("Fabric Sync Accelerator Install", result=True)
+                Telemetry.log_telemetry("BQ Sync Accelerator Install", result=True)
 
                 return r
             return wrapper
@@ -218,7 +200,7 @@ class Telemetry():
 
                 r =  func(*args, **kwargs)
 
-                Telemetry.log_telemetry("Fabric Sync Accelerator Upgrade", result=True)
+                Telemetry.log_telemetry("BQ Sync Accelerator Upgrade", result=True)
 
                 return r
             return wrapper

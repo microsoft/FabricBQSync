@@ -15,6 +15,7 @@ If you require key-rotation or have other requirements don't allow for embedding
 Foundationally the Service Account will need permissions to the datasets amd data within scope for Fabric Sync.
 
 Additionally, the Service Account needs the following:
+- BigQuery Job permissions
 - Access to the <code>INFORMATION_SCHEMA</code> tables for each in-scope datasets
 - Write permissions to atleast one BigQuery Dataset. This dataset can be separate from the data being synced and is used to materialize Views to BigQuery temp tables.
     - When a separate dataset is used for View materialization, update or set the <code>materialization_project_id</code> and <code>materialization_dataset</code> user configuration settings with the correct values.
