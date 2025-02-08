@@ -2,7 +2,9 @@
 
 Welcome to the technical documents for Fabric Sync project. Please check back regularly as these docs are regularly updated with the latest updates.
 
-### Documentation Navigation
+### Documentation Index
+
+- [Release Log](ReleaseLog.md)
 
 ##### Getting Started
 - [BigQuery & GCP Requirements](BigQuery.md)
@@ -20,6 +22,8 @@ Welcome to the technical documents for Fabric Sync project. Please check back re
     - [Load Groups](LoadGroups.md)
 - [Synchronization](Synchronization.md)
 
+#### Example User Configurations
+- [Configuration Examples](ConfigExamples.md)
 
 ##### Administration
 - [Optimization](Optimizations.md)
@@ -27,16 +31,12 @@ Welcome to the technical documents for Fabric Sync project. Please check back re
 - [Data Maintenance](DataMaintenance.md)
 - [Data Expiration](DataExpiration.md)
 
-
 ### Common Scenarios
+- [Initial Loading Historical Data](CommonScenarios/HistoricalData.md)
 
-1. Initial Loading Historical Data
-2. Switch a Load Strategy from Full to Watermark
-
-### Example Configurations
-
-    *Coming Soon*
 
 ### Videos
 
     *Coming Soon*
+
+

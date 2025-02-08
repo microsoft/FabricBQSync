@@ -46,7 +46,7 @@ Configuration is broken down into the following sections:
 _____
 
 ## autodiscover
-Controls the behavior of the autodiscovery process when enabled. For more information, please see the Autodiscovery docs.
+Controls the behavior of the autodiscovery process when enabled. For more information, please see the [Autodiscovery](Autodiscovery.md) docs.
 <table>
     <tr><th>JSON Setting</th><th>Value Type</th><th>Default</th><th>Description</th></tr>
     <tr>
@@ -187,7 +187,7 @@ _____
 _____
 
 ## gcp
-The configuration specified here affects billing and perissions required on the BigQuery side. Most of the configuration provided are passed directly to the BigQuery APIs. Note that Fabric Sync supports targeting of multiple projects and multiple datasets when required. For more information, please see the BigQuery API docs.
+The configuration specified here affects billing and perissions required on the BigQuery side. Most of the configuration provided are passed directly to the BigQuery APIs. Note that Fabric Sync supports targeting of multiple projects and multiple datasets when required. For more information, please see the [BigQuery API](BigQuery.md) docs.
 <table>
     <tr><th>JSON Setting</th><th>Value Type</th><th>Default</th><th>Description</th></tr>
     <tr>
@@ -197,13 +197,13 @@ The configuration specified here affects billing and perissions required on the 
         <td class="level1-item">use_standard_api</td>
         <td>BOOLEAN</td>
         <td>TRUE</td>
-        <td>Enables the Standard Big Query API for Metadata Sync operations. See Optimization docs for more details.</td>
+        <td>Enables the Standard Big Query API for Metadata Sync operations. See [Optimization](Optimizations.md) docs for more details.</td>
     </tr>
     <tr>
         <td class="level1-item">use_cdc</td>
         <td>BOOLEAN</td>
         <td>TRUE</td>
-        <td>Enables the Standard Big Query API for Metadata Sync operations. See Optimization docs for more details.</td>
+        <td>Enables the Standard Big Query API for Metadata Sync operations. See [Optimization](Optimizations.md) docs for more details.</td>
     </tr>
     <tr>
         <td class="level1-item">auto_select</td>
@@ -298,7 +298,7 @@ _____
         <td>use_approximate_row_counts</td>
         <td>BOOLEAN</td>
         <td>TRUE</td>
-        <td>Enable/Disable the approximate row count optimization. Applies to all tables with the configuration scope. See Optimization docs for more details.</td>
+        <td>Enable/Disable the approximate row count optimization. Applies to all tables with the configuration scope. See [Optimization](Optimizations.md) docs for more details.</td>
     </tr>
 </table>
 
@@ -330,7 +330,7 @@ Table defaults are provided as a mechanism to simplify configuration through abs
         <td>priority</td>
         <td>INT</td>
         <td>100</td>
-        <td>Used to define load groups and create sync dependencies between objects or groups of objects. Objects with the same priority are grouped together and synced in parallel. Object order within the group is not guaranteed. Lower priority groups run first starting with zero. For more information see the Load Groups doc.</td>
+        <td>Used to define load groups and create sync dependencies between objects or groups of objects. Objects with the same priority are grouped together and synced in parallel. Object order within the group is not guaranteed. Lower priority groups run first starting with zero. For more information see the [Load Groups](LoadGroups.md) doc.</td>
     </tr>
     <tr>
         <td>load_strategy</td>
@@ -366,25 +366,25 @@ Table defaults are provided as a mechanism to simplify configuration through abs
         <td>allow_schema_evolution</td>
         <td>BOOLEAN</td>
         <td>FALSE</td>
-        <td>Default flag to enable/disable table schema evolution. For more information see Schema Evolution doc.</td>
+        <td>Default flag to enable/disable table schema evolution. For more information see [Table Configuration](TableConfiguration.md) doc.</td>
     </tr>
     <tr>
         <td>flatten_table</td>
         <td>BOOLEAN</td>
         <td>FALSE</td>
-        <td>Default flag to enable/disable flattening of complex (STRUCT) types during the sync process. For more information see Complex Type Handling doc.</td>
+        <td>Default flag to enable/disable flattening of complex (STRUCT) types during the sync process. For more information see [Table Configuration](TableConfiguration.md) doc.</td>
     </tr>
     <tr>
         <td>flatten_inplace</td>
         <td>BOOLEAN</td>
         <td>TRUE</td>
-        <td>Default flag to determine where flatten data is stored within the Fabric Lakehouse. When TRUE, STRUCTs are flattened into existing lakehouse table. When FALSE, STRUCTs are flattened into a parallel lakehouse table. For more information see Complex Type Handling doc.</td>
+        <td>Default flag to determine where flatten data is stored within the Fabric Lakehouse. When TRUE, STRUCTs are flattened into existing lakehouse table. When FALSE, STRUCTs are flattened into a parallel lakehouse table. For more information see [Table Configuration](TableConfiguration.md) doc.</td>
     </tr>
     <tr>
         <td>explode_arrays</td>
         <td>BOOLEAN</td>
         <td>FALSE</td>
-        <td>Default flag to enable/disable flattening or explosion of complex (ARRAY) types during the sync process. For more information see Complex Type Handling doc.</td>
+        <td>Default flag to enable/disable flattening or explosion of complex (ARRAY) types during the sync process. For more information see [Table Configuration](TableConfiguration.md) doc.</td>
     </tr>
     <tr>
         <td colspan="4" class="level1">table_maintenance</td>
@@ -393,13 +393,13 @@ Table defaults are provided as a mechanism to simplify configuration through abs
         <td class="level1-item">enabled</td>
         <td>BOOLEAN</td>
         <td>TRUE</td>
-        <td>Default flag to enable/disable table maintenance. For more information see Table Maintainence doc.</td>
+        <td>Default flag to enable/disable table maintenance. For more information see [Data Maintainence](DataMaintenance.md) doc.</td>
     </tr>
     <tr>
         <td class="level1-item">interval</td>
         <td>DAY | WEEK | MONTH | QUARTER | YEAR</td>
         <td>MONTH</td>
-        <td>Default maintainence interval.Ignored when the table_maintainence enabled flag is FALSE. For more information see Table Maintainence doc</td>
+        <td>Default maintainence interval.Ignored when the table_maintainence enabled flag is FALSE. For more information see [Data Maintainence](DataMaintenance.md) doc</td>
     </tr>
 </table>
 
@@ -449,7 +449,7 @@ The core of configuration is tables. When the load all option is not used, the i
         <td>priority</td>
         <td>INT</td>
         <td>100</td>
-        <td>Used to define load groups and create sync dependencies between tables or groups of tables. Objects with the same priority are group together and sync in parallel. Order within the group is not guaranteed. Lower priority groups run first starting with zero. For more information see the Load Groups doc.</td>
+        <td>Used to define load groups and create sync dependencies between tables or groups of tables. Objects with the same priority are group together and sync in parallel. Order within the group is not guaranteed. Lower priority groups run first starting with zero. For more information see the [Load Groups](LoadGroups.md) doc.</td>
     </tr>
     <tr>
         <td>load_strategy</td>
@@ -485,25 +485,25 @@ The core of configuration is tables. When the load all option is not used, the i
         <td>allow_schema_evolution</td>
         <td>BOOLEAN</td>
         <td>FALSE</td>
-        <td>Flag to enable/disable table schema evolution. For more information see Schema Evolution doc.</td>
+        <td>Flag to enable/disable table schema evolution. For more information see [Table Configuration](TableConfiguration.md) doc.</td>
     </tr>
     <tr>
         <td>flatten_table</td>
         <td>BOOLEAN</td>
         <td>FALSE</td>
-        <td>Flag to enable/disable flattening of complex (STRUCT) types during the sync process. For more information see Complex Type Handling doc.</td>
+        <td>Flag to enable/disable flattening of complex (STRUCT) types during the sync process. For more information see [Table Configuration](TableConfiguration.md) doc.</td>
     </tr>
     <tr>
         <td>flatten_inplace</td>
         <td>BOOLEAN</td>
         <td>TRUE</td>
-        <td>Flag to determine where flatten data is stored within the Fabric Lakehouse. When TRUE, STRUCTs are flattened into existing lakehouse table. When FALSE, STRUCTs are flattened into a parallel lakehouse table. For more information see Complex Type Handling doc.</td>
+        <td>Flag to determine where flatten data is stored within the Fabric Lakehouse. When TRUE, STRUCTs are flattened into existing lakehouse table. When FALSE, STRUCTs are flattened into a parallel lakehouse table. For more information see [Table Configuration](TableConfiguration.md) doc.</td>
     </tr>
     <tr>
         <td>explode_arrays</td>
         <td>BOOLEAN</td>
         <td>FALSE</td>
-        <td>Flag to enable/disable flattening or explosion of complex (ARRAY) types during the sync process. For more information see Complex Type Handling doc.</td>
+        <td>Flag to enable/disable flattening or explosion of complex (ARRAY) types during the sync process. For more information see [Table Configuration](TableConfiguration.md) doc.</td>
     </tr>
     <tr>
         <td colspan="4" class="level1">table_maintenance</td>
@@ -512,13 +512,13 @@ The core of configuration is tables. When the load all option is not used, the i
         <td class="level1-item">enabled</td>
         <td>BOOLEAN</td>
         <td>TRUE</td>
-        <td>Flag to enable/disable table maintenance. For more information see Table Maintainence doc.</td>
+        <td>Flag to enable/disable table maintenance. For more information see [Data Maintainence](DataMaintenance.md) doc.</td>
     </tr>
     <tr>
         <td class="level1-item">interval</td>
         <td>DAY | WEEK | MONTH | QUARTER | YEAR</td>
         <td>MONTH</td>
-        <td>Table maintainence interval.Ignored when the table_maintainence enabled flag is FALSE. For more information see Table Maintainence doc</td>
+        <td>Table maintainence interval.Ignored when the table_maintainence enabled flag is FALSE. For more information see [Data Maintainence](DataMaintenance.md) doc</td>
     </tr>    
     <tr>
         <td colspan="4" class="level1">column_map &lt;ARRAY&gt;</td>
@@ -527,13 +527,13 @@ The core of configuration is tables. When the load all option is not used, the i
         <td class="level1-item">format</td>
         <td>STRING</td>
         <td>None</td>
-        <td>Python format string when required for by data type transformation. For more information, see Column Map doc.</td>
+        <td>Python format string when required for by data type transformation. For more information, see [Column Map](ColumnMapping.md) doc.</td>
     </tr>
     <tr>
         <td class="level1-item">drop_source</td>
         <td>BOOLEAN</td>
         <td>FALSE</td>
-        <td>Flag to allow for dropping source column when a column is renamed. Ignored when the column is not renamed. For more information, see Column Map doc.</td>
+        <td>Flag to allow for dropping source column when a column is renamed. Ignored when the column is not renamed. For more information, see [Column Map](ColumnMapping.md) doc.</td>
     </tr>
     <tr>
         <td colspan="4" class="level2">column_map.source</td>

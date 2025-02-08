@@ -85,4 +85,4 @@ The relevent settings for complex-type handling are:
 
 ### Column Mapping
 
-Columning mapping allows for column-level in-flight changes to the BigQuery object data schema. For more information please see the [Column Mapping documentation]().
+Columning mapping allows for column-level in-flight changes to the BigQuery object data schema. For more information please see the [Column Mapping documentation](ColumnMapping.md).

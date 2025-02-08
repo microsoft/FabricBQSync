@@ -5,7 +5,9 @@ The Fabric Sync Accelerator uses three BigQuery object types as datasources for 
 ### Base Tables
 BigQuery Base Tables are the standard table-type in which structured data is stored directly in BigQuery storage. Data stored in Base Tables can use all of the functions and capabilities provided by the accelerator.
 
-For data synchronization into Fabric, Base Tables support all load strategies including <code>FULL</code>, <code>WATERMARK</code>, <code>PARTITION</code> and <code>TIME_INGESTION</code>.
+For data synchronization into Fabric, Base Tables support all load strategies including <code>CDC</code>, <code>CDC_APPEND</code>, <code>FULL</code>, <code>WATERMARK</code>, <code>PARTITION</code> and <code>TIME_INGESTION</code>.
+
+For CDC load strategies, the base table must have the <code>enable_change_history</code> option set within BigQuery.
 
 ### Views
 BigQuery Views are logical tables defined by a SQL Query. Data can be synchronized from Views into Fabric using a limited-set of the Fabric Sync Accelerator capabilities and are treated as virtualized tables with minimal metadata.

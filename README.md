@@ -1,8 +1,14 @@
 # Fabric Sync for BigQuery
 
-This project is provided as an accelerator to help synchronize or migrate data from Google BigQuery to Fabric. The primary use cases for this accelerator are:
+This project is provided as an accelerator to help mirror or synchronize data from Google BigQuery to Fabric. The primary use cases for this accelerator are:
  - BigQuery customers who wish to continue to leverage their existing investments and data estate while optimizing their PowerBI experience and reducing overall analytics TCO
  - BigQuery customers who wish to migrate all or part of their data estate to Microsoft Fabric
+
+# Project Overview
+
+For many of our customers, the native mirroring capabilities in Fabric are one of the most exciting features of the platform. While Fabric currently supports a growing number of different mirroring sources, BigQuery is not yet supported. This current gap in capabilities is the foundation of this accelerator.
+
+The goal of this accelerator is to simplify the process of synchronizing data from Google BigQuery to Microsoft Fabric with an emphasis on reliability, performance, and cost optimization. The accelerator is implemented using Spark (PySpark) using many concepts common to an ETL framework. The accelerator is more than just an ETL framework however in that it uses BigQuery metadata to solve for the most optimal way to synchronize data between the two platforms.
 
 # v2.1 
 Version 2.1 adds support for:
@@ -22,7 +28,7 @@ Version 2.1 adds support for:
 # Getting Started
 
 The accelerator includes an automated installer that can set up your Fabric workspace and install all required dependencies automatically. To use the installer:
-1. Download the current version Installer notebook
+1. Download the current version [Installer notebook](./Notebooks/v2.0.0/Fabric-Sync-Installer.ipynb)
 2. Import the installer into your Fabric Workspace
 3. Attach the installer to a Lakehouse within the Workspace
 4. Upload your GCP Service Account credential json file to OneLake
@@ -48,27 +54,11 @@ The installer performs the following actions:
 - Creates a Fabric Spark Environment with required libraries, if configured
 - Installs a fully configured and ready-to-run Fabric-Sync-Notebook into your workspace
 
-# Upgrading to Current Version
+# Automatic Version Upgrades
+The Fabric Sync Accelerator will automatically upgrade itself as new runtime versions are added. If you are using PyPi to load the FabricSync package and allow the latest version of package to be pulled.The accelerator will keep your metastore and configuration up-to-date automatically.
 
-The accelerator now includes an upgrade utility to simplify the process of upgrading your existing BQ Sync instance to the most current version. The upgrade utility handles major and minor updates. To use the upgrade utility:
-1. Download the current version Upgrade notebook
-2. Import the Upgrade notebook into your Fabric Workspace
-3. Attach the Upgrade notebook to your BQ Sync metadata Lakehouse
-4. Update the notebook parameters to point to your current configuration file.
-5. Run te upgrade process
+<mark>Note that behaviors and defaults for existing configurations do not change. Any updates to default behaviors will only apply to new configurations or when manually changed. Performance optimizations will apply to  all configurations. Please see the [Release Log](Docs/ReleaseLog.md) for the latest.</mark>
 
-The upgrade process performs the following actions:
-- Migrates your current configuration file (when necessary). Note that new features/capabilities are turned off by default. Your current configuration file is cloned and is not overwritten.
-- Updates the BQ Sync metastore (when necessary). When schema changes are made to the BQ Sync metastore, the metastore is Optimized as part of the upgrade process.
-- Downloads the current version of the BQ Sync package. If you are using environments or have otherwise optimized your environment it may be necessary to manually update your package repository.
-- Downloads the current version of the Big Query spark connector (when available/necessary)
-- Installed a new version of the BQ Sync notebook, mapped to the new configuration, python package and spark connector
-  
-# Project Overview
-
-For many of our customers, the native mirroring capabilities in Fabric are one of the most exciting features of the platform. While Fabric currently supports a growing number of different mirroring sources, BigQuery is not yet supported. This current gap in capabilities is the foundation of this accelerator.
-
-The goal of this accelerator is to simplify the process of synchronizing data from Google BigQuery to Microsoft Fabric with an emphasis on reliability, performance, and cost optimization. The accelerator is implemented using Spark (PySpark) using many concepts common to an ETL framework. The accelerator is more than just an ETL framework however in that it uses BigQuery metadata to solve for the most optimal way to synchronize data between the two platforms.
 
 # Features & Capabilities
 
