@@ -154,6 +154,8 @@ class SyncUtil(ContextAwareBase):
                     df = df.drop(map.Source.Name)
         elif map.IsRename:
             df = df.withColumnRenamed(map.Source.Name, map.Destination.Name)
+        elif map.DropSource:
+            df = df.drop(map.Source.Name)
 
         return df
 

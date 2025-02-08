@@ -34,5 +34,9 @@ The installer performs the following actions:
 Open the notebook in your Fabric workspace, attach to your Metadata Lakehouse and your ready to start syncing data between BigQuery and Fabric
 
 ### Upgrades
-Beginning with version 2.0 and greater, Fabric Sync upgrades itself inline. When a new package runtime is detected, the Fabric Sync accelerator will automatically, update the environment to accommodate the new runtime.
+Beginning with version 2.0 and greater, Fabric Sync upgrades itself inline. When a new package runtime is detected, the Fabric Sync accelerator will automatically, update the environment to accommodate the new runtime. If you do not wish to allow for automatic upgrades, specify you required Fabric Sync version in either your Notebook or Environment definition as required.
+
+<b><u>Example Pip Install</u></b>
+
+<code>%pip install FabricSync=='X.X.X' --quiet --disable-pip-version-check</code>
 

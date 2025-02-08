@@ -206,10 +206,19 @@ class MappedColumn(SyncBaseModel):
 
     @property
     def IsTypeConversion(self) -> bool:
+        if not self.Source or not self.Destination:
+            return False
+        
+        if not self.Source.Type or not self.Destination.Type:
+            return False
+        
         return self.Source.Type != self.Destination.Type
     
     @property
     def IsRename(self) -> bool:
+        if not self.Source or not self.Destination:
+            return False
+        
         return self.Source.Name != self.Destination.Name
 
 class ConfigBQTableDefault (SyncBaseModel):
