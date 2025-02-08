@@ -28,6 +28,7 @@ Version 2.1 adds support for:
 # Getting Started
 
 The accelerator includes an automated installer that can set up your Fabric workspace and install all required dependencies automatically. To use the installer:
+
 1. Download the current version [Installer notebook](./Notebooks/v2.0.0/Fabric-Sync-Installer.ipynb)
 2. Import the installer into your Fabric Workspace
 3. Attach the installer to a Lakehouse within the Workspace
@@ -56,6 +57,7 @@ The installer performs the following actions:
 
 # Automatic Version Upgrades
 The Fabric Sync Accelerator will automatically upgrade itself as new runtime versions are added. If you are using PyPi to load the FabricSync package and allow the latest version of package to be pulled.The accelerator will keep your metastore and configuration up-to-date automatically.
+
 
 <mark>Note that behaviors and defaults for existing configurations do not change. Any updates to default behaviors will only apply to new configurations or when manually changed. Performance optimizations will apply to  all configurations. Please see the [Release Log](Docs/ReleaseLog.md) for the latest.</mark>
 
