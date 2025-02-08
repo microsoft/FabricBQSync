@@ -4,35 +4,35 @@ Welcome to the technical documents for Fabric Sync project. Please check back re
 
 ### Documentation Index
 
-- [Release Log](ReleaseLog.md)
+- [Release Log](Docs/ReleaseLog.md)
 
 ##### Getting Started
-- [BigQuery & GCP Requirements](BigQuery.md)
-- [Fabric Workspace & Spark](Fabric.md)
-- [Installs & Upgrades](Installation.md)
+- [BigQuery & GCP Requirements](Docs/BigQuery.md)
+- [Fabric Workspace & Spark](Docs/Fabric.md)
+- [Installs & Upgrades](Docs/Installation.md)
 
 ##### Technical Overview
-- [Autodiscovery](Autodiscovery.md)
-- [Fabric Mirror Destinations](Destinations.md)
-- [BigQuery Object Types](ObjectTypes.md) 
-- [Configuration](Configuration.md)
-    - [Table Configuration](TableConfiguration.md)
-    - [Configuration Settings](ConfigurationSettings.md)
-- [Scheduling](Scheduling.md)
-    - [Load Groups](LoadGroups.md)
-- [Synchronization](Synchronization.md)
+- [Autodiscovery](Docs/Autodiscovery.md)
+- [Fabric Mirror Destinations](Docs/Destinations.md)
+- [BigQuery Object Types](Docs/ObjectTypes.md) 
+- [Configuration](Docs/Configuration.md)
+    - [Table Configuration](Docs/TableConfiguration.md)
+    - [Configuration Settings](Docs/ConfigurationSettings.md)
+- [Scheduling](Docs/Scheduling.md)
+    - [Load Groups](Docs/LoadGroups.md)
+- [Synchronization](Docs/Synchronization.md)
 
 #### Example User Configurations
-- [Configuration Examples](ConfigExamples.md)
+- [Configuration Examples](Docs/ConfigExamples.md)
 
 ##### Administration
-- [Optimization](Optimizations.md)
-- [Logging & Telemetry](Logging.md)
-- [Data Maintenance](DataMaintenance.md)
-- [Data Expiration](DataExpiration.md)
+- [Optimization](Docs/Optimizations.md)
+- [Logging & Telemetry](Docs/Logging.md)
+- [Data Maintenance](Docs/DataMaintenance.md)
+- [Data Expiration](Docs/DataExpiration.md)
 
 ### Common Scenarios
-- [Initial Loading Historical Data](CommonScenarios/HistoricalData.md)
+- [Initial Loading Historical Data](Docs/CommonScenarios/HistoricalData.md)
 
 
 ### Videos
