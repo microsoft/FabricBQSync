@@ -229,7 +229,16 @@ class FabricMetastore(ContextAwareBase):
         sql = f"""
         WITH schedule_telemetry_last AS (
             SELECT
-                sync_id,schedule_id,project_id,dataset,table_name,status,started,completed,max_watermark,mirror_file_index,
+                sync_id,schedule_id,project_id,dataset,table_name,status,
+                MIN(started) OVER(PARTITION BY sync_id, schedule_id, project_id, dataset, table_name) AS started,
+                mAX(completed) OVER(PARTITION BY sync_id, schedule_id, project_id, dataset, table_name) AS completed,
+                MAX(max_watermark) OVER(PARTITION BY sync_id, schedule_id, project_id, dataset, table_name) AS max_watermark, 
+
+                SUM(CASE WHEN status='COMPLETE' THEN 1 ELSE 0 END) 
+                    OVER(PARTITION BY sync_id, schedule_id, project_id, dataset, table_name) AS completed_activities,
+                SUM(CASE WHEN status='FAILED' THEN 1 ELSE 0 END) 
+                    OVER(PARTITION BY sync_id, schedule_id, project_id, dataset, table_name) AS failed_activities, 
+                MAX(mirror_file_index) OVER(PARTITION BY sync_id, schedule_id, project_id, dataset, table_name) AS mirror_file_index,
                 ROW_NUMBER()OVER(PARTITION BY sync_id,schedule_id,project_id,dataset,table_name 
                     ORDER BY started DESC) AS row_num
             FROM sync_schedule_telemetry
@@ -237,9 +246,11 @@ class FabricMetastore(ContextAwareBase):
         schedule_telemetry AS (
             SELECT
                 sync_id,schedule_id,project_id,dataset,table_name,
-                SUM(CASE WHEN status='COMPLETE' THEN 1 ELSE 0 END) AS completed_activities,
-                SUM(CASE WHEN status='FAILED' THEN 1 ELSE 0 END) AS failed_activities,
-                MIN(started) as started,MAX(completed) as completed, MAX(mirror_file_index) AS mirror_file_index
+                MAX(completed_activities) AS completed_activities,
+                MAX(failed_activities) AS failed_activities,
+                MIN(started) AS started,
+                MAX(completed) AS completed, 
+                MAX(mirror_file_index) AS mirror_file_index
             FROM schedule_telemetry_last
             WHERE row_num = 1
             GROUP BY sync_id,schedule_id,project_id,dataset,table_name
@@ -1089,4 +1100,4 @@ class FabricMetastore(ContextAwareBase):
     def create_proxy_views(cls):
         cls.create_userconfig_tables_proxy_view()        
         cls.create_userconfig_tables_cols_proxy_view()
-        cls.create_autodetect_view()    
+        cls.create_autodetect_view()
