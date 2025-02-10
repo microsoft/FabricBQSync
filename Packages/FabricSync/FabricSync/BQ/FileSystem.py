@@ -8,7 +8,8 @@ from py4j.java_gateway import (
     JavaObject, java_import
 )
 from pyspark.sql import SparkSession
-from builtins import max as b
+#from builtins import max as b
+import builtins as b
 from io import BytesIO
 
 from FabricSync.BQ.Model.Core import HDFSFile
