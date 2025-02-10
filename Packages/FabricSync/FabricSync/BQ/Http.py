@@ -22,6 +22,11 @@ class RestAPIProxy:
 
     @property
     def Logger(self) -> Logger:
+        """
+        Logger
+        Returns:
+            Logger: Logger
+        """
         if not self.__logger:
             self.__logger = logging.getLogger(SyncConstants.FABRIC_LOG_NAME)
 

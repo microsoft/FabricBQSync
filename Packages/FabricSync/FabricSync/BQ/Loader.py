@@ -221,6 +221,10 @@ class BQScheduleLoader(ConfigBase):
 
         cdc = (schedule.Load_Strategy == SyncLoadStrategy.CDC)
         watermark_ts = datetime.fromisoformat(schedule.MaxWatermark)
+
+        if not self.is_timezone_aware(watermark_ts):
+            watermark_ts = watermark_ts.replace(tzinfo=timezone.utc)
+
         now_utc = datetime.now(timezone.utc)
 
         window_seconds = twenty_four_hours_seconds - ten_minutes_seconds if cdc else seven_days_seconds
@@ -244,6 +248,17 @@ class BQScheduleLoader(ConfigBase):
             sql_string += "TIMESTAMP_SUB(CURRENT_TIMESTAMP(),INTERVAL 601 SECOND))" if cdc else "NULL)"
 
         return sql_string
+
+    def is_timezone_aware(self, timestamp):
+        """
+        Check if the specified timestamp object is timezone-aware.
+        Args:
+            timestamp (datetime): The datetime object to check.
+        Returns:
+            bool: True if the timestamp has a timezone set (with non-null offset), 
+            otherwise returns False.
+        """
+        return timestamp.tzinfo is not None and timestamp.tzinfo.utcoffset(timestamp) is not None
 
     def __get_bq_table(self, schedule:SyncSchedule) -> Tuple[SyncSchedule, DataFrame, Observation]:
         """

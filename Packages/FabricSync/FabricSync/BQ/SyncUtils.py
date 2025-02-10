@@ -79,6 +79,12 @@ class SyncUtil(ContextAwareBase):
 
     @classmethod
     def ensure_sync_views(cls):
+        """
+        Ensures that the Fabric Sync views are created in the metadata lakehouse.
+        This function checks the SyncViewState flag in the session and creates the views if necessary.
+        Returns:
+            None
+        """
         if not Session.SyncViewState:
             FabricMetastore.create_proxy_views()
             Session.SyncViewState = True
