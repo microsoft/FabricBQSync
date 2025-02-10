@@ -182,6 +182,7 @@ class BaseFabricItem(ContextAwareBase):
             result (Any): Expected result
             while_match (bool): Flag to indicate if the status should match the expected result
             poll_seconds (int): Polling interval in seconds
+            update_hook (callable): Update hook
         """
 
         complete = False
@@ -207,7 +208,20 @@ class BaseFabricItem(ContextAwareBase):
 
     def _wait_status(self, api_function:callable, id:str, result:Any, while_match:bool=True, 
         timeout_minutes:int = 1, poll_seconds:int = 1, raise_error = False, update_hook:callable=None) -> str:
-
+        """
+        Waits for the status of the Fabric item to match the expected result or timeout
+        Args:
+            api_function (callable): API function to call
+            id (str): ID of the Fabric item
+            result (Any): Expected result
+            while_match (bool): Flag to indicate if the status should match the expected result
+            timeout_minutes (int): Timeout in minutes
+            poll_seconds (int): Polling interval in seconds
+            raise_error (bool): Flag to indicate if an error should be raised on timeout
+            update_hook (callable): Update hook
+        Returns:
+            str: Status of the Fabric item
+        """
         try:
             self.__run_with_timeout(api_function, id, result, while_match, timeout_minutes, poll_seconds, update_hook)
             self.Logger.debug(f"{self.type} STATUS POLLING FABRIC API: {result} complete")
@@ -441,6 +455,13 @@ class FabricNotebook(BaseFabricItem):
         super().__init__(FabricItemType.NOTEBOOK, workspace_id, api_token)
     
     def get_definition(self, id:str) -> str:
+        """
+        Gets the definition of the notebook
+        Args:
+            id (str): Notebook ID
+        Returns:
+            str: Notebook definition
+        """
         return self._do_fabric_item_command(id, "getDefinition?format=ipynb")
 
     def create(self, name:str, data:str, update_hook:callable) -> Response:

@@ -29,9 +29,21 @@ class HadoopFileSystem(ContextAwareBase):
         self._hdfs = hdfs
         self._fs_type = fs_type
         self._hadoop = hadoop
-        self._jvm = context.sparkContext._jvm
+        self._jvm = self.Context.sparkContext._jvm
 
     def write(self: "HadoopFileSystem", path: str, data, mode: Literal["a", "w"] = "w") -> None:
+        """
+        Writes data to a file in the Hadoop file system. 
+        Args:
+            path (str): The path to the file to write.
+            data (Union[str, bytes, bytearray, BytesIO]): The data to write to the file.
+            mode (Literal["a", "w"]): The write mode to use.
+        Raises:
+            TypeError: If the data is not a str, bytes-like object, or Bytes IO base.
+            Exception: If an error occurs while writing the data.
+        Returns:
+            None
+        """
         if not isinstance(data, (str, bytes, bytearray, BytesIO)):
             raise TypeError("data must be a str, bytes-like object or Bytes IO base is required, not '{}'".format(type(data).__name__))
 
@@ -66,6 +78,13 @@ class HadoopFileSystem(ContextAwareBase):
             raise e
     
     def read(self: "HadoopFileSystem", path: str) -> BytesIO:
+        """
+        Reads data from a file in the Hadoop file system.
+        Args:
+            path (str): The path to the file to read.
+        Returns:
+            BytesIO: The data read from the file.
+        """
         in_stream = self._hdfs.open(self._hadoop.fs.Path(path))  # type: ignore
         buffer = bytearray()
 
@@ -110,6 +129,14 @@ class HadoopFileSystem(ContextAwareBase):
         return result
 
     def copyFromLocalFile(self, source:str, destination:str) -> None:
+        """
+        Copies a file from the local file system to the Hadoop file system.
+        Args:
+            source (str): The path to the source file.
+            destination (str): The path to the destination file.
+        Returns:
+            None
+        """
         self._hdfs.copyFromLocalFile(
             self._hadoop.fs.Path(source),
             self._hadoop.fs.Path(destination))
@@ -140,6 +167,16 @@ class HadoopFileSystem(ContextAwareBase):
         return res
     
     def __get_hdfs(self, context: SparkSession, pattern: str) -> Tuple[JavaObject, JavaObject, FileSystemType]:
+        """
+        Gets the Hadoop file system object for the specified pattern.
+        Args:
+            context (SparkSession): The Spark session context.
+            pattern (str): The Hadoop file system pattern.
+        Returns:
+            Tuple[JavaObject, JavaObject, FileSystemType]: A tuple containing the Hadoop, HDFS, and file system type objects.
+        Raises:
+            ValueError: If the pattern is invalid.
+        """
         match = re.match(self.__FS_PATTERN, pattern)
 
         if match is None:
@@ -203,14 +240,41 @@ class OneLakeFileSystem(HadoopFileSystem):
         return os.path.join(self._base_uri, path.lstrip("/"))
 
     def copyFromLocalFile(self, source:str, destination:str) -> None:
+        """
+        Copies a file from the local file system to the OneLake file system.
+        Args:
+            source (str): The path to the source file.
+            destination (str): The path to the destination file.
+        Returns:
+            None
+        """
         super().copyFromLocalFile(
             source,
             self._get_onelake_path(destination))
 
     def write(self, path: str, data, mode: Literal["a", "w"]="w") -> None:
+        """
+        Writes data to a file in the OneLake file system.
+        Args:
+            path (str): The path to the file to write.
+            data (Union[str, bytes, bytearray, BytesIO]): The data to write to the file.
+            mode (Literal["a", "w"]): The write mode to use.
+        Raises:
+            TypeError: If the data is not a str, bytes-like object, or Bytes IO base.
+            Exception: If an error occurs while writing the data.  
+        Returns:
+            None
+        """
         super().write(self._get_onelake_path(path), data, mode)
     
     def read_string(self: "HadoopFileSystem", path: str) -> str:
+        """
+        Reads data from a file in the OneLake file system as a string.
+        Args:
+            path (str): The path to the file to read.
+        Returns:
+            str: The data read from the file as a string.
+        """
         buffer = self.read(self._get_onelake_path(path))
         return buffer.getvalue().decode("utf-8")
     
@@ -307,6 +371,14 @@ class OpenMirrorLandingZone(OneLakeFileSystem):
         return os.path.join(self._lz_uri, path.lstrip("/"))
 
     def copyFromLocalFile(self, source:str, destination:str) -> None:
+        """
+        Copies a file from the local file system to the OpenMirror landing zone.
+        Args:
+            source (str): The path to the source file.
+            destination (str): The path to the destination file.
+        Returns:
+            None
+        """
         self.Logger.debug(f"Landing Zone Operation - COPYFROMLOCALFILE - " +
                           f"{LakehouseCatalog.resolve_table_name(self._table_schema, self._table)} " +
                           f"{source} -> {destination}")
@@ -314,16 +386,42 @@ class OpenMirrorLandingZone(OneLakeFileSystem):
         super().copyFromLocalFile(source, destination)
 
     def write(self, path: str, data, mode: Literal["a", "w"] = "w") -> None:
+        """
+        Writes data to a file in the OpenMirror landing zone.
+        Args:
+            path (str): The path to the file to write.
+            data (Union[str, bytes, bytearray, BytesIO]): The data to write to the file.
+            mode (Literal["a", "w"]): The write mode to use.
+        Raises:
+            TypeError: If the data is not a str, bytes-like object, or Bytes IO base.
+            Exception: If an error occurs while writing the data.
+        Returns:
+            None
+        """
         self.Logger.debug(f"Landing Zone Operation - WRITE ({mode}) - " +
                           f"{LakehouseCatalog.resolve_table_name(self._table_schema, self._table)} - {path}")
         super().write(path, data, mode)
     
     def read(self, path: str) -> BytesIO:
+        """
+        Reads data from a file in the OpenMirror landing zone.
+        Args:
+            path (str): The path to the file to read.
+        Returns:
+            BytesIO: The data read from the file.
+        """
         self.Logger.debug(f"Landing Zone Operation - READ - " +
                           f"{LakehouseCatalog.resolve_table_name(self._table_schema, self._table)} - {path}")
         return super().read(path)
 
     def read_string(self: "HadoopFileSystem", path: str) -> str:
+        """
+        Reads data from a file in the OpenMirror landing zone as a string.
+        Args:
+            path (str): The path to the file to read.
+        Returns:
+            str: The data read from the file as a string.
+        """
         self.Logger.debug(f"Landing Zone Operation - READ (STRING) - " +
                           f"{LakehouseCatalog.resolve_table_name(self._table_schema, self._table)} - {path}")
         return super().read(path)
@@ -424,6 +522,13 @@ class OpenMirrorLandingZone(OneLakeFileSystem):
                 raise Exception(f"Failed to delete {LakehouseCatalog.resolve_table_name(self._table_schema, self._table)} LZ stage file {f}")
     
     def __format_lz_filename(self, idx:int) -> str:
+        """
+        Formats a file name for the OpenMirror landing zone.
+        Args:
+            idx (int): The index for the file.
+        Returns:
+            str: The formatted file name for the OpenMirror landing zone.
+        """
         return "%020d.parquet" % idx
     
     def generate_metadata_file(self, keys:List[str]) -> bool:

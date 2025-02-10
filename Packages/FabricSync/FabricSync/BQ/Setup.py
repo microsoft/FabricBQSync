@@ -123,7 +123,12 @@ class Installer(ContextAwareBase):
 
         return lr
 
-    def _create_metastore(self):
+    def _create_metastore(self) -> None:
+        """
+        Creates the metastore.
+        Returns:
+            None
+        """
         table_path = self._onelake._get_onelake_path("Tables")
         table_path += "/dbo" if self._user_config.Fabric.EnableSchemas else ""
 
@@ -246,7 +251,17 @@ class Installer(ContextAwareBase):
             except Exception as e:
                 self.Logger.sync_status(f"Failed to deploy Fabric Sync notebook to workspace: {notebook['name']}: {e}")
 
-    def _validate_lakehouse_schemas(self, lakehouse_id:str, lakehouse_name:str):
+    def _validate_lakehouse_schemas(self, lakehouse_id:str, lakehouse_name:str) -> None:
+        """
+        Validates the lakehouse schemas. 
+        Args:
+            lakehouse_id: The lakehouse ID.
+            lakehouse_name: The lakehouse name.
+        Raises:
+            SyncConfigurationError: If the lakehouse schemas are invalid.
+        Returns:
+            None
+        """
         has_schema = self._fabric_api.Lakehouse.has_schema(lakehouse_id)
 
         if self._user_config.Fabric.EnableSchemas:
@@ -257,11 +272,26 @@ class Installer(ContextAwareBase):
                 raise SyncConfigurationError(f"Invalid Configuration: {lakehouse_name} lakehouse already exists and IS schema-enabled.")
 
     def _get_environment_yaml(self) -> BytesIO:
+        """
+        Gets the environment YAML.
+        Returns:
+            BytesIO: The environment YAML.
+        """
         environments_yaml = f"dependencies:\r\n- pip:\r\n  - fabricsync"
         return BytesIO(environments_yaml.encode('utf-8'))
 
 
     def _create_or_update_environment(self, name:str) -> str:
+        """
+        Creates or updates the environment.
+        Args:
+            name: The name.
+        Raises:
+            TimeoutError: If the environment times out.
+            HTTPError: If the environment creation fails.
+        Returns:
+            str: The environment ID.
+        """
         try:
             self.Logger.sync_status(f"Creating (or Updating) Fabric Spark Environment: {name}...")
             environment_id, created = self._fabric_api.Environment.get_or_create(name)
@@ -292,7 +322,17 @@ class Installer(ContextAwareBase):
 
 
     @Telemetry.Install
-    def install(self, data):
+    def install(self, data) -> None:
+        """
+        Installs the Fabric Sync.
+        Args:
+            data: The data.
+        Raises:
+            SyncConfigurationError: If the configuration is invalid.
+            HTTPError: If the installation fails.
+        Returns:
+            None
+        """
         try:
             with SyncTimer() as t:
                 self._initialize_installer(data)

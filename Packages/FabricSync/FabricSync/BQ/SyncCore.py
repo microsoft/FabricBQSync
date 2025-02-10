@@ -18,6 +18,9 @@ from FabricSync.BQ.Exceptions import (
    
 class ConfigBase(ContextAwareBase):
     def __init__(self) -> None:
+        """
+        Initializes a new instance of the ConfigBase class.
+        """
         self.UserConfig = ConfigDataset.from_json(self.UserConfigPath)
 
     def __get_bq_reader_config(self, query:BQQueryModel) -> dict:
@@ -167,8 +170,12 @@ class SyncBase(ContextAwareBase):
         
 
     def init_sync_session(self, config_path):
+        """
+        Initializes the session context for the synchronization process.
+        Args:
+            config_path (str): The path to the JSON user configuration file.
+        """
         self.load_user_config(config_path)
-
         self.Context.sql(f"USE {self.UserConfig.Fabric.get_metadata_lakehouse()}")
 
     def load_user_config(self, config_path:str) -> None:

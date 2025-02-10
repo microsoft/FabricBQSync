@@ -55,13 +55,31 @@ class BQSync(SyncBase):
         except SyncConfigurationError as e:
             self.Logger.sync_status(f"FAILED TO INITIALIZE FABRIC SYNC\r\n{e}")
 
-    def update_user_config_for_current(self):
+    def update_user_config_for_current(self) -> None:
+        """
+        Updates the user configuration to the current version of the Fabric Sync runtime.
+        This method checks if the current runtime version is greater than the version
+        stored in the user configuration. If so, it updates the configuration to the
+        current version and validates the configuration settings.
+        Returns:
+            None
+        """
         if not self._is_runtime_ready():
             return
             
         self.__validate_user_config(self.UserConfigPath)
 
-    def __validate_user_config(self, config_path:str):
+    def __validate_user_config(self, config_path:str) -> None:
+        """
+        Validates the user configuration and updates it to the current runtime version.
+        This method updates the user configuration to the current runtime version and
+        validates the configuration settings. If the configuration is invalid, it logs
+        an error message and sets the UserConfig property to None.
+        Args:
+            config_path (str): The path to the user configuration file.
+        Returns:
+            None
+        """
         self.Logger.sync_status(f"Updating Fabric Sync user configuration...")
         config = ConfigDataset.from_json(config_path, False)
         config.Version = str(Session.CurrentVersion)
@@ -90,13 +108,29 @@ class BQSync(SyncBase):
         config.to_json(config_path)
         self.init_sync_session(config_path)
 
-    def __update_sync_runtime(self, config_path:str):
-            self.Logger.sync_status(f"Upgrading Fabric Sync metastore to v{str(Session.CurrentVersion)}...")
-            LakehouseCatalog.upgrade_metastore(self.UserConfig.Fabric.get_metadata_lakehouse())
-            
-            self.__validate_user_config(config_path)
+    def __update_sync_runtime(self, config_path:str) -> None:
+        """
+        Updates the Fabric Sync runtime to the current version.
+        This method updates the Fabric Sync runtime to the current version by
+        upgrading the sync metastore and validating the user configuration.
+        Args:
+            config_path (str): The path to the user configuration file.
+        Returns:
+            None
+        """
+        self.Logger.sync_status(f"Upgrading Fabric Sync metastore to v{str(Session.CurrentVersion)}...")
+        LakehouseCatalog.upgrade_metastore(self.UserConfig.Fabric.get_metadata_lakehouse())
+        self.__validate_user_config(config_path)
         
     def __requires_update(self) -> bool:
+        """
+        Determines if the Fabric Sync runtime requires an update.
+        This method checks if the current runtime version is greater than the version
+        stored in the user configuration. If so, it logs a status message indicating
+        the version mismatch and returns True. Otherwise, it returns False.
+        Returns:
+            bool: True if the runtime requires an update; otherwise, False.
+        """
         if Session.CurrentVersion > self.Version:
             self.Logger.sync_status(f"Fabric Sync Config Version: " +
                 f"{str(self.Version)} - Runtime Version: {str(Session.CurrentVersion)}")
@@ -105,6 +139,13 @@ class BQSync(SyncBase):
             return False
 
     def _is_runtime_ready(self) -> bool:
+        """
+        Checks if the Fabric Sync runtime is ready for synchronization.
+        This method verifies that the user configuration has been loaded and
+        that the Fabric Sync runtime is ready to perform synchronization tasks.
+        Returns:
+            bool: True if the runtime is ready; otherwise, False.
+        """
         if not self.UserConfig:
             self.Logger.sync_status("ERROR: Fabric Sync User Configuration must be loaded first. Please reload and try again.")
             return False
