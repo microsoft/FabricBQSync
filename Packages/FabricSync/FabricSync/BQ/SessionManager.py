@@ -91,8 +91,8 @@ class StaticSessionMeta(type):
         Returns:
             str: The telemetry endpoint.
         """
-        return cls.get_setting(SparkSessionConfig.TELEMETRY_ENDPOINT, "prdbqsyncinsights")
-    
+        return cls.get_setting(SparkSessionConfig.TELEMETRY_ENDPOINT, "prdbqsyncinsights.azurewebsites.net")
+
     @TelemetryEndpoint.setter
     def TelemetryEndpoint(cls, value:str):
         """
