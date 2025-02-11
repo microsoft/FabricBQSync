@@ -74,6 +74,7 @@ class SyncLogger:
                 asyncio.set_event_loop(self.loop)
             else:
                 self.loop = asyncio.get_event_loop()
+
         t = self.loop.create_task(self.send_telemetry_to_api(payload))
 
     async def send_telemetry_to_api(self, payload) -> None:
@@ -82,7 +83,7 @@ class SyncLogger:
             bound = functools.partial(api_proxy.post, endpoint="telemetry", data=payload)
             await self.loop.run_in_executor(None, bound)
         except Exception as e:
-            self.__logger.error("Telemetry Send Failure")
+            self.__logger.error(f"Telemetry Send Failure: {e}")
 
     def record_factory(self, *args, **kwargs) -> logging.LogRecord:
         record = self.base_factory(*args, **kwargs)
@@ -107,8 +108,7 @@ class SyncLogger:
         return self.__logger
 
     def reset_logging() -> None:
-        loggers = [logging.getLogger(name) for name in logging.root.manager.loggerDict]
-        loggers.append(logging.getLogger())
+        loggers = [logging.getLogger(name) for name in logging.root.manager.loggerDict if name == SyncConstants.FABRIC_LOG_NAME]
 
         for logger in loggers:
             handlers = logger.handlers[:]

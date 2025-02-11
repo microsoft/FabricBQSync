@@ -58,7 +58,9 @@ class SyncUtil(ContextAwareBase):
         Session.LogPath = user_config.Logging.LogPath
         Session.LogLevel = user_config.Logging.LogLevel
         Session.Telemetry = user_config.Logging.Telemetry
-        Session.TelemetryEndPoint = f"{user_config.Logging.TelemetryEndPoint}.azurewebsites.net"
+
+
+        Session.TelemetryEndpoint = f"{user_config.Logging.TelemetryEndPoint}.azurewebsites.net"
 
         Session.WorkspaceID = user_config.Fabric.WorkspaceID
 
