@@ -44,6 +44,9 @@ class SyncUtil(ContextAwareBase):
         Returns:
             None
         """
+        Session.set_spark_conf("bigQueryJobLabel.ms_job_type", "fabric_sync")
+        Session.set_spark_conf("bigQueryJobLabel.ms_job_group", user_config.ID)
+
         Session.set_spark_conf("spark.databricks.delta.vacuum.parallelDelete.enabled", "true")
         Session.set_spark_conf("spark.databricks.delta.retentionDurationCheck.enabled", "false")
         Session.set_spark_conf("spark.databricks.delta.properties.defaults.minWriterVersion", "7")
@@ -179,7 +182,9 @@ class SyncUtil(ContextAwareBase):
         Returns:
             str: The formatted string representation of the watermark.
         """
-        
+        if not max_watermark:
+            return None
+
         if type(max_watermark) is date:
             return max_watermark.strftime("%Y-%m-%d")
         elif type(max_watermark) is datetime:

@@ -1,6 +1,8 @@
 from pyspark.sql import DataFrame
 from pyspark.sql.types import StructType
 
+import uuid
+
 from FabricSync.BQ.Validation import SqlValidator
 from FabricSync.BQ.Enum import BigQueryAPI
 
@@ -42,7 +44,7 @@ class ConfigBase(ContextAwareBase):
             "dataset": query.Dataset,
             "credentials" : self.GCPCredential,
             "viewsEnabled" : "true",
-            "bigQueryJobLabel" : self.UserConfig.ID
+            "traceJobId" : f"FABRIC_SYNC_{self.ID}_{uuid.uuid4()}"
         }
     
         if self.UserConfig.GCP.API.MaterializationProjectID:

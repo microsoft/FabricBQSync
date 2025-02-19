@@ -227,7 +227,7 @@ class BQScheduleLoader(ConfigBase):
 
         now_utc = datetime.now(timezone.utc)
 
-        window_seconds = twenty_four_hours_seconds - ten_minutes_seconds if cdc else seven_days_seconds
+        window_seconds = (twenty_four_hours_seconds - ten_minutes_seconds) if cdc else seven_days_seconds
         cdc_time_remaining = window_seconds - (now_utc-watermark_ts).total_seconds()
 
         window_end = None
@@ -612,14 +612,14 @@ class BQScheduleLoader(ConfigBase):
                     src_cnt, watermark = SyncUtil.get_source_metrics(schedule, df_bq, observation)
 
                     if not watermark:
-                        self.Logger.sync_status(f"No watermark defined, using BQ Table Last Modified: {schedule.BQTableLastModified}", verbose=True)
-                        schedule.MaxWatermark = schedule.BQTableLastModified
+                        if schedule.IsCDCStrategy:
+                            self.Logger.sync_status(f"No watermark defined, using BQ Table Last Modified: {schedule.BQTableLastModified}", verbose=True)
+                            schedule.MaxWatermark = schedule.BQTableLastModified
                     else:
                         schedule.MaxWatermark = watermark
 
                     schedule.UpdateRowCounts(src=src_cnt)   
-                    schedule.Status = SyncStatus.COMPLETE
-                
+
                 schedule.Status = SyncStatus.COMPLETE
                 schedule.SparkAppId = self.Context.sparkContext.applicationId
                 schedule.EndTime = datetime.now(timezone.utc)

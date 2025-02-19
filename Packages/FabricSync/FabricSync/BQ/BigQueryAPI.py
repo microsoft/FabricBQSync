@@ -3,6 +3,7 @@ from pyspark.sql.types import StructType
 
 import json
 import base64 as b64
+import uuid
 
 from google.cloud import bigquery
 from google.oauth2.service_account import Credentials as gcpCredentials # type: ignore
@@ -23,6 +24,13 @@ class BigQueryClient(ContextAwareBase):
         self.project_id = project_id
         self.client = bigquery.Client(project=project_id, credentials=bq_credentials)
 
+        self.job_config = bigquery.QueryJobConfig(
+            labels={
+                'ms_job_type': 'fabric_sync',
+                'ms_job_group': self.ID
+            }
+        )
+
     def read_to_dataframe(self, sql:str, schema:StructType = None) -> DataFrame:
         """
         Reads the data from the given SQL query into a DataFrame.
@@ -32,7 +40,7 @@ class BigQueryClient(ContextAwareBase):
         Returns:
             DataFrame: The DataFrame.
         """
-        query = self.client.query(sql)
+        query = self.client.query(sql, job_id=f"FABRIC_SYNC_{self.ID}_{uuid.uuid4()}", job_config=self.job_config)
         bq = query.to_dataframe()
         
         if not bq.empty:
