@@ -2,6 +2,8 @@ import base64 as b64
 import time
 import os
 import requests
+import re
+
 from io import (
     BytesIO, StringIO
 )
@@ -243,3 +245,7 @@ class Util():
             return enum_class[name]
         except ValueError:
             return None
+    
+    @staticmethod
+    def remove_special_characters(val) -> str:
+        return re.sub(r'[^A-Za-z0-9]', '', val)

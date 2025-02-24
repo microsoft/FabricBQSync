@@ -5,7 +5,6 @@ import uuid
 
 from FabricSync.BQ.Validation import SqlValidator
 from FabricSync.BQ.Enum import BigQueryAPI
-
 from FabricSync.BQ.Core import ContextAwareBase
 from FabricSync.BQ.Auth import (
     TokenProvider, Credentials, GCPAuth

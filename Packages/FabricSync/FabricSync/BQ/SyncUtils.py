@@ -14,6 +14,7 @@ from typing import (
 )
 import warnings
 
+from FabricSync.BQ.Utils import Util
 from FabricSync.BQ.Model.Config import (
     ConfigDataset, ConfigObjectFilter, MappedColumn
 )
@@ -21,7 +22,7 @@ from FabricSync.BQ.Core import ContextAwareBase
 from FabricSync.BQ.SessionManager import Session
 from FabricSync.BQ.Enum import (
     ObjectFilterType, SupportedTypeConversion, BQPartitionType, CalendarInterval,
-    SyncLoadType, SyncLoadStrategy, SparkSessionConfig
+    SyncLoadType, SyncLoadStrategy
 )
 from FabricSync.BQ.Model.Schedule import SyncSchedule
 from FabricSync.BQ.Warnings import SyncUnsupportedConfigurationWarning
@@ -44,8 +45,8 @@ class SyncUtil(ContextAwareBase):
         Returns:
             None
         """
-        Session.set_spark_conf("bigQueryJobLabel.ms_job_type", "fabric_sync")
-        Session.set_spark_conf("bigQueryJobLabel.ms_job_group", user_config.ID)
+        Session.set_spark_conf("bigQueryJobLabel.msjobtype", "fabricsync")
+        Session.set_spark_conf("bigQueryJobLabel.msjobgroup", Util.remove_special_characters(user_config.ID.lower()))
 
         Session.set_spark_conf("spark.databricks.delta.vacuum.parallelDelete.enabled", "true")
         Session.set_spark_conf("spark.databricks.delta.retentionDurationCheck.enabled", "false")
