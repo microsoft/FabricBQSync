@@ -314,9 +314,6 @@ class BQMetadataLoader(ConfigBase):
 
         with SyncTimer() as t:
             schema_model = self.schema_models[view]
-            #Clean-up existing data
-            #if self.Context.catalog.tableExists(schema_model.TableName):
-            #    self.Context.sql(f"DELETE FROM {schema_model.TableName} WHERE sync_id='{self.ID}'")
 
             for p in self.UserConfig.GCP.Projects:
                 for d in p.Datasets:

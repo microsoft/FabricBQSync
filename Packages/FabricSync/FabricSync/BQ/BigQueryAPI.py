@@ -9,6 +9,7 @@ from google.cloud import bigquery
 from google.oauth2.service_account import Credentials as gcpCredentials # type: ignore
 
 from FabricSync.BQ.Core import ContextAwareBase
+from FabricSync.BQ.Utils import Util
 
 class BigQueryClient(ContextAwareBase):
     def __init__(self, project_id:str, credentials:str) -> None:
@@ -26,8 +27,8 @@ class BigQueryClient(ContextAwareBase):
 
         self.job_config = bigquery.QueryJobConfig(
             labels={
-                'ms_job_type': 'fabric_sync',
-                'ms_job_group': self.ID
+                'msjobtype': 'fabricsync',
+                'msjobgroup': Util.remove_special_characters(self.ID.lower())
             }
         )
 
