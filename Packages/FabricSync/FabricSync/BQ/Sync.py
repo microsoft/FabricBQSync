@@ -35,6 +35,7 @@ class BQSync(SyncBase):
         """
 
         try:
+            Session.reset()
             super().__init__(config_path, credentials)
 
             if self.__requires_update():

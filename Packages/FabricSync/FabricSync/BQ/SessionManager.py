@@ -420,3 +420,8 @@ class Session(metaclass=StaticSessionMeta):
         Print the session settings.
         """
         [print(f"{cls._get_setting_key(k)}: {cls.get_setting(k)}") for k in list(SparkSessionConfig)]
+    
+    @classmethod
+    def reset(cls):
+        for k in list(SparkSessionConfig):
+            cls.Context.conf.unset(cls._get_setting_key(k))
