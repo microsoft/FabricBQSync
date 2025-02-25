@@ -603,14 +603,18 @@ class FabricMetastore(ContextAwareBase):
                 COALESCE(u.load_strategy,
                     CASE WHEN (p.use_gcp_cdc AND p.object_type='BASE_TABLE' 
                             AND COALESCE(p.is_change_history_enabled, 'NO') = 'YES' AND NOT COALESCE(p.require_partition_filter, FALSE)
-                            AND SIZE(p.tbl_key_cols) > 0) THEN 'CDC'
+                            AND SIZE(p.tbl_key_cols) > 0
+                            AND u.source_query IS NULL
+                            AND u.source_predicate IS NULL) THEN 'CDC'
                         WHEN (COALESCE(u.watermark_column, p.watermark_col) IS NOT NULL) THEN 'WATERMARK' 
                         WHEN (COALESCE(u.partition_enabled, p.is_partitioned, FALSE) = TRUE) 
                             AND COALESCE(u.partition_column, p.partition_col, '') NOT IN ('_PARTITIONTIME', '_PARTITIONDATE') THEN 'PARTITION'
                         WHEN (COALESCE(u.partition_enabled, p.is_partitioned, FALSE) = TRUE) 
                             AND COALESCE(u.partition_column, p.partition_col, '') IN ('_PARTITIONTIME', '_PARTITIONDATE') THEN 'TIME_INGESTION'
                         WHEN (p.use_gcp_cdc AND p.object_type='BASE_TABLE' 
-                            AND NOT COALESCE(p.require_partition_filter, FALSE)) THEN 'CDC_APPEND'
+                            AND NOT COALESCE(p.require_partition_filter, FALSE)
+                            AND u.source_query IS NULL
+                            AND u.source_predicate IS NULL) THEN 'CDC_APPEND'
                         ELSE 'FULL' END) AS load_strategy,
                 COALESCE(u.load_type,
                     CASE WHEN (p.use_gcp_cdc AND p.object_type='BASE_TABLE' 
