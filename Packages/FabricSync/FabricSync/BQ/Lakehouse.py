@@ -104,15 +104,15 @@ class LakehouseCatalog(ContextAwareBase):
 
             if tbl in current_tables:
                 df = cls.Context.table(tbl)
-                cmds.append(cls.__sync_schema(table_schema, tbl,  df.schema, schema))
+                cmds.extend(cls.__sync_schema(table_schema, tbl,  df.schema, schema))
             else:
-                cls.create_metastore_table_from_schema(metadata_lakehouse, table_schema, tbl, schema)
                 df = cls.Context.createDataFrame(data=cls.Context.sparkContext.emptyRDD(),schema=schema)
-                df.write.mode("OVERWRITE").saveAsTable(cls.resolve_table_name(schema, tbl))
+                df.write.mode("OVERWRITE").saveAsTable(cls.resolve_table_name(table_schema, tbl))
 
         if cmds:
-            SparkProcessor.process_command_list(cmds)
-    
+            for cmd in cmds:
+                cls.Context.sql(cmd)
+
     @classmethod
     def __rename_metastore_tables(cls, metadata_lakehouse:str) -> List[str]:
         """
@@ -169,7 +169,11 @@ class LakehouseCatalog(ContextAwareBase):
             cmds.extend([ddl + f"DROP COLUMN {f.name};" for f in source_diff])
         
         if target_diff:
-            cmds.extend([cls.__create_schema_field_sql(table_schema, table_name, f, target_schema) for f in target_diff])
+            for tf in target_schema.fieldNames():
+                for f in target_diff:
+                    if tf == f.name:
+                        cmds.append(cls.__create_schema_field_sql(table_schema, table_name, f, target_schema))
+                        break
         
         return cmds
 
