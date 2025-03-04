@@ -5,6 +5,8 @@ from pyspark.sql.types import (
 )
 from typing import List
 from delta.tables import DeltaTable
+import functools
+import time
 
 from FabricSync.BQ.Enum import SyncScheduleType
 from FabricSync.BQ.Model.Maintenance import MaintenanceSchedule
@@ -12,14 +14,46 @@ from FabricSync.BQ.Core import ContextAwareBase
 
 class FabricMetastoreSchema():
     data_type_map = StructType([StructField('data_type', StringType(), True), StructField('partition_type', StringType(), True), StructField('is_watermark', StringType(), True)])
-    sync_configuration = StructType([StructField('sync_id', StringType(), True), StructField('table_id', StringType(), True), StructField('project_id', StringType(), True), StructField('dataset', StringType(), True), StructField('table_name', StringType(), True), StructField('object_type', StringType(), True), StructField('enabled', BooleanType(), True), StructField('workspace_id', StringType(), True), StructField('workspace_name', StringType(), True), StructField('lakehouse_type', StringType(), True), StructField('lakehouse_id', StringType(), True), StructField('lakehouse', StringType(), True), StructField('lakehouse_schema', StringType(), True), StructField('lakehouse_table_name', StringType(), True), StructField('lakehouse_partition', StringType(), True), StructField('source_query', StringType(), True), StructField('source_predicate', StringType(), True), StructField('priority', IntegerType(), True), StructField('load_strategy', StringType(), True), StructField('load_type', StringType(), True), StructField('interval', StringType(), True), StructField('primary_keys', ArrayType(StringType(), True), True), StructField('is_partitioned', BooleanType(), True), StructField('partition_column', StringType(), True), StructField('partition_type', StringType(), True), StructField('partition_grain', StringType(), True), StructField('partition_data_type', StringType(), True), StructField('partition_range', StringType(), True), StructField('watermark_column', StringType(), True), StructField('autodetect', BooleanType(), True), StructField('use_lakehouse_schema', BooleanType(), True), StructField('enforce_expiration', BooleanType(), True), StructField('allow_schema_evolution', BooleanType(), True), StructField('table_maintenance_enabled', BooleanType(), True), StructField('table_maintenance_interval', StringType(), True), StructField('flatten_table', BooleanType(), True), StructField('flatten_inplace', BooleanType(), True), StructField('explode_arrays', BooleanType(), True), StructField('column_map', StringType(), True), StructField('config_override', BooleanType(), True), StructField('sync_state', StringType(), True), StructField('created_dt', TimestampType(), True), StructField('last_updated_dt', TimestampType(), True)])
+    sync_configuration = StructType([StructField('sync_id', StringType(), True), StructField('table_id', StringType(), True), StructField('project_id', StringType(), True), StructField('dataset', StringType(), True), StructField('table_name', StringType(), True), StructField('object_type', StringType(), True), StructField('enabled', BooleanType(), True), StructField('workspace_id', StringType(), True), StructField('workspace_name', StringType(), True), StructField('lakehouse_type', StringType(), True), StructField('lakehouse_id', StringType(), True), StructField('lakehouse', StringType(), True), StructField('lakehouse_schema', StringType(), True), StructField('lakehouse_table_name', StringType(), True), StructField('lakehouse_partition', StringType(), True), StructField('source_query', StringType(), True), StructField('source_predicate', StringType(), True), StructField('priority', IntegerType(), True), StructField('load_strategy', StringType(), True), StructField('load_type', StringType(), True), StructField('interval', StringType(), True), StructField('primary_keys', ArrayType(StringType(), True), True), StructField('is_partitioned', BooleanType(), True), StructField('partition_column', StringType(), True), StructField('partition_type', StringType(), True), StructField('partition_grain', StringType(), True), StructField('partition_data_type', StringType(), True), StructField('partition_range', StringType(), True), StructField('watermark_column', StringType(), True), StructField('autodetect', BooleanType(), True), StructField('use_lakehouse_schema', BooleanType(), True), StructField('enforce_expiration', BooleanType(), True), StructField('allow_schema_evolution', BooleanType(), True), StructField('table_maintenance_enabled', BooleanType(), True), StructField('table_maintenance_interval', StringType(), True), StructField('flatten_table', BooleanType(), True), StructField('flatten_inplace', BooleanType(), True), StructField('explode_arrays', BooleanType(), True), StructField('column_map', StringType(), True), StructField('config_override', BooleanType(), True), StructField('sync_state', StringType(), True), StructField('config_path', StringType(), True), StructField('created_dt', TimestampType(), True), StructField('last_updated_dt', TimestampType(), True)])
     sync_data_expiration = StructType([StructField('sync_id', StringType(), True), StructField('table_catalog', StringType(), True), StructField('table_schema', StringType(), True), StructField('table_name', StringType(), True), StructField('partition_id', StringType(), True), StructField('expiration', TimestampType(), True)])
     sync_maintenance = StructType([StructField('sync_id', StringType(), True), StructField('table_id', StringType(), True), StructField('project_id', StringType(), True), StructField('dataset', StringType(), True), StructField('table_name', StringType(), True), StructField('partition_id', StringType(), True), StructField('lakehouse', StringType(), True), StructField('lakehouse_schema', StringType(), True), StructField('lakehouse_table_name', StringType(), True), StructField('lakehouse_partition', StringType(), True), StructField('row_count', LongType(), True), StructField('table_partition_size', LongType(), True), StructField('last_maintenance_type', StringType(), True), StructField('last_maintenance_interval', StringType(), True), StructField('last_maintenance', TimestampType(), True), StructField('last_optimize', TimestampType(), True), StructField('last_vacuum', TimestampType(), True), StructField('last_maintenance_status', StringType(), True), StructField('created_dt', TimestampType(), True), StructField('last_updated_dt', TimestampType(), True)])
     sync_schedule = StructType([StructField('group_schedule_id', StringType(), True), StructField('schedule_id', StringType(), True), StructField('sync_id', StringType(), True), StructField('project_id', StringType(), True), StructField('dataset', StringType(), True), StructField('table_name', StringType(), True), StructField('schedule_type', StringType(), True), StructField('scheduled', TimestampType(), True), StructField('status', StringType(), True), StructField('started', TimestampType(), True), StructField('completed', TimestampType(), True), StructField('completed_activities', IntegerType(), True), StructField('failed_activities', IntegerType(), True), StructField('max_watermark', StringType(), True), StructField('mirror_file_index', LongType(), True), StructField('priority', IntegerType(), True)])
     sync_schedule_telemetry = StructType([StructField('schedule_id', StringType(), True), StructField('sync_id', StringType(), True), StructField('project_id', StringType(), True), StructField('dataset', StringType(), True), StructField('table_name', StringType(), True), StructField('partition_id', StringType(), True), StructField('status', StringType(), True), StructField('started', TimestampType(), True), StructField('completed', TimestampType(), True), StructField('src_row_count', LongType(), True), StructField('inserted_row_count', LongType(), True), StructField('updated_row_count', LongType(), True), StructField('delta_version', LongType(), True), StructField('spark_application_id', StringType(), True), StructField('max_watermark', StringType(), True), StructField('summary_load', StringType(), True), StructField('source_query', StringType(), True), StructField('source_predicate', StringType(), True), StructField('mirror_file_index', LongType(), True)])
 
+class Metastore():
+    def Retry(func_=None, max_retries:int=3, backoff_factor:int=2):
+        def _decorator(func):
+            @functools.wraps(func)
+            def wrapper(*args, **kwargs):
+                attempt = 0
+                last_exception = None
+
+                while attempt < max_retries:
+                    try:
+                        r = func(*args, **kwargs)
+                        break
+                    except Exception as e:
+                        last_exception = e
+                        if "ConcurrentModificationException" in str(e):
+                            attempt += 1
+                            wait_time = backoff_factor ** attempt
+                            time.sleep(wait_time)
+                        else:
+                            raise e
+                else:
+                    raise last_exception
+
+                return r
+            return wrapper
+
+        if callable(func_):
+            return _decorator(func_)
+        elif func_ is None:
+            return _decorator
+
 class FabricMetastore(ContextAwareBase):
-    @classmethod 
+    @classmethod
+    @Metastore.Retry()
     def build_schedule(cls, schedule_type:SyncScheduleType) -> None:
         sql = f"""
         WITH last_scheduled_load AS (
@@ -88,7 +122,8 @@ class FabricMetastore(ContextAwareBase):
 
         cls.Context.sql(sql)
 
-    @classmethod     
+    @classmethod
+    @Metastore.Retry()
     def save_schedule_telemetry(cls, rdd) -> None:
         """
         Write status and telemetry from sync schedule to Sync Schedule Telemetry Delta table
@@ -221,7 +256,8 @@ class FabricMetastore(ContextAwareBase):
 
         return df
 
-    @classmethod 
+    @classmethod
+    @Metastore.Retry()
     def process_load_group_telemetry(cls, schedule_type:SyncScheduleType) -> None:
         """
         When a load group is complete, summarizes the telemetry to close out the schedule
@@ -297,7 +333,8 @@ class FabricMetastore(ContextAwareBase):
 
         cls.Context.sql(sql)
 
-    @classmethod 
+    @classmethod
+    @Metastore.Retry()
     def commit_table_configuration(cls, schedule_type:SyncScheduleType) -> None:
         """
         After an initial load, locks the table configuration so no changes can occur when reprocessing metadata
@@ -493,7 +530,8 @@ class FabricMetastore(ContextAwareBase):
 
         cls.Context.sql(sql)
 
-    @classmethod 
+    @classmethod
+    @Metastore.Retry()
     def auto_detect_profiles(cls) -> None:        
         sql = f"""
         WITH default_config AS (
@@ -646,6 +684,7 @@ class FabricMetastore(ContextAwareBase):
                 COALESCE(u.column_map, NULL) AS column_map,
                 CASE WHEN u.table_name IS NULL THEN FALSE ELSE TRUE END AS config_override,
                 'INIT' AS sync_state,
+                '{cls.UserConfigPath}' AS config_path,
                 CURRENT_TIMESTAMP() as created_dt,
                 NULL as last_updated_dt
             FROM bq_objects p
@@ -683,6 +722,7 @@ class FabricMetastore(ContextAwareBase):
                 t.allow_schema_evolution = s.allow_schema_evolution,
                 t.table_maintenance_enabled = s.table_maintenance_enabled,
                 t.table_maintenance_interval = s.table_maintenance_interval,
+                t.config_path = s.config_path,
                 t.last_updated_dt = CURRENT_TIMESTAMP()
         WHEN MATCHED AND t.sync_state = 'INIT' THEN
             UPDATE SET *
@@ -707,7 +747,8 @@ class FabricMetastore(ContextAwareBase):
         for schema in [f"`{r['lakehouse']}`.`{r['lakehouse_schema']}`" for r in df.collect()]:
             cls.Context.sql(f"CREATE SCHEMA IF NOT EXISTS `{workspace_name}`.{schema}")
     
-    @classmethod 
+    @classmethod
+    @Metastore.Retry()
     def sync_retention_config(cls) -> None:
         sql = f"""
         WITH cfg AS (
@@ -780,7 +821,8 @@ class FabricMetastore(ContextAwareBase):
 
         return cls.Context.sql(sql)
     
-    @classmethod 
+    @classmethod
+    @Metastore.Retry()
     def update_maintenance_config(cls) -> None:
         sql = f"""
             WITH tbl_config AS (
@@ -1070,7 +1112,8 @@ class FabricMetastore(ContextAwareBase):
 
         return cls.Context.sql(sql)
 
-    @classmethod 
+    @classmethod
+    @Metastore.Retry()
     def update_maintenance_schedule(cls, schedules:List[MaintenanceSchedule]) -> None:
         keys = ['table_maintenance_interval', 'strategy', 'next_maintenance', 'run_optimize', 'run_vacuum']
         data = []

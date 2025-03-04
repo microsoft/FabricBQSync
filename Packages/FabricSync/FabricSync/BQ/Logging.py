@@ -26,7 +26,7 @@ class SyncLogger:
     def _initialize_logger(self) -> None:
         self.__logger = logging.getLogger(SyncConstants.FABRIC_LOG_NAME)        
         
-        LOG_LEVEL = (SyncLogLevel[self.LogLevel]).value
+        LOG_LEVEL = (SyncLogLevel[Session.LogLevel]).value
 
         logging.addLevelName(SyncLogLevel.SYNC_STATUS.value, "SYNC_STATUS")
         logging.addLevelName(SyncLogLevel.TELEMETRY.value, "TELEMETRY")
@@ -39,10 +39,9 @@ class SyncLogger:
 
         SYNC_LOG_HANDLER_NAME = "SYNC_LOG_HANDLER"
 
-        os.makedirs(os.path.dirname(self.LogPath), exist_ok=True)   
+        os.makedirs(os.path.dirname(Session.LogPath), exist_ok=True)   
 
-        handler = logging.handlers.TimedRotatingFileHandler(self.LogPath, 
-            when="d", interval=1)
+        handler = logging.handlers.TimedRotatingFileHandler(Session.LogPath, when="d", interval=1)
         handler.setFormatter(CustomJsonFormatter())
         handler.name = "SYNC_FILE_LOG_HANDLER"
         handler.setLevel(LOG_LEVEL)
@@ -58,8 +57,8 @@ class SyncLogger:
 
     def telemetry(self, message, *args, **kwargs) -> None:
         if (self.__logger.isEnabledFor(SyncLogLevel.TELEMETRY.value)):
-            if self.Telemetry:
-                message["correlation_id"] = self.ApplicationID
+            if Session.Telemetry:
+                message["correlation_id"] = Session.ApplicationID
                 message["sync_version"] = str(Version.CurrentVersion)
 
                 self.send_telemetry(json.dumps(message))
@@ -79,7 +78,7 @@ class SyncLogger:
 
     async def send_telemetry_to_api(self, payload) -> None:
         try:
-            api_proxy = RestAPIProxy(base_url=f"https://{self.TelemetryEndpoint}")
+            api_proxy = RestAPIProxy(base_url=f"https://{Session.TelemetryEndpoint}")
             bound = functools.partial(api_proxy.post, endpoint="telemetry", data=payload)
             await self.loop.run_in_executor(None, bound)
         except Exception as e:
@@ -87,7 +86,7 @@ class SyncLogger:
 
     def record_factory(self, *args, **kwargs) -> logging.LogRecord:
         record = self.base_factory(*args, **kwargs)
-        record.correlation_id = self.ApplicationID
+        record.correlation_id = Session.ApplicationID
         return record
 
     @classmethod
@@ -102,8 +101,8 @@ class SyncLogger:
         if not self.__logger:
             if SyncConstants.FABRIC_LOG_NAME not in logging.Logger.manager.loggerDict:
                 self._initialize_logger()
-            else:
-                self.__logger = logging.getLogger(SyncConstants.FABRIC_LOG_NAME)
+            
+            self.__logger = logging.getLogger(SyncConstants.FABRIC_LOG_NAME)
 
         return self.__logger
 
@@ -124,26 +123,6 @@ class SyncLogger:
             self.__context = SparkSession.getActiveSession()
 
         return self.__context
-
-    @property
-    def ApplicationID(self) -> str:
-        return Session.ApplicationID
-    
-    @property
-    def TelemetryEndpoint(self) -> str:
-        return Session.TelemetryEndpoint
-    
-    @property
-    def LogLevel(self) -> str:
-        return Session.LogLevel
-    
-    @property
-    def LogPath(self) -> str:
-        return Session.LogPath
-    
-    @property
-    def Telemetry(self) -> str:
-        return Session.Telemetry
 
 class SyncLogHandler(logging.Handler):
     def __init__(self, name, target_handler) -> None:
@@ -179,10 +158,8 @@ class Telemetry():
             @functools.wraps(func)
             def wrapper(*args, **kwargs):
                 func_args = inspect.signature(func).bind(*args, **kwargs).arguments
-
                 r = func(*args, **kwargs)
-
-                Telemetry.log_telemetry("BQ Sync Accelerator Install", result=True)
+                Telemetry.log_telemetry("Fabric Sync Accelerator Install", result=True)
 
                 return r
             return wrapper
@@ -200,7 +177,7 @@ class Telemetry():
 
                 r =  func(*args, **kwargs)
 
-                Telemetry.log_telemetry("BQ Sync Accelerator Upgrade", result=True)
+                Telemetry.log_telemetry("Fabric Sync Accelerator Upgrade", result=True)
 
                 return r
             return wrapper
@@ -215,7 +192,7 @@ class Telemetry():
             @functools.wraps(func)
             def wrapper(*args, **kwargs):
                 r =  func(*args, **kwargs)
-                Telemetry.log_telemetry("Mirror Database Sync", r)
+                Telemetry.log_telemetry("Fabric Mirror Database Sync", r)
 
                 return r
             return wrapper
@@ -230,7 +207,7 @@ class Telemetry():
             @functools.wraps(func)
             def wrapper(*args, **kwargs):
                 r =  func(*args, **kwargs)
-                Telemetry.log_telemetry("BQ Metadata Sync", r)
+                Telemetry.log_telemetry("Fabric Metadata Sync", r)
 
                 return r
             return wrapper
@@ -245,7 +222,7 @@ class Telemetry():
             @functools.wraps(func)
             def wrapper(*args, **kwargs):
                 r = func(*args, **kwargs)
-                Telemetry.log_telemetry("Auto Discover Configuration", result=True)
+                Telemetry.log_telemetry("Fabric Sync Auto Discover Configuration", result=True)
 
                 return r
             return wrapper
@@ -267,7 +244,7 @@ class Telemetry():
                     "schedule_type": str(func_args["schedule_type"]),
                     "schedule_id": str(r)
                 }
-                Telemetry.log_telemetry("Scheduler", result=True, data=params)
+                Telemetry.log_telemetry("Fabric Sync Scheduler", result=True, data=params)
 
                 return r
             return wrapper
@@ -306,7 +283,7 @@ class Telemetry():
 
                 r =  func(*args, **kwargs)
 
-                Telemetry.log_telemetry("Lakehouse Inventory", result=True)
+                Telemetry.log_telemetry("Fabric Lakehouse Inventory", result=True)
 
                 return r
             return wrapper
@@ -328,7 +305,7 @@ class Telemetry():
                     "maintainence_type":maintainence_type
                 }
 
-                Telemetry.log_telemetry("Delta Table Maintenance", result=True, data=params)
+                Telemetry.log_telemetry("OneLake Delta Table Maintenance", result=True, data=params)
 
                 return r
             return wrapper
