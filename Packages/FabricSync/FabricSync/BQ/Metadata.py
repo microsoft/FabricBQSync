@@ -11,6 +11,8 @@ from FabricSync.BQ.Exceptions import (
     MetadataSyncError
 )
 from FabricSync.BQ.Constants import SyncConstants
+from FabricSync.BQ.Lakehouse import LakehouseCatalog
+from FabricSync.BQ.Threading import SparkProcessor
 from FabricSync.BQ.Logging import Telemetry
 from FabricSync.BQ.Metastore import FabricMetastore
 from FabricSync.BQ.SyncUtils import SyncUtil
@@ -310,7 +312,7 @@ class BQMetadataLoader(ConfigBase):
         view = SchemaView[value[1]]
         self.Logger.sync_status(f"Syncing metadata for {view}...", verbose=True)
 
-        mode = SyncLoadType.OVERWRITE
+        mode = SyncLoadType.APPEND
 
         with SyncTimer() as t:
             schema_model = self.schema_models[view]
@@ -326,11 +328,13 @@ class BQMetadataLoader(ConfigBase):
                             self.__sync_bq_information_schema_core(project=p.ProjectID, dataset=d.Dataset, type=BigQueryObjectType.MATERIALIZED_VIEW, mode=mode)
                         case _:
                             self.__sync_bq_information_schema_table_dependent(project=p.ProjectID, dataset=d.Dataset, view=view, mode=mode)
-                    
-                    if mode == SyncLoadType.OVERWRITE:
-                        mode = SyncLoadType.APPEND
         
         self.Logger.sync_status(f"Syncing metadata for {view} completed in {str(t)}...")
+
+    def cleanup_information_schema(self) -> None:
+        table_schema = "dbo" if self.EnableSchemas else None
+        cmds = [f"DELETE FROM {LakehouseCatalog.resolve_table_name(table_schema, t)} WHERE sync_id='{self.ID}';" for t in SyncConstants.get_information_schema_tables()]
+        SparkProcessor.process_command_list(cmds)
 
     @Telemetry.Metadata_Sync
     def sync_metadata(self) -> None:   
@@ -345,6 +349,8 @@ class BQMetadataLoader(ConfigBase):
         """
         self.Logger.sync_status(f"BQ Metadata Update with BQ {'STANDARD' if self.UserConfig.GCP.API.UseStandardAPI == True else 'STORAGE'} API...")
         with SyncTimer() as t:
+            self.cleanup_information_schema()
+
             self.Context.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
             self.__async_bq_metadata()
             self.Context.conf.set("spark.sql.sources.partitionOverwriteMode", "static")

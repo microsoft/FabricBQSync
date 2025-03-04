@@ -56,6 +56,9 @@ class Installer(ContextAwareBase):
         self._logs_path = f"{self._working_path}/logs"
         self._temp_path = f"{self._default_path}/{self._working_path}/tmp"
 
+        os.makedirs(os.path.dirname(self.LogPath), exist_ok=True) 
+        os.makedirs(self._temp_path, exist_ok=True) 
+
         self._data["version"] = str(Session.CurrentVersion)
 
         if "reinitialize_existing_metadata" not in self._data:
@@ -77,9 +80,6 @@ class Installer(ContextAwareBase):
         self._fabric_api = FabricAPI(self.WorkspaceID, 
                                     self._TokenProvider.get_token(TokenProvider.FABRIC_TOKEN_SCOPE))
         
-        os.makedirs(os.path.dirname(self.LogPath), exist_ok=True) 
-        os.makedirs(self._temp_path, exist_ok=True) 
-
     def _get_bq_spark_connector(self) -> str:
         g = Github() # type: ignore
         repo = g.get_repo("GoogleCloudDataproc/spark-bigquery-connector")
@@ -174,7 +174,7 @@ class Installer(ContextAwareBase):
                     "materialization_project_id": self._data["gcp_project_id"],
                     "materialization_dataset": self._data["gcp_dataset_id"],
                     "billing_project_id": self._data["gcp_project_id"],
-                    "use_standard_api": True
+                    "use_standard_api": False
                 },
                 "projects": [
                 {
