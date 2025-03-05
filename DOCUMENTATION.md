@@ -33,7 +33,10 @@ Welcome to the technical documents for Fabric Sync project. Please check back re
 
 ### Common Scenarios
 - [Initial Loading Historical Data](Docs/CommonScenarios/HistoricalData.md)
-
+- [Convert Load Strategy to Watermark](Docs/ConvertToWatermark.md)
+- [Managed Configuration by Code](Docs/ConfigurationCode.md)
+- [Rotating GCP Service Credentials](Docs/RotateCredentials.md)
+- [Update BigQuery Spark Connector](Docs/UpdateBQConnector.md)
 
 ### Videos
 
