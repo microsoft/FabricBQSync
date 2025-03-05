@@ -5,12 +5,15 @@ from pyspark.sql.functions import col
 from pyspark.sql.types import (
     StructType, StructField
 )
+import time
+
 from FabricSync.BQ.Threading import SparkProcessor
 from FabricSync.BQ.Core import ContextAwareBase
 from FabricSync.BQ.Model.Config import ConfigDataset
 from FabricSync.BQ.Constants import SyncConstants
 from FabricSync.BQ.Metastore import FabricMetastoreSchema
 from FabricSync.BQ.Enum import FabricDestinationType
+from FabricSync.BQ.SessionManager import Session
 
 class LakehouseCatalog(ContextAwareBase):
     @classmethod
@@ -94,6 +97,7 @@ class LakehouseCatalog(ContextAwareBase):
         :param metadata_lakehouse: The name of the lakehouse where metadata tables should be upgraded.
         :type metadata_lakehouse: str
         """
+        rewrite_tables = []
         cmds = []
         table_schema = "dbo" if enable_schemas else None
 
@@ -104,14 +108,40 @@ class LakehouseCatalog(ContextAwareBase):
 
             if tbl in current_tables:
                 df = cls.Context.table(tbl)
-                cmds.extend(cls.__sync_schema(table_schema, tbl,  df.schema, schema))
+                schema_changes = cls.__sync_schema(table_schema, tbl,  df.schema, schema)
+
+                if schema_changes:
+                    cmds.extend(schema_changes)
+
+                    result = list(filter(lambda s: "DROP" in s, schema_changes))
+
+                    if result:
+                        rewrite_tables.append(tbl)
             else:
                 df = cls.Context.createDataFrame(data=cls.Context.sparkContext.emptyRDD(),schema=schema)
                 df.write.mode("OVERWRITE").saveAsTable(cls.resolve_table_name(table_schema, tbl))
 
         if cmds:
             for cmd in cmds:
+                cls.Logger.sync_status(f"Metastore Upgrade: {cmd}", verbose=True)
                 cls.Context.sql(cmd)
+        
+        if rewrite_tables:
+            cls.__rewrite_metastore_tables(rewrite_tables)
+
+    @classmethod
+    def __rewrite_metastore_tables(cls, tables:List) -> None:
+        Session.set_spark_conf("spark.sql.sources.partitionOverwriteMode", "static")
+
+        for tbl in tables:
+            cls.Logger.sync_status(f"Metastore Upgrade - Rewriting table for version capability: {tbl}", verbose=True)
+            df = cls.Context.table(tbl)
+            df.write.partitionBy("sync_id").mode("OVERWRITE").saveAsTable(f"{tbl}_tmp")
+            cls.Context.sql(f"DROP TABLE IF EXISTS {tbl};")
+            time.sleep(10)
+            cls.Context.sql(f"ALTER TABLE {tbl}_tmp RENAME TO {tbl};")
+        
+        Session.set_spark_conf("spark.sql.sources.partitionOverwriteMode", "dynamic")
 
     @classmethod
     def __rename_metastore_tables(cls, metadata_lakehouse:str) -> List[str]:
@@ -131,8 +161,9 @@ class LakehouseCatalog(ContextAwareBase):
 
         if renamed_tables:   
             SparkProcessor.process_command_list(renamed_tables)
+            current_tables = cls.get_catalog_tables(metadata_lakehouse)
         
-        return cls.get_catalog_tables(metadata_lakehouse)
+        return current_tables
 
     @classmethod
     def resolve_table_name(cls, table_schema:str, table_name:str) -> str:
@@ -161,11 +192,10 @@ class LakehouseCatalog(ContextAwareBase):
 
         ddl = f"ALTER TABLE {cls.resolve_table_name(table_schema, table_name)} "
 
-        if target_diff or source_diff:
+        if source_diff:
             cmds.append(
                 ddl + "SET TBLPROPERTIES ('delta.columnMapping.mode' = 'name','delta.minReaderVersion' = '2','delta.minWriterVersion' = '5');")
-        
-        if source_diff:
+
             cmds.extend([ddl + f"DROP COLUMN {f.name};" for f in source_diff])
         
         if target_diff:

@@ -28,6 +28,52 @@ from FabricSync.BQ.Auth import (
 )
 from FabricSync.BQ.SyncUtils import SyncUtil
 
+class SetUpUtils(ContextAwareBase):
+    @classmethod
+    def get_bq_spark_connector(cls, path:str) -> str:
+        g = Github() # type: ignore
+        repo = g.get_repo("GoogleCloudDataproc/spark-bigquery-connector")
+        latest_release = cls.__get_latest_bq_spark_connector(repo.get_releases())
+
+        sv = pv.parse(cls.Context.version)
+        jar_name = f"spark-{sv.major}.{sv.minor}-bigquery-{latest_release.title}.jar"
+
+        jars = [j for j in latest_release.get_assets() if j.name == jar_name]
+
+        if jars:
+            jar = jars[0]
+
+        url = jar.browser_download_url
+        Util.download_file(url, f"{path}/{jar_name}")
+
+        return jar_name
+
+    @classmethod
+    def __get_latest_bq_spark_connector(cls, releases):
+        """
+        Gets the latest BigQuery Spark connector release.
+        Args:
+            releases: The releases.
+        Returns:
+            The latest release.
+        """
+        lr = None
+        lv = None
+        
+        for r in releases:
+            if r.title:
+                if lr:
+                    v = pv.parse(r.title)
+
+                    if v > lv:
+                        lr = r
+                        lv = v
+                else:
+                    lr = r
+                    lv = pv.parse(r.title)
+
+        return lr
+
 class Installer(ContextAwareBase):
     GIT_URL = "https://raw.githubusercontent.com/microsoft/FabricBQSync/main"
 
@@ -79,49 +125,6 @@ class Installer(ContextAwareBase):
 
         self._fabric_api = FabricAPI(self.WorkspaceID, 
                                     self._TokenProvider.get_token(TokenProvider.FABRIC_TOKEN_SCOPE))
-        
-    def _get_bq_spark_connector(self) -> str:
-        g = Github() # type: ignore
-        repo = g.get_repo("GoogleCloudDataproc/spark-bigquery-connector")
-        latest_release = self._get_latest_bq_spark_connector(repo.get_releases())
-
-        sv = pv.parse(self.Context.version)
-        jar_name = f"spark-{sv.major}.{sv.minor}-bigquery-{latest_release.title}.jar"
-
-        jars = [j for j in latest_release.get_assets() if j.name == jar_name]
-
-        if jars:
-            jar = jars[0]
-
-        url = jar.browser_download_url
-        Util.download_file(url, f"{self._temp_path}/{jar_name}")
-
-        return jar_name
-
-    def _get_latest_bq_spark_connector(self, releases):
-        """
-        Gets the latest BigQuery Spark connector release.
-        Args:
-            releases: The releases.
-        Returns:
-            The latest release.
-        """
-        lr = None
-        lv = None
-        
-        for r in releases:
-            if r.title:
-                if lr:
-                    v = pv.parse(r.title)
-
-                    if v > lv:
-                        lr = r
-                        lv = v
-                else:
-                    lr = r
-                    lv = pv.parse(r.title)
-
-        return lr
 
     def _create_metastore(self) -> None:
         """
@@ -403,7 +406,7 @@ class Installer(ContextAwareBase):
 
                 #Download the appropriate jar for the current spark runtime
                 self.Logger.sync_status("Downloading BigQuery Spark connector libraries..")
-                self._data["spark_jar"] = self._get_bq_spark_connector()
+                self._data["spark_jar"] = SetUpUtils.get_bq_spark_connector(self._temp_path)
                 self._onelake.copyFromLocalFile(
                     f"{self._temp_path}/{self._data['spark_jar']}", f"{self._libs_path}/{self._data['spark_jar']}")
 
