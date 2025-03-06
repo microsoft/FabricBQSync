@@ -127,7 +127,7 @@ class StaticSessionMeta(type):
         Returns:
             str: The log path.
         """
-        return cls.get_setting(SparkSessionConfig.LOG_PATH, "/lakehouse/default/Files/BQ_Sync_Process/logs/fabric_sync.log")
+        return cls.get_setting(SparkSessionConfig.LOG_PATH, "/lakehouse/default/Files/Fabric_Sync_Process/logs/fabric_sync.log")
     
     @LogPath.setter
     def LogPath(cls, value:str):

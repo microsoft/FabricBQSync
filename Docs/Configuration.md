@@ -33,5 +33,5 @@ An initial user-config file is created by the Installer and saved to your Metada
     - Materialized View discovery is disabled
 
 ##### Customizing Config
-Modifying the user-config starts by extending the system generated user-config. Download the config from your Metadata Lakehouse at the following path: <code>Files/BQ_Sync_Process</code>.
+Modifying the user-config starts by extending the system generated user-config. Download the config from your Metadata Lakehouse at the following path: <code>Files/Fabric_Sync_Process</code>.
 
