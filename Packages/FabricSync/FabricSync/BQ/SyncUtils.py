@@ -45,8 +45,8 @@ class SyncUtil(ContextAwareBase):
         Returns:
             None
         """
-        Session.set_spark_conf("bigQueryJobLabel.msjobtype", "fabricsync")
-        Session.set_spark_conf("bigQueryJobLabel.msjobgroup", Util.remove_special_characters(user_config.ID.lower()))
+        #Session.set_spark_conf("bigQueryJobLabel.msjobtype", "fabricsync")
+        #Session.set_spark_conf("bigQueryJobLabel.msjobgroup", Util.remove_special_characters(user_config.ID.lower()))
 
         Session.set_spark_conf("spark.databricks.delta.vacuum.parallelDelete.enabled", "true")
         Session.set_spark_conf("spark.databricks.delta.retentionDurationCheck.enabled", "false")

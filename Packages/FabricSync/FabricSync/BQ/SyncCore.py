@@ -9,6 +9,7 @@ from FabricSync.BQ.Core import ContextAwareBase
 from FabricSync.BQ.Auth import (
     TokenProvider, Credentials, GCPAuth
 )
+from FabricSync.BQ.Utils import Util
 from FabricSync.BQ.SyncUtils import SyncUtil
 from FabricSync.BQ.BigQueryAPI import BigQueryClient
 from FabricSync.BQ.Model.Config import ConfigDataset
@@ -43,7 +44,9 @@ class ConfigBase(ContextAwareBase):
             "dataset": query.Dataset,
             "credentials" : self.GCPCredential,
             "viewsEnabled" : "true",
-            "traceJobId" : f"FABRIC_SYNC_{self.ID}_{uuid.uuid4()}"
+            "traceJobId" : f"FABRIC_SYNC_{self.ID}_{uuid.uuid4()}",
+            "bigQueryJobLabel.msjobtype": "fabricsync",
+            "bigQueryJobLabel.msjobgroup": Util.remove_special_characters(self.ID.lower())
         }
     
         if self.UserConfig.GCP.API.MaterializationProjectID:

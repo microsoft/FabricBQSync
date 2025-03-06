@@ -64,7 +64,7 @@ class ConfigLogging(SyncBaseModel):
     LogLevel:Optional[SyncLogLevelName] = Field(alias="log_level", default=SyncLogLevelName.SYNC_STATUS)
     Telemetry:Optional[bool] = Field(alias="telemetry", default=True)
     TelemetryEndPoint:Optional[str]=Field(alias="telemetry_endpoint", default="prdbqsyncinsights")
-    LogPath:Optional[str] = Field(alias="log_path", default="/lakehouse/default/Files/BQ_Sync_Process/logs/fabric_sync.log")
+    LogPath:Optional[str] = Field(alias="log_path", default="/lakehouse/default/Files/Fabric_Sync_Process/logs/fabric_sync.log")
 
 class ConfigIntelligentMaintenance(SyncBaseModel):
     RowsChanged:Optional[float] = Field(alias="rows_changed", default=float(0.10))
@@ -300,7 +300,7 @@ class ConfigAutodiscover(SyncBaseModel):
 
 class ConfigDataset(SyncBaseModel):
     ApplicationID:Optional[str] = Field(alias="correlation_id", default=None)
-    ID:Optional[str] = Field(alias='id', default="BQ_SYNC_LOADER")    
+    ID:Optional[str] = Field(alias='id', default="FABRIC_SYNC_LOADER")    
     Version:Optional[str] = Field(alias='version', default=None)    
     EnableDataExpiration:Optional[bool] = Field(alias="enable_data_expiration", default=False)
     Optimization:Optional[ConfigOptimization] = Field(alias="optimization", default=ConfigOptimization())

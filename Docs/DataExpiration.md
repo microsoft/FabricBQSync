@@ -25,7 +25,7 @@ The sync happens in two steps, when enabled.
     - For tables, this metadata comes in the form of a fixed expiration timestamp.
     - Partition expiration must be calculated using the configured expiration days and the partition boundary.
 
-    Expiration policies are tracked and updated with every metadata sync operation within the <code>bq_sync_data_expiration</code> metadata table.
+    Expiration policies are tracked and updated with every metadata sync operation within the <code>sync_data_expiration</code> metadata table.
 2. After the schedule load completes successfully, expiration policies are enforced if required.
     - Tables that expired are dropped from the Fabric Lakehouse. A dropped table requires no further maintenance consideration since the table and its underlying files are deleted.
     - Partitions that expired are deleted from the table. When partitions are deleted, table maintenance should be consider. The partition is removed from the table but OneLake storage is not recovered until a <code>VACUUM</code> is performed where the operation falls outside the retention window. For more information, please see the Data Maintenance docs.
