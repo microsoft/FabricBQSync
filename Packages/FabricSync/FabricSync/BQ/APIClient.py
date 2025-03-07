@@ -384,6 +384,7 @@ class FabricOpenMirroredDatabase(BaseFabricItem):
                         "target": {
                             "type": "MountedRelationalDatabase",
                             "typeProperties": {
+                                "defaultSchema": "dbo",
                                 "format": "Delta"
                             }
                         }
