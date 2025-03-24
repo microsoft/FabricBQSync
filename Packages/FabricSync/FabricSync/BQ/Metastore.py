@@ -663,7 +663,10 @@ class FabricMetastore(ContextAwareBase):
                             AND NOT COALESCE(p.require_partition_filter, FALSE)) THEN 'APPEND'
                         ELSE 'OVERWRITE' END) AS load_type,
                 COALESCE(u.interval, 'AUTO') AS interval,
-                p.tbl_key_cols AS primary_keys,
+
+                CASE WHEN (p.object_type='BASE_TABLE') THEN p.tbl_key_cols 
+                    ELSE k.user_key_cols END AS primary_keys,
+
                 COALESCE(CAST(u.partition_enabled AS BOOLEAN), p.is_partitioned, FALSE) AS is_partitioned,
                 COALESCE(u.partition_column, p.partition_col, NULL) AS partition_column,
                 COALESCE(u.partition_type, p.partitioning_type, NULL) AS partition_type,
@@ -689,10 +692,10 @@ class FabricMetastore(ContextAwareBase):
                 NULL as last_updated_dt
             FROM bq_objects p
             LEFT JOIN user_config_tables u ON 
-                p.table_catalog = u.project_id AND
-                p.table_schema = u.dataset AND
-                p.table_name = u.table_name AND
-                p.object_type = u.object_type
+                p.table_catalog = u.project_id AND p.table_schema = u.dataset AND
+                p.table_name = u.table_name AND p.object_type = u.object_type
+            LEFT JOIN user_config_keys k ON
+                k.project_id=p.table_catalog AND k.dataset=p.table_schema AND k.table_name=p.table_name
             WHERE CASE WHEN (p.load_all=TRUE) THEN TRUE ELSE
                 CASE WHEN (u.table_name IS NULL) THEN FALSE ELSE TRUE END END = TRUE       
                 AND p.type_enabled = TRUE  
@@ -1147,4 +1150,4 @@ class FabricMetastore(ContextAwareBase):
     def create_proxy_views(cls):
         cls.create_userconfig_tables_proxy_view()        
         cls.create_userconfig_tables_cols_proxy_view()
-        cls.create_autodetect_view()
+        cls.create_autodetect_view()    
