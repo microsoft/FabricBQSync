@@ -35,6 +35,17 @@ class TokenProvider:
             self.tokens[scope] = self.credential_provider.getToken(scope)
 
         return self.tokens[scope]
+    
+    def get_secret(self, key_vault:str, key:str) -> str:
+        """
+        Returns a secret from the given key vault.
+        Args:
+            key_vault (str): The key vault.
+            key (str): The key.
+        Returns:
+            str: The secret.
+        """
+        return self.credential_provider.getSecret(key_vault, key)
 
 class GCPAuth:
     @classmethod

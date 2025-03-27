@@ -15,7 +15,7 @@ from FabricSync.BQ.BigQueryAPI import BigQueryClient
 from FabricSync.BQ.Model.Config import ConfigDataset
 from FabricSync.BQ.Model.Core import BQQueryModel
 from FabricSync.BQ.Exceptions import (
-    SyncConfigurationError, BQConnectorError
+    SyncConfigurationError, BQConnectorError, SyncKeyVaultError
 )
    
 class ConfigBase(ContextAwareBase):
@@ -104,6 +104,7 @@ class ConfigBase(ContextAwareBase):
 
         if query.Predicate:
             q = self.__build_bq_query(query)
+
 
         df = self.Context.read.format("bigquery").options(**cfg).load(q)
 
@@ -196,10 +197,33 @@ class SyncBase(ContextAwareBase):
             - The loaded configuration is stored in self.UserConfig.
             - This method relies on helper functions for credential loading and session configuration.
         """
-        self.UserConfig = self.__load_user_config_from_json(config_path)            
-        gcp_credential = GCPAuth.load_gcp_credential(self.UserConfig)
+        self.UserConfig = self.__load_user_config_from_json(config_path)
+
+        if not self.UserConfig.GCP.GCPCredential.CredentialSecretKey:
+            gcp_credential = GCPAuth.load_gcp_credential(self.UserConfig)
+        else:
+            gcp_credential = self.__load_credentials_from_key_vault(
+                self.UserConfig.GCP.GCPCredential.CredentialSecretKeyVault,
+                self.UserConfig.GCP.GCPCredential.CredentialSecretKey)
+
         SyncUtil.configure_context(self.UserConfig, gcp_credential, config_path, 
                                     self.TokenProvider.get_token(TokenProvider.FABRIC_TOKEN_SCOPE))
+
+    def __load_credentials_from_key_vault(self, key_vault:str, key:str) -> str:
+        """
+        Loads the GCP credentials from the specified key vault.
+        Args:
+            key_vault (str): The key vault.
+            key (str): The key.
+        Returns:
+            str: The GCP credentials from Azure Key Vault
+        Raises:
+            SyncKeyVaultError: If the credentials cannot be loaded from the key vault.
+        """
+        try:
+            return self.TokenProvider.get_secret(key_vault, key)
+        except Exception as e:
+            raise SyncKeyVaultError(e)
 
     def __load_user_config_from_json(self, config_path:str) -> ConfigDataset:
         """

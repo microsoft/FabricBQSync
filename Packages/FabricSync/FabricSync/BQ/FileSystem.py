@@ -321,6 +321,8 @@ class OpenMirrorLandingZone(OneLakeFileSystem):
     _lz_path = "Files/LandingZone/"
     _lz_table_schema_format = "{}.schema"
 
+    SCRATCH_PATH = "_scratch"
+
     def __init__(self, workspace_id:str, lakehouse_id:str, table_schema:str, table:str) -> None:
         """
         Initializes a new instance of the OpenMirrorLandingZone class.
@@ -495,32 +497,33 @@ class OpenMirrorLandingZone(OneLakeFileSystem):
         Raises:
             Exception: If any files cannot be deleted.
         """
-        self.delete("_SUCCESS")
-        
-        for f in  [x.name for x in self.glob(f"*.snappy.parquet")]:
-            result = self.delete(f)
+        self.delete(f"{self.SCRATCH_PATH}/", True)
+        #self.delete("_SUCCESS")
+        #
+        #for f in  [x.name for x in self.glob(f"*.snappy.parquet")]:
+        #    result = self.delete(f)
+        #
+        #    if not result:
+        #        raise Exception(f"Failed to delete {LakehouseCatalog.resolve_table_name(self._table_schema, self._table)} LZ stage file {f}")
 
-            if not result:
-                raise Exception(f"Failed to delete {LakehouseCatalog.resolve_table_name(self._table_schema, self._table)} LZ stage file {f}")
-
-    def cleanup_lz(self)-> None:
-        """
-        Cleans up files in the OpenMirror landing zone.
-        Raises:
-            Exception: If any files cannot be deleted.
-        """
-        files = { 
-            x.name: int(Path(x.name).with_suffix('').stem) 
-                for x in self.glob(f"*.parquet") 
-                if not x.name.endswith(".snappy.parquet") }
-
-        max_key = b.max(files, key=files.get)
-
-        for f in [f for f in files if f != max_key]:
-            result = self.delete(f)
-
-            if not result:
-                raise Exception(f"Failed to delete {LakehouseCatalog.resolve_table_name(self._table_schema, self._table)} LZ stage file {f}")
+    #def cleanup_lz(self)-> None:
+    #    """
+    #    Cleans up files in the OpenMirror landing zone.
+    #    Raises:
+    #        Exception: If any files cannot be deleted.
+    #    """
+    #    files = { 
+    #        x.name: int(Path(x.name).with_suffix('').stem) 
+    #            for x in self.glob(f"*.parquet") 
+    #            if not x.name.endswith(".snappy.parquet") }
+    #
+    #    max_key = b.max(files, key=files.get)
+    #
+    #    for f in [f for f in files if f != max_key]:
+    #        result = self.delete(f)
+    #
+    #        if not result:
+    #            raise Exception(f"Failed to delete {LakehouseCatalog.resolve_table_name(self._table_schema, self._table)} LZ stage file {f}")
     
     def __format_lz_filename(self, idx:int) -> str:
         """
@@ -561,7 +564,7 @@ class OpenMirrorLandingZone(OneLakeFileSystem):
             Exception: If the specified mirror index is inconsistent with the current state.
         """
         #Delete Spark _SUCCESS marker file
-        self.delete("_SUCCESS")
+        #self.delete(f"{self.SCRATCH_PATH}/_SUCCESS")
 
         current_index = self.get_last_file_index()
 
@@ -570,18 +573,18 @@ class OpenMirrorLandingZone(OneLakeFileSystem):
             raise Exception("Specified mirror index is inconsistent with current state: "+
                 f"(Specified: {mirror_index} - Current: {(current_index + 1)})")
 
-        files = sorted([x.name for x in self.glob(f"*.parquet") 
-            if x.name.endswith(".snappy.parquet")
-            ])
+        files = sorted([x.name for x in self.glob(f"{self.SCRATCH_PATH}/*.snappy.parquet") ])
 
         for f in files:
             #Rename spark output files to LZ naming standard
             stage_file = self.__format_lz_filename(mirror_index)
-            result = self.rename(f, stage_file)
+            result = self.rename(f"{self.SCRATCH_PATH}/{f}", stage_file)
 
             if not result:
                 raise Exception(f"Failed to stage {self._table} LZ stage file {f}")
 
             mirror_index += 1
         
+        self.cleanup_staged_lz()
+
         return mirror_index

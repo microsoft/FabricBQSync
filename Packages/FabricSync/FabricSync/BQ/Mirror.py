@@ -213,7 +213,7 @@ class OpenMirror(ContextAwareBase):
             cls.__log_formatted(schedule, f"Reducing partitions from {num_partitions} to {partitions}")
             df = df.repartition(partitions)
 
-        df.write.mode("append").format("parquet").save(lz._get_onelake_path(""))
+        df.write.mode("overwrite").format("parquet").save(f"{lz._get_onelake_path(lz.SCRATCH_PATH)}/")
 
         return df
     

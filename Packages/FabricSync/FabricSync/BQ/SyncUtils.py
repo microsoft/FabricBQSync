@@ -650,7 +650,8 @@ class SyncUtil(ContextAwareBase):
         """
         rdd = cls.Context.sparkContext.parallelize([Row( 
             schedule_id=schedule.ScheduleId, 
-            sync_id=schedule.SyncId, 
+            sync_id=schedule.SyncId,
+            table_id=schedule.TableId,
             project_id=schedule.ProjectId, 
             dataset=schedule.Dataset, 
             table_name=schedule.TableName, 
