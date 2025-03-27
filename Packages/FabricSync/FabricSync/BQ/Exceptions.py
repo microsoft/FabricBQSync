@@ -12,7 +12,7 @@ class SyncBaseError(Exception):
             data (SyncBaseModel): The data.
         """
         super().__init__()
-        self.title = "Fabric Sync Base Error"
+        self.title = "BQ Sync Base Error"
         self.data = data
         self.msg = msg
     
@@ -34,6 +34,17 @@ class SyncInstallError(SyncBaseError):
         """
         super().__init__(msg=msg, data=data)
         self.title = "Fabric Sync Installer Error" 
+
+class SyncKeyVaultError(SyncBaseError):
+    def __init__(self, msg:str = None, data:BaseModel = None) -> None:
+        """
+        Initializes a new instance of the SyncKeyVaultError class.
+        Args:
+            msg (str): The message.
+            data (SyncBaseModel): The data.
+        """
+        super().__init__(msg=msg, data=data)
+        self.title = "Fabric Sync Key Vault Error" 
 
 class SyncConfigurationError(SyncBaseError):
     def __init__(self, msg:str = None, data:BaseModel = None) -> None:

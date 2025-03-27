@@ -162,6 +162,8 @@ class ConfigGCPCredential(SyncBaseModel):
     CredentialPath:Optional[str] = Field(alias="credential_path", default=None)
     AccessToken:Optional[str] = Field(alias="access_token", default=None)
     Credential:Optional[str] = Field(alias="credential", default=None)
+    CredentialSecretKeyVault:Optional[str] = Field(alias="credential_secret_key_vault", default=None)
+    CredentialSecretKey:Optional[str] = Field(alias="credential_secret_key", default=None)
 
 class ConfigGCPAPI(SyncBaseModel):
     UseStandardAPI:Optional[bool] = Field(alias="use_standard_api", default=False)
@@ -206,19 +208,10 @@ class MappedColumn(SyncBaseModel):
 
     @property
     def IsTypeConversion(self) -> bool:
-        if not self.Source or not self.Destination:
-            return False
-        
-        if not self.Source.Type or not self.Destination.Type:
-            return False
-        
         return self.Source.Type != self.Destination.Type
     
     @property
     def IsRename(self) -> bool:
-        if not self.Source or not self.Destination:
-            return False
-        
         return self.Source.Name != self.Destination.Name
 
 class ConfigBQTableDefault (SyncBaseModel):

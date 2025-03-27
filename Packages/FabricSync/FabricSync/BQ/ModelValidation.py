@@ -412,7 +412,10 @@ class UserConfigurationValidation:
         """
         errors = []
 
-        errors.append(cls.__at_least_one_attr(credentials, ["credential", "credential_path"]))
+        errors.append(cls.__at_least_one_attr(credentials, ["credential", "credential_path", "credential_secret_key"]))
+
+        if not cls.__is_null_or_empty(credentials, "credential_secret_key"):
+            errors.append(cls.__required_field(credentials, "credential_secret_key_vault"))
 
         return [f"gcp_credentials.{e}" for e in errors if e]
 
