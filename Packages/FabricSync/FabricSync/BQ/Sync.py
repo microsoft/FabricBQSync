@@ -121,8 +121,38 @@ class BQSync(SyncBase):
         """
         self.Logger.sync_status(f"Upgrading Fabric Sync metastore to v{str(Session.CurrentVersion)}...")
         LakehouseCatalog.upgrade_metastore(self.UserConfig.Fabric.get_metadata_lakehouse())
+        self.__apply_manual_updates()
         self.__validate_user_config(config_path)
-        
+
+    def __apply_manual_updates(self) -> None:
+        self.Context.sql(f"""
+            WITH tbls AS (
+                SELECT table_id, project_id, dataset, table_name 
+                FROM sync_configuration
+                WHERE sync_id='{self.UserConfig.ID}'
+            )
+
+            MERGE INTO sync_schedule s
+            USING tbls t ON s.project_id=t.project_id AND s.dataset=t.dataset AND s.table_name=t.table_name
+            WHEN MATCHED AND s.table_id IS NULL THEN
+                UPDATE SET
+                    s.table_id=t.table_id
+            """)
+
+        self.Context.sql(f"""
+            WITH tbls AS (
+                SELECT table_id, project_id, dataset, table_name 
+                FROM sync_configuration
+                WHERE sync_id='{self.UserConfig.ID}'
+            )
+
+            MERGE INTO sync_schedule_telemetry s
+            USING tbls t ON s.project_id=t.project_id AND s.dataset=t.dataset AND s.table_name=t.table_name
+            WHEN MATCHED AND s.table_id IS NULL THEN
+                UPDATE SET
+                    s.table_id=t.table_id
+            """)
+
     def __requires_update(self) -> bool:
         """
         Determines if the Fabric Sync runtime requires an update.

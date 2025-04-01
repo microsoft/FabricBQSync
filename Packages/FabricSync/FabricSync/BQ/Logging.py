@@ -6,6 +6,7 @@ import functools
 import asyncio
 import threading
 import os
+import sys
 from pyspark.sql import SparkSession
 
 from FabricSync.BQ.Enum import (
@@ -47,6 +48,10 @@ class SyncLogger:
         handler.setLevel(LOG_LEVEL)
 
         self.__logger.addHandler(SyncLogHandler(SYNC_LOG_HANDLER_NAME, handler))
+
+        stdout_handler = logging.StreamHandler(sys.stdout)
+        stdout_handler.setLevel(LOG_LEVEL)
+        self.__logger.addHandler(stdout_handler)
 
         self.__logger.setLevel(LOG_LEVEL)        
 

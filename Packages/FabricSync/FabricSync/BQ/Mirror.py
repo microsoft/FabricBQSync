@@ -151,9 +151,12 @@ class OpenMirror(ContextAwareBase):
 
         lz = cls.__get_lz(schedule)
 
-        if schedule.InitialLoad:
-            cls.__log_formatted(schedule, f"Initializing Mirrored Table")
-            lz.generate_metadata_file(schedule.Keys)
+        cls.__log_formatted(schedule, f"Writing Mirror Metadata File")
+        lz.generate_metadata_file(schedule.Keys)
+        
+        #if schedule.InitialLoad:
+        #    cls.__log_formatted(schedule, f"Initializing Mirrored Table")
+        #    lz.generate_metadata_file(schedule.Keys)
 
         cls.__log_formatted(schedule, f"Processing Spark staging files - index: {schedule.MirrorFileIndex}")
         next_index = lz.stage_spark_output(schedule.MirrorFileIndex)
