@@ -486,6 +486,13 @@ class OpenMirrorLandingZone(OneLakeFileSystem):
                 if not x.name.endswith(".snappy.parquet")
             ]
 
+        processed_files = [
+            int(Path(x.name).with_suffix('').stem) for x in self.glob(f"_ProcessedFiles/*.parquet") 
+                if not x.name.endswith(".snappy.parquet")
+            ]
+
+        files = files + processed_files
+        
         file_index = b.max(files) if files else 0        
         self.Logger.debug(f"Landing Zone Operation - MIRROR INDEX - " +
                           f"{LakehouseCatalog.resolve_table_name(self._table_schema, self._table)} - {file_index}")
