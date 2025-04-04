@@ -1,3 +1,5 @@
+from packaging import version as pv
+
 from FabricSync.BQ.SyncCore import SyncBase
 from FabricSync.BQ.Auth import (
     Credentials, TokenProvider
@@ -125,33 +127,34 @@ class BQSync(SyncBase):
         self.__validate_user_config(config_path)
 
     def __apply_manual_updates(self) -> None:
-        self.Context.sql(f"""
-            WITH tbls AS (
-                SELECT table_id, project_id, dataset, table_name 
-                FROM sync_configuration
-                WHERE sync_id='{self.UserConfig.ID}'
-            )
+        if self.Version < pv.parse("2.1.15"):
+            self.Context.sql(f"""
+                WITH tbls AS (
+                    SELECT table_id, project_id, dataset, table_name 
+                    FROM sync_configuration
+                    WHERE sync_id='{self.UserConfig.ID}'
+                )
 
-            MERGE INTO sync_schedule s
-            USING tbls t ON s.project_id=t.project_id AND s.dataset=t.dataset AND s.table_name=t.table_name
-            WHEN MATCHED AND s.table_id IS NULL THEN
-                UPDATE SET
-                    s.table_id=t.table_id
-            """)
+                MERGE INTO sync_schedule s
+                USING tbls t ON s.project_id=t.project_id AND s.dataset=t.dataset AND s.table_name=t.table_name
+                WHEN MATCHED AND s.table_id IS NULL THEN
+                    UPDATE SET
+                        s.table_id=t.table_id
+                """)
 
-        self.Context.sql(f"""
-            WITH tbls AS (
-                SELECT table_id, project_id, dataset, table_name 
-                FROM sync_configuration
-                WHERE sync_id='{self.UserConfig.ID}'
-            )
+            self.Context.sql(f"""
+                WITH tbls AS (
+                    SELECT table_id, project_id, dataset, table_name 
+                    FROM sync_configuration
+                    WHERE sync_id='{self.UserConfig.ID}'
+                )
 
-            MERGE INTO sync_schedule_telemetry s
-            USING tbls t ON s.project_id=t.project_id AND s.dataset=t.dataset AND s.table_name=t.table_name
-            WHEN MATCHED AND s.table_id IS NULL THEN
-                UPDATE SET
-                    s.table_id=t.table_id
-            """)
+                MERGE INTO sync_schedule_telemetry s
+                USING tbls t ON s.project_id=t.project_id AND s.dataset=t.dataset AND s.table_name=t.table_name
+                WHEN MATCHED AND s.table_id IS NULL THEN
+                    UPDATE SET
+                        s.table_id=t.table_id
+                """)
 
     def __requires_update(self) -> bool:
         """
@@ -278,7 +281,18 @@ class BQSync(SyncBase):
             if self.UserConfig.Fabric.EnableSchemas and self.UserConfig.Fabric.TargetType==FabricDestinationType.LAKEHOUSE:
                 FabricMetastore.ensure_schemas(self.UserConfig.Fabric.WorkspaceName)
 
+            if self.UserConfig.Fabric.TargetType == FabricDestinationType.LAKEHOUSE:
+                Session.set_spark_conf("spark.sql.parquet.vorder.enabled", "true")
+                Session.set_spark_conf("spark.databricks.delta.optimizeWrite.enabled", "true")
+                Session.set_spark_conf("spark.databricks.delta.optimizeWrite.binSize", "1gb")
+                Session.set_spark_conf("spark.databricks.delta.collect.stats", "true")
+
             initial_loads = self.Loader.run_schedule(schedule_type)
+            
+            if self.UserConfig.Fabric.TargetType == FabricDestinationType.LAKEHOUSE:
+                Session.set_spark_conf("spark.sql.parquet.vorder.enabled", "false")
+                Session.set_spark_conf("spark.databricks.delta.optimizeWrite.enabled", "false")
+                Session.set_spark_conf("spark.databricks.delta.collect.stats", "false")
             
             if initial_loads:
                 self.Logger.sync_status("Committing Sync Table Configuration...", verbose=True)

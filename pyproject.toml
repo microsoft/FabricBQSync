@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools >= 61.0"]
+requires = ["setuptools >= 77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "FabricSync"
-version = "2.1.15"
+version = "2.1.16"
 dependencies = [
   "PyJWT>=2.6.0",
   "pydantic>=2.10.6",
@@ -19,12 +19,12 @@ authors = [
 ]
 description = "Fabric BigQuery Data Sync Utility"
 readme = "README.md"
-license = {text = "MIT License"}
+license = "MIT"
+license-files = ["LICENSE"]
 keywords = ["Fabric", "BigQuery", "Data Sync", "Mirror", "ETL"]
 classifiers = [
   "Development Status :: 4 - Beta",
   "Intended Audience :: Developers",
-  "License :: OSI Approved :: MIT License",
   "Programming Language :: Python",
   "Programming Language :: Python :: 3.8",
   "Programming Language :: Python :: 3.9",
