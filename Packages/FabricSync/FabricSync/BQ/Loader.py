@@ -576,6 +576,12 @@ class BQScheduleLoader(ConfigBase):
             schedule.SummaryLoadType = schedule.get_summary_load_type()
             self.__show_sync_status(schedule)
 
+            #Drop Mirrored Table if OVERWRITE
+            if schedule.IsMirrored and not schedule.InitialLoad and schedule.Load_Type == SyncLoadType.OVERWRITE:
+                self.Logger.sync_status(f"Overwriting current mirrored table: {schedule.LakehouseTableName}...", verbose=True)
+                OpenMirror.drop_mirrored_table(schedule)
+                schedule.MirrorFileIndex = 1
+                
             #Get BQ table using sync config
             try:
                 schedule, df_bq, observation = self.__get_bq_table(schedule)
