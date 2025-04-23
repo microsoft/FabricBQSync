@@ -10,7 +10,7 @@ from FabricSync.BQ.APIClient import FabricAPI
 from FabricSync.BQ.Logging import Telemetry
 
 from FabricSync.BQ.Enum import (
-    SyncLoadStrategy, FabricCDCType
+    SyncLoadStrategy, FabricCDCType, SyncLoadType
 )
 
 class OpenMirror(ContextAwareBase):
@@ -196,7 +196,7 @@ class OpenMirror(ContextAwareBase):
                     when(col("BQ_CDC_CHANGE_TYPE") == "UPDATE", lit(FabricCDCType.UPDATE))
                         .when(col("BQ_CDC_CHANGE_TYPE") == "DELETE", lit(FabricCDCType.DELETE))
                         .otherwise(lit(FabricCDCType.INSERT)))
-            elif schedule.Load_Strategy != SyncLoadStrategy.FULL:
+            elif schedule.Load_Strategy != SyncLoadStrategy.FULL or schedule.Load_Type == SyncLoadType.MERGE:
                 cls.__log_formatted(schedule, f"Row Marker - {FabricCDCType.UPSERT}")
                 df = df.withColumn(SyncConstants.MIRROR_ROW_MARKER, lit(FabricCDCType.UPSERT))
             else:
