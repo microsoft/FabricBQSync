@@ -33,6 +33,7 @@ class SparkSessionConfig(str, BaseEnum):
         SCHEMA_ENABLED (str): The schema enabled.
         FABRIC_API_TOKEN (str): The Fabric API token.
         USER_CONFIG_PATH (str): The user config path.
+        SYNC_VIEW_STATE (str): Current sync_view_state.
     """
     APPLICATION_ID = "application_id"
     VERSION = "version"
@@ -267,10 +268,12 @@ class SyncLoadStrategy(str, BaseEnum):
     """
     Represents the possible load strategies for synchronization tasks.
     Attributes:
-        OVERWRITE (str): Overwrites existing data with new data.
-        APPEND (str): Appends new data to existing data.
-        MERGE (str): Merges new data with existing data.
-        OPEN_MIRROR (str): Opens a mirror of the source data.
+        FULL (str): Loads all data, replacing existing data.
+        PARTITION (str): Loads data into specific partitions, replacing existing partition data.
+        WATERMARK (str): Loads data based on a watermark, typically used for incremental loads.
+        TIME_INGESTION (str): Loads data based on a time ingestion strategy, often used for streaming data.
+        CDC_APPEND (str): Appends change data capture (CDC) data to existing data.
+        CDC (str): Loads change data capture (CDC) data, replacing existing data.
     """
     FULL = "FULL"
     PARTITION = "PARTITION"
@@ -283,9 +286,9 @@ class BQPartitionType(str, BaseEnum):
     """
     Represents the possible partition types in BigQuery.
     Attributes:
-        DAY (str): Represents a daily partition.
-        MONTH (str): Represents a monthly partition.
-        YEAR (str): Represents a yearly partition.
+        TIME (str): Represents a time-based partition.
+        RANGE (str): Represents a range-based partition.
+        TIME_INGESTION (str): Represents a time ingestion partition.
     """
     TIME = "TIME"
     RANGE = "RANGE"
@@ -336,7 +339,6 @@ class SyncLoadType(str, BaseEnum):
         OVERWRITE (str): Overwrites existing data with new data.
         APPEND (str): Appends new data to existing data.
         MERGE (str): Merges new data with existing data.
-        OPEN_MIRROR (str): Opens a mirror of the source data.
     """
     OVERWRITE = "OVERWRITE"
     APPEND = "APPEND"
@@ -378,11 +380,12 @@ class MaintenanceInterval(str, BaseEnum):
 
 class CalendarInterval(str, BaseEnum):
     """
-    Represents the possible calendar intervals for scheduled tasks.
+    Represents the possible calendar intervals for scheduling tasks.
     Attributes:
-        DAILY (str): Indicates that the task should run daily.
-        WEEKLY (str): Indicates that the task should run weekly.
-        MONTHLY (str): Indicates that the task should run monthly.
+        YEAR (str): Indicates that the task should run yearly.
+        MONTH (str): Indicates that the task should run monthly.
+        DAY (str): Indicates that the task should run daily.
+        HOUR (str): Indicates that the task should run hourly.
     """
     YEAR = "YEAR"
     MONTH = "MONTH"

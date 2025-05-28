@@ -397,6 +397,9 @@ class UserConfigurationValidation:
         errors.append(cls.__check_min_list_length(gcp, "projects", 1))
         errors.extend(cls._validate_gcp_projects_config(gcp.Projects))
         
+        if gcp.API.EnableBigQueryExport:
+            errors.extend(cls._validate_gcp_storage_config(gcp.GCPStorage))
+
         return [f"gcp.{e}" for e in errors if e]
 
     @classmethod
@@ -420,6 +423,23 @@ class UserConfigurationValidation:
         return [f"gcp_credentials.{e}" for e in errors if e]
 
     @classmethod
+    def _validate_gcp_storage_config(cls, gcp_storage:ConfigGCPStorage) -> List[str]:
+        """
+        Validates the GCP storage configuration.
+        Args:
+            gcp_storage (ConfigGCPStorage): The configuration object for GCP storage.
+        Returns:
+            List[str]: A list of error messages indicating any missing or invalid fields.
+        """
+
+        errors = []
+
+        errors.append(cls.__required_field(gcp_storage, "bucket_uri"))
+        errors.append(cls.__required_field(gcp_storage, "enable_cleanup"))
+
+        return [f"gcp_storage.{e}" for e in errors if e]
+
+    @classmethod
     def _validate_gcp_api_config(cls, api:ConfigGCPAPI) -> List[str]:
         """
         Validates the GCP API configuration by checking required fields and verifying dependent fields.
@@ -435,6 +455,7 @@ class UserConfigurationValidation:
 
         errors.append(cls.__required_field(api, "use_standard_api"))
         errors.append(cls.__required_field(api, "use_cdc"))
+        errors.append(cls.__required_field(api, "enable_bigquery_export"))
         errors.extend(cls.__dependents(api, ["materialization_project_id", "materialization_dataset"], 
                 "materialization_project_id or materialization_dataset"))
         

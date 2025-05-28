@@ -14,7 +14,7 @@ from FabricSync.BQ.Core import ContextAwareBase
 
 class FabricMetastoreSchema():
     data_type_map=StructType([StructField('data_type',StringType(),True),StructField('partition_type',StringType(),True),StructField('is_watermark',StringType(),True)])
-    sync_configuration=StructType([StructField('sync_id',StringType(),True),StructField('table_id',StringType(),True),StructField('project_id',StringType(),True),StructField('dataset',StringType(),True),StructField('table_name',StringType(),True),StructField('object_type',StringType(),True),StructField('enabled',BooleanType(),True),StructField('workspace_id',StringType(),True),StructField('workspace_name',StringType(),True),StructField('lakehouse_type',StringType(),True),StructField('lakehouse_id',StringType(),True),StructField('lakehouse',StringType(),True),StructField('lakehouse_schema',StringType(),True),StructField('lakehouse_table_name',StringType(),True),StructField('lakehouse_partition',StringType(),True),StructField('source_query',StringType(),True),StructField('source_predicate',StringType(),True),StructField('priority',IntegerType(),True),StructField('load_strategy',StringType(),True),StructField('load_type',StringType(),True),StructField('interval',StringType(),True),StructField('primary_keys',ArrayType(StringType(),True),True),StructField('is_partitioned',BooleanType(),True),StructField('partition_column',StringType(),True),StructField('partition_type',StringType(),True),StructField('partition_grain',StringType(),True),StructField('partition_data_type',StringType(),True),StructField('partition_range',StringType(),True),StructField('watermark_column',StringType(),True),StructField('autodetect',BooleanType(),True),StructField('use_lakehouse_schema',BooleanType(),True),StructField('enforce_expiration',BooleanType(),True),StructField('allow_schema_evolution',BooleanType(),True),StructField('table_maintenance_enabled',BooleanType(),True),StructField('table_maintenance_interval',StringType(),True),StructField('flatten_table',BooleanType(),True),StructField('flatten_inplace',BooleanType(),True),StructField('explode_arrays',BooleanType(),True),StructField('column_map',StringType(),True),StructField('config_override',BooleanType(),True),StructField('sync_state',StringType(),True),StructField('config_path',StringType(),True),StructField('created_dt',TimestampType(),True),StructField('last_updated_dt',TimestampType(),True)])
+    sync_configuration=StructType([StructField('sync_id',StringType(),True),StructField('table_id',StringType(),True),StructField('project_id',StringType(),True),StructField('dataset',StringType(),True),StructField('table_name',StringType(),True),StructField('object_type',StringType(),True),StructField('enabled',BooleanType(),True),StructField('workspace_id',StringType(),True),StructField('workspace_name',StringType(),True),StructField('lakehouse_type',StringType(),True),StructField('lakehouse_id',StringType(),True),StructField('lakehouse',StringType(),True),StructField('lakehouse_schema',StringType(),True),StructField('lakehouse_table_name',StringType(),True),StructField('lakehouse_partition',StringType(),True),StructField('source_query',StringType(),True),StructField('source_predicate',StringType(),True),StructField('priority',IntegerType(),True),StructField('load_strategy',StringType(),True),StructField('load_type',StringType(),True),StructField('interval',StringType(),True),StructField('primary_keys',ArrayType(StringType(),True),True),StructField('is_partitioned',BooleanType(),True),StructField('partition_column',StringType(),True),StructField('partition_type',StringType(),True),StructField('partition_grain',StringType(),True),StructField('partition_data_type',StringType(),True),StructField('partition_range',StringType(),True),StructField('watermark_column',StringType(),True),StructField('autodetect',BooleanType(),True),StructField('use_lakehouse_schema',BooleanType(),True),StructField('enforce_expiration',BooleanType(),True),StructField('allow_schema_evolution',BooleanType(),True),StructField('table_maintenance_enabled',BooleanType(),True),StructField('table_maintenance_interval',StringType(),True),StructField('flatten_table',BooleanType(),True),StructField('flatten_inplace',BooleanType(),True),StructField('explode_arrays',BooleanType(),True),StructField('use_bigquery_export',BooleanType(),True),StructField('column_map',StringType(),True),StructField('config_override',BooleanType(),True),StructField('sync_state',StringType(),True),StructField('config_path',StringType(),True),StructField('created_dt',TimestampType(),True),StructField('last_updated_dt',TimestampType(),True)])
     sync_data_expiration=StructType([StructField('sync_id',StringType(),True),StructField('table_catalog',StringType(),True),StructField('table_schema',StringType(),True),StructField('table_name',StringType(),True),StructField('partition_id',StringType(),True),StructField('expiration',TimestampType(),True)])
     sync_maintenance=StructType([StructField('sync_id',StringType(),True),StructField('table_id',StringType(),True),StructField('project_id',StringType(),True),StructField('dataset',StringType(),True),StructField('table_name',StringType(),True),StructField('partition_id',StringType(),True),StructField('lakehouse',StringType(),True),StructField('lakehouse_schema',StringType(),True),StructField('lakehouse_table_name',StringType(),True),StructField('lakehouse_partition',StringType(),True),StructField('row_count',LongType(),True),StructField('table_partition_size',LongType(),True),StructField('last_maintenance_type',StringType(),True),StructField('last_maintenance_interval',StringType(),True),StructField('last_maintenance',TimestampType(),True),StructField('last_optimize',TimestampType(),True),StructField('last_vacuum',TimestampType(),True),StructField('last_maintenance_status',StringType(),True),StructField('created_dt',TimestampType(),True),StructField('last_updated_dt',TimestampType(),True)])
     sync_schedule=StructType([StructField('group_schedule_id',StringType(),True),StructField('schedule_id',StringType(),True),StructField('sync_id',StringType(),True),StructField('table_id',StringType(),True),StructField('project_id',StringType(),True),StructField('dataset',StringType(),True),StructField('table_name',StringType(),True),StructField('schedule_type',StringType(),True),StructField('scheduled',TimestampType(),True),StructField('status',StringType(),True),StructField('started',TimestampType(),True),StructField('completed',TimestampType(),True),StructField('completed_activities',IntegerType(),True),StructField('failed_activities',IntegerType(),True),StructField('max_watermark',StringType(),True),StructField('mirror_file_index',LongType(),True),StructField('priority',IntegerType(),True)])
@@ -22,6 +22,11 @@ class FabricMetastoreSchema():
 
 class Metastore():
     def Retry(func_=None,max_retries:int=3,backoff_factor:int=2):
+        """
+        Decorator to retry a function in case of ConcurrentModificationException
+        This decorator will retry the function up to max_retries times with an exponential backoff
+        The backoff factor determines the wait time between retries, which is calculated as backoff_factor ** attempt
+        """
         def _decorator(func):
             @functools.wraps(func)
             def wrapper(*args,**kwargs):
@@ -55,6 +60,11 @@ class FabricMetastore(ContextAwareBase):
     @classmethod
     @Metastore.Retry()
     def build_schedule(cls,schedule_type:SyncScheduleType) -> None:
+        """
+        Builds the sync schedule for the given schedule type
+        This method creates a new schedule for the sync schedule load group
+        by querying the sync_configuration table and determining which tables need to be scheduled
+        """
         sql=f"""
         WITH last_scheduled_load AS (
             SELECT
@@ -120,7 +130,11 @@ class FabricMetastore(ContextAwareBase):
     @Metastore.Retry()
     def save_schedule_telemetry(cls,rdd) -> None:
         """
-        Write status and telemetry from sync schedule to Sync Schedule Telemetry Delta table
+        Saves the telemetry data for the sync schedule to the sync_schedule_telemetry table
+        This method takes an RDD containing the telemetry data and writes it to the sync_schedule_telemetry table
+        The telemetry data includes information about the sync schedule, such as the sync_id, table_id, project_id, dataset, table_name,
+        partition_id, status, started, completed, src_row_count, inserted_row_count, updated_row_count, delta_version,
+        spark_application_id, max_watermark, summary_load, source_query, source_predicate, and mirror_file_index
         """
         df=cls.Context.createDataFrame(rdd,FabricMetastoreSchema.sync_schedule_telemetry)
         df.write.mode("APPEND").saveAsTable("sync_schedule_telemetry")
@@ -128,7 +142,11 @@ class FabricMetastore(ContextAwareBase):
     @classmethod 
     def get_schedule(cls,schedule_type:SyncScheduleType) -> DataFrame:
         """
-        Gets the schedule activities that need to be run based on the configuration and metadata
+        Retrieves the sync schedule for the given schedule type
+        This method queries the sync_schedule table to get the schedule for the given schedule type
+        and returns a DataFrame containing the schedule information
+        This is used to get the schedule for the sync schedule load group
+        and to determine the tables that need to be processed for the given schedule type
         """
         sql=f"""
         WITH last_completed_schedule AS (
@@ -214,7 +232,9 @@ class FabricMetastore(ContextAwareBase):
             c.workspace_id,c.workspace_name,c.lakehouse_type,c.lakehouse_id,c.lakehouse,
             c.lakehouse_schema,c.lakehouse_table_name,c.lakehouse_partition,c.use_lakehouse_schema,
             c.enforce_expiration,c.allow_schema_evolution,c.table_maintenance_enabled,c.table_maintenance_interval,
-            c.flatten_table,c.flatten_inplace,c.explode_arrays,c.primary_keys,
+            c.flatten_table,c.flatten_inplace,
+            c.use_bigquery_export,
+            c.explode_arrays,c.primary_keys,
             p.partition_id,p.require_partition_filter,
             s.group_schedule_id,s.schedule_id,s.status AS sync_status,s.started,s.completed,s.mirror_file_index,
             h.max_watermark,h.last_schedule_dt,c.column_map,
@@ -250,7 +270,10 @@ class FabricMetastore(ContextAwareBase):
     @Metastore.Retry()
     def process_load_group_telemetry(cls,schedule_type:SyncScheduleType) -> None:
         """
-        When a load group is complete,summarizes the telemetry to close out the schedule
+        Processes the telemetry for the sync schedule load group and updates the sync_schedule table
+        This is done by aggregating the telemetry data for the sync schedule and updating the sync_schedule table
+        with the aggregated data
+        This is used to update the status of the sync schedule and to ensure that the telemetry data is up to date
         """
         sql=f"""
         WITH schedule_telemetry_last AS (
@@ -322,8 +345,15 @@ class FabricMetastore(ContextAwareBase):
     @Metastore.Retry()
     def commit_table_configuration(cls,schedule_type:SyncScheduleType) -> None:
         """
-        After an initial load,locks the table configuration so no changes can occur when reprocessing metadata
-        """
+        Commits the table configuration for the sync schedule to the sync_configuration table
+        This is done by updating the sync_state to 'COMMIT' for all tables that have been successfully processed
+        in the sync_schedule table for the given schedule type
+        This is used to mark the tables as ready for the next sync cycle
+        and to ensure that the configuration is applied to the tables in the metastore
+        
+        This is typically called after the sync schedule has been processed and the tables have been updated
+        and is used to finalize the configuration for the tables in the sync_configuration table
+        """ 
         sql=f"""
         WITH committed AS (
             SELECT s.sync_id,s.project_id,s.dataset,s.table_name,MAX(s.started) as started
@@ -367,6 +397,7 @@ class FabricMetastore(ContextAwareBase):
                 tbl.flatten_table AS flatten_table,
                 tbl.flatten_inplace AS flatten_inplace,
                 tbl.explode_arrays AS explode_arrays,
+                tbl.use_bigquery_export AS use_bigquery_export,
                 tbl.table_maintenance.enabled AS table_maintenance_enabled,
                 tbl.table_maintenance.interval AS table_maintenance_interval,
                 tbl.source_query,
@@ -399,8 +430,7 @@ class FabricMetastore(ContextAwareBase):
     @classmethod 
     def create_userconfig_tables_cols_proxy_view(cls) -> None:
         """
-        Explodes the User Config table primary keys into a temporary view
-        """
+        Explodes the User Config table keys into a temporary view"""
         sql="""
             CREATE OR REPLACE TEMPORARY VIEW user_config_table_keys
             AS
@@ -418,8 +448,13 @@ class FabricMetastore(ContextAwareBase):
     @classmethod 
     def create_autodetect_view(cls) -> None:
         """
-        Creates the autodetect temporary view that uses the BigQuery table metadata
-        to determine default sync configuration based on defined heuristics
+        Creates a temporary view that contains autodetected table metadata
+        and user configuration for tables in the metastore
+        This view is used to determine the metadata for tables that are not configured in the user config
+        but are present in the metastore
+        This view is used to populate the sync_configuration table
+        and to determine the metadata for tables that are not configured in the user config
+        but are present in the metastore
         """
         sql="""
         CREATE OR REPLACE TEMPORARY VIEW table_metadata_autodetect
@@ -517,7 +552,11 @@ class FabricMetastore(ContextAwareBase):
 
     @classmethod
     @Metastore.Retry()
-    def auto_detect_profiles(cls) -> None:        
+    def auto_detect_profiles(cls) -> None: 
+        """
+        Creates the autodetect view and user config tables proxy views
+        to allow for autodetection of table metadata and user configuration
+        """       
         sql=f"""
         WITH default_config AS (
             SELECT 
@@ -669,6 +708,7 @@ class FabricMetastore(ContextAwareBase):
                 COALESCE(CAST(u.flatten_table AS BOOLEAN),FALSE) AS flatten_table,
                 COALESCE(CAST(u.flatten_inplace AS BOOLEAN),TRUE) AS flatten_inplace,
                 COALESCE(CAST(u.explode_arrays AS BOOLEAN),FALSE) AS explode_arrays,
+                COALESCE(CAST(u.use_bigquery_export AS BOOLEAN),FALSE) AS use_bigquery_export,
                 COALESCE(u.column_map,NULL) AS column_map,
                 CASE WHEN u.table_name IS NULL THEN FALSE ELSE TRUE END AS config_override,
                 'INIT' AS sync_state,
@@ -711,6 +751,7 @@ class FabricMetastore(ContextAwareBase):
                 t.allow_schema_evolution=s.allow_schema_evolution,
                 t.table_maintenance_enabled=s.table_maintenance_enabled,
                 t.table_maintenance_interval=s.table_maintenance_interval,
+                t.use_bigquery_export=s.use_bigquery_export,
                 t.config_path=s.config_path,
                 t.last_updated_dt=CURRENT_TIMESTAMP()
         WHEN MATCHED AND t.sync_state='INIT' THEN
@@ -726,6 +767,15 @@ class FabricMetastore(ContextAwareBase):
 
     @classmethod         
     def ensure_schemas(cls,workspace_name:str) -> None:
+        """
+        Ensures that the lakehouse schemas defined in the sync configuration exist in the specified workspace.
+        This method retrieves the lakehouse and schema names from the `sync_configuration` table where the `use_lakehouse_schema` is set to TRUE and creates the schemas in the specified workspace if they do not already exist.
+        It is typically called after the initial load of metadata to ensure that all necessary schemas are created before any data synchronization occurs.
+        The method uses the `sync_id` to filter the configurations and only processes those that are enabled.
+        It constructs the schema names in the format `workspace_name.lakehouse.lakehouse_schema` and creates them if they do not exist.
+        This is used to ensure that the lakehouse schemas are ready for data synchronization and that the environment is correctly set up for the sync process.
+        """
+
         sql=f"""
             SELECT DISTINCT lakehouse,lakehouse_schema FROM sync_configuration
             WHERE enabled=TRUE AND use_lakehouse_schema=TRUE
@@ -739,6 +789,14 @@ class FabricMetastore(ContextAwareBase):
     @classmethod
     @Metastore.Retry()
     def sync_retention_config(cls) -> None:
+        """
+        Synchronizes the data expiration configuration for tables based on the partition expiration settings defined in the BigQuery metadata.
+        This method retrieves the partition expiration settings from the `information_schema_table_options` and `information_schema_partitions` tables, calculates the expiration date for each partition, and merges this information into the `sync_data_expiration` table. It ensures that the expiration settings are up-to-date and consistent with the defined retention policies.
+        The method also handles the case where a table has a global expiration timestamp set, which applies to all partitions of the table.
+        The expiration settings are used to manage data retention and ensure compliance with data governance requirements.
+        This method is typically called after the initial load of metadata to ensure that the expiration settings are correctly applied to the tables in the sync configuration.
+        It uses a Common Table Expression (CTE) to gather the necessary configuration details and then performs a MERGE operation to update the `sync_data_expiration` table accordingly.
+        """
         sql=f"""
         WITH cfg AS (
             SELECT table_catalog,table_schema,table_name,CAST(option_value AS FLOAT) AS expiration_days
@@ -797,6 +855,13 @@ class FabricMetastore(ContextAwareBase):
     
     @classmethod 
     def get_bq_retention_policy(cls) -> DataFrame:
+        """
+        Retrieves the BigQuery retention policy for tables that have an expiration set.
+        This method queries the `sync_data_expiration` table to find tables that have an expiration date set in the past, indicating that they need to be processed for data retention or deletion.
+        It joins with the `sync_configuration` table to get the necessary configuration details for each table, such as lakehouse, schema, and partition information.
+        The result includes the lakehouse, schema, table name, whether to use the lakehouse schema, partitioning details, and the expiration date for each table that requires action.
+        This is used to manage data retention policies and ensure compliance with data governance requirements.
+        """
         sql=f"""
             SELECT c.lakehouse,c.lakehouse_schema,c.lakehouse_table_name,c.use_lakehouse_schema,
                 c.is_partitioned,c.partition_column,c.partition_type,c.partition_grain,
@@ -813,6 +878,12 @@ class FabricMetastore(ContextAwareBase):
     @classmethod
     @Metastore.Retry()
     def update_maintenance_config(cls) -> None:
+        """
+        Updates the sync_configuration table with the maintenance configuration based on user settings and defaults.
+        This method merges the user-defined table maintenance settings with the default settings and the base configuration to ensure that all tables have the correct maintenance settings applied.
+        It uses a Common Table Expression (CTE) to gather the necessary configuration details and then performs a MERGE operation to update the sync_configuration table accordingly.
+        This is used to ensure that the table maintenance settings are consistent across the sync configuration and that any changes in user settings are reflected in the sync configuration.
+        """
         sql=f"""
             WITH tbl_config AS (
                 SELECT 
@@ -861,6 +932,11 @@ class FabricMetastore(ContextAwareBase):
     
     @classmethod 
     def create_maintenance_views(cls) -> None:
+        """
+        Creates a temporary view for maintenance scheduling based on the sync configuration and table partitions.
+        This view aggregates information about table partitions, their last maintenance dates, and the next scheduled maintenance dates.
+        The view is used to determine which tables require maintenance actions such as optimization and vacuuming.
+        """
         sql=f"""
         CREATE OR REPLACE TEMPORARY VIEW maintenance_snap
             AS
@@ -944,6 +1020,11 @@ class FabricMetastore(ContextAwareBase):
 
     @classmethod 
     def get_scheduled_maintenance_schedule(cls) -> DataFrame:
+        """
+        Retrieves the scheduled maintenance schedule for tables in the lakehouse.
+        This method constructs a SQL query that identifies tables that require maintenance based on their last modified time and last maintenance date.
+        Returns: DataFrame containing the maintenance schedule with details such as run optimization and vacuum flags, next maintenance date, and partition information.
+        """
         sql=f"""
             WITH scheduled AS (
                 SELECT 
@@ -974,6 +1055,12 @@ class FabricMetastore(ContextAwareBase):
 
     @classmethod 
     def get_inventory_based_maintenance_schedule(cls) -> DataFrame:
+        """
+        Retrieves the maintenance schedule based on the inventory of table partitions and files.
+        This method constructs a SQL query that aggregates partition and file information to determine
+        the maintenance requirements for each table partition in the lakehouse.
+        Returns: DataFrame containing the maintenance schedule with details such as rows changed ratio,
+        """
         sql=f"""
             WITH lh_partitions AS (
                     SELECT
@@ -1104,7 +1191,14 @@ class FabricMetastore(ContextAwareBase):
     @classmethod
     @Metastore.Retry()
     def update_maintenance_schedule(cls,schedules:List[MaintenanceSchedule]) -> None:
-        keys=['table_maintenance_interval','strategy','next_maintenance','run_optimize','run_vacuum']
+        """
+        Update the maintenance schedule in the metastore based on the provided schedules.
+        This method will merge the provided schedules into the `sync_maintenance` table, ensuring that the maintenance
+        information is up-to-date and reflects the current state of the system.
+        Parameters: List of MaintenanceSchedule objects containing the maintenance details to be updated.
+        Returns: None
+        """
+        #keys=['table_maintenance_interval','strategy','next_maintenance','run_optimize','run_vacuum']
         data=[]
 
         if schedules:
@@ -1134,6 +1228,11 @@ class FabricMetastore(ContextAwareBase):
 
     @classmethod 
     def create_proxy_views(cls):
+        """
+        Create proxy views for user configuration tables and columns, and autodetect view.
+        This method is called during the initialization of the metastore to ensure that the views are created
+        and available for use in the current session.
+        """
         cls.create_userconfig_tables_proxy_view()        
         cls.create_userconfig_tables_cols_proxy_view()
-        cls.create_autodetect_view()          
+        cls.create_autodetect_view()       
