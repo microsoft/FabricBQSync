@@ -426,11 +426,13 @@ class BigQueryAPI(str, BaseEnum):
     """
     Represents the possible BigQuery API endpoints.
     Attributes:
-        STORAGE (str): Represents the BigQuery Storage API.
-        STANDARD (str): Represents the BigQuery API.
+        STORAGE (str): Represents using the BigQuery Storage API for data sync.
+        STANDARD (str): Represents using the BigQuery API for data sync.
+        BUCKET (str): Represents using the BigQuery Export Jobs for data sync.
     """
     STANDARD = "STANDARD",
-    STORAGE = "STORAGE"
+    STORAGE = "STORAGE",
+    BUCKET = "BUCKET"
 
 class SyncConfigState(str, BaseEnum):
     """

@@ -5,7 +5,7 @@ from FabricSync.BQ.Model.Config import (
     ConfigDataset, ConfigLogging, ConfigMaintenance, ConfigAutodiscover, ConfigDiscoverObject,
     ConfigBQTable, ConfigTableColumn, ConfigLakehouseTarget, ConfigPartition,
     ConfigGCP, ConfigTableMaintenance, MappedColumn, ConfigFabric, ConfigGCPAPI,
-    ConfigGCPDataset, ConfigGCPProject, ConfigGCPCredential
+    ConfigGCPStorage, ConfigGCPDataset, ConfigGCPProject, ConfigGCPCredential
 )
 from FabricSync.BQ.Enum import (
     SyncLoadStrategy, SyncLoadType, FabricDestinationType, BQPartitionType
@@ -398,7 +398,7 @@ class UserConfigurationValidation:
         errors.extend(cls._validate_gcp_projects_config(gcp.Projects))
         
         if gcp.API.EnableBigQueryExport:
-            errors.extend(cls._validate_gcp_storage_config(gcp.GCPStorage))
+            errors.extend(cls._validate_gcp_storage_config(gcp.Storage))
 
         return [f"gcp.{e}" for e in errors if e]
 

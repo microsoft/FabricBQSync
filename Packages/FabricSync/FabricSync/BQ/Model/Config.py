@@ -468,7 +468,7 @@ class ConfigGCP(SyncBaseModel):
     API:Optional[ConfigGCPAPI] = Field(alias="api", default=ConfigGCPAPI())
     Projects:List[ConfigGCPProject] = Field(alias="projects", default=[ConfigGCPProject()])
     GCPCredential:ConfigGCPCredential = Field(alias="gcp_credentials", default=ConfigGCPCredential())
-    GCPStorage:ConfigGCPStorage = Field(alias="gcp_storage", default=ConfigGCPStorage())
+    Storage:ConfigGCPStorage = Field(alias="gcp_storage", default=ConfigGCPStorage())
 
     @property
     def DefaultProjectID(self) -> str:
