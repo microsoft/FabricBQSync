@@ -354,12 +354,14 @@ class SyncStatus(str, BaseEnum):
         FAILED (str): Indicates that the synchronization task has failed.
         EXPIRED (str): Indicates that the synchronization task has expired.
         SCHEDULED (str): Indicates that the synchronization task is scheduled to run.
+        NO_DATA (str): Indicates that the synchronization task ran but resulted in no data.
     """
     COMPLETE = "COMPLETE"
     SKIPPED = "SKIPPED"
     FAILED = "FAILED"
     EXPIRED = "EXPIRED"
     SCHEDULED = "SCHEDULED"
+    NO_DATA = "NO_DATA"
 
 class MaintenanceInterval(str, BaseEnum):
     """

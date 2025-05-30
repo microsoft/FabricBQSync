@@ -15,7 +15,8 @@ from datetime import (
 
 from FabricSync.BQ.Enum import (
     BQDataType, BQPartitionType, BigQueryObjectType, CalendarInterval, 
-    FabricDestinationType, SyncLoadStrategy, SyncLoadType, SyncStatus
+    FabricDestinationType, SyncLoadStrategy, SyncLoadType, SyncStatus,
+    BigQueryAPI
 )
 from FabricSync.BQ.Model.Config import (
     SyncBaseModel, MappedColumn
@@ -81,6 +82,7 @@ class SyncSchedule(SyncBaseModel):
         - FlattenInPlace: Indicates if flattening should be done in place.
         - ExplodeArrays: Indicates if arrays should be exploded.
         - UseBigQueryExport: Indicates if BigQuery export should be used.
+        - EnableBigQueryExport: Indicates if BigQuery export is enabled at the app level.
         - Keys: List of primary keys for the sync.
         - TotalRows: The total number of rows in the table.
         - TotalLogicalMb: The total logical size of the table in MB.
@@ -142,10 +144,9 @@ class SyncSchedule(SyncBaseModel):
     TableMaintenanceInterval:Optional[bool] = Field(alias="table_maintenance_inteval", default=False)
     FlattenTable:Optional[bool] = Field(alias="flatten_table", default=False)
     FlattenInPlace:Optional[bool] = Field(alias="flatten_inplace", default=False)
-    ExplodeArrays:Optional[bool] = Field(alias="explode_arrays", default=False)
-    
+    ExplodeArrays:Optional[bool] = Field(alias="explode_arrays", default=False)    
     UseBigQueryExport:Optional[bool] = Field(alias="use_bigquery_export", default=False)
-
+    EnableBigQueryExport:Optional[bool] = Field(alias="enable_bigquery_export", default=False)
     Keys:Optional[List[str]] = Field(alias="primary_keys", default=[])
     TotalRows:Optional[int] = Field(alias="total_rows", default=0)
     TotalLogicalMb:Optional[int] = Field(alias="total_logical_mb", default=0)
@@ -220,14 +221,13 @@ class SyncSchedule(SyncBaseModel):
     def get_summary_load_type(self) -> str:
         """
         Returns a summary load type string based on the sync schedule's properties.
-        If the sync is mirrored, it returns "MIRRORED - INITIAL FULL (OVERWRITE)" for initial loads or "MIRRORED - {Load_Strategy} ({Load_Type})" otherwise.
         """
         prefix = "MIRRORED" if self.IsMirrored else "LAKEHOUSE"
 
         if self.IsInitialLoad:
-            return f"{prefix} - INITIAL FULL (OVERWRITE)"
+            return f"{prefix} - INITIAL LOAD - {self.SyncAPI} API"
         else:
-            return f"{prefix} - {self.Load_Strategy} ({self.Load_Type})"
+            return f"{prefix} - {self.Load_Strategy} ({self.Load_Type}) - {self.SyncAPI} API"
     
     @property
     def Mode(self) -> str:
@@ -399,6 +399,13 @@ class SyncSchedule(SyncBaseModel):
             int: The load priority of the sync schedule.
         """
         return self.Priority + self.SizePriority
+
+    @property
+    def SyncAPI(self) -> BigQueryAPI:
+        if self.EnableBigQueryExport and self.UseBigQueryExport:
+            return BigQueryAPI.BUCKET
+        else:
+            return BigQueryAPI.STORAGE
 
     def UpdateRowCounts(self, src:int = 0, insert:int = 0, update:int = 0) -> None:
         """

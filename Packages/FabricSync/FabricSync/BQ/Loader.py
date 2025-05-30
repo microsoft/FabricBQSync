@@ -152,17 +152,15 @@ class BQDataProxy(ConfigBase):
         """
 
         qm = {
+            "ScheduleId": self.schedule.ScheduleId,
+            "TaskId": self.schedule.ID,
             "ProjectId": self.schedule.ProjectId,
             "Dataset": self.schedule.Dataset,
             "TableName": self.schedule.BQTableName,
+            "API": self.schedule.SyncAPI,
             "Predicate": []
         }
         query_model = BQQueryModel(**qm)
-
-        if self.UserConfig.GCP.API.EnableBigQueryExport and self.schedule.UseBigQueryExport:
-            query_model.API = BigQueryAPI.BUCKET
-        else:
-            query_model.API = BigQueryAPI.STORAGE
 
         if self.schedule.IsTimePartitionedStrategy and self.schedule.PartitionId is not None:
             self.Logger.sync_status(f"Loading {self.schedule.LakehouseTableName} with time ingestion...", verbose=True)
@@ -263,7 +261,7 @@ class BQDataProxy(ConfigBase):
                 return True
         
         return False
-    
+
 class BQFabricWriter(ConfigBase):
     def __init__(self) -> None:
         super().__init__()
@@ -630,229 +628,10 @@ class BQFabricWriter(ConfigBase):
                 schedule.UpdateRowCounts(src=src_cnt)   
 
             schedule.Status = SyncStatus.COMPLETE
-            schedule.SparkAppId = self.Context.sparkContext.applicationId
-            schedule.EndTime = datetime.now(timezone.utc)
 
             df_bq.unpersist()
         except Exception as e:
             raise FabricLakehouseError(msg=f"Error writing BQ table to Lakehouse: {e}", data=schedule)
-
-
-    def __init__(self) -> None:
-        super().__init__()
-
-        self.TableLocks:ThreadSafeDict = None
-        self.FabricWriter = BQFabricWriter()
-
-    def __sync_bq_table(self, schedule:SyncSchedule, lock:Lock = None) -> SyncSchedule:
-        """
-        Synchronizes a BigQuery table with a Lakehouse table based on the provided SyncSchedule.
-        This method retrieves a BigQuery table, transforms the data, saves the data to a Lakehouse table,
-        and updates the SyncSchedule with row counts, watermarks, and status information. It also handles
-        the logic for schema evolution, partitioning, and mirroring to a database landing zone, and returns
-        the updated SyncSchedule after the synchronization process is complete.
-        Args:
-            schedule (SyncSchedule): The synchronization schedule containing the BigQuery and Lakehouse details.
-            lock (Lock): A threading lock for partitioned sync loads.
-        Returns:
-            SyncSchedule: The updated SyncSchedule after the synchronization process is complete.
-        Raises:
-            SyncLoadError: If an error occurs during the synchronization process.
-            FabricLakehouseError: If an error occurs during the Lakehouse write process.
-        """
-        with SyncTimer() as t:
-            schedule.SummaryLoadType = schedule.get_summary_load_type()
-            self.__show_sync_status(schedule)
-
-            #Drop Mirrored Table if OVERWRITE
-            if schedule.IsMirrored and not schedule.InitialLoad and schedule.Load_Type == SyncLoadType.OVERWRITE:
-                self.Logger.sync_status(f"Overwriting current mirrored table: {schedule.LakehouseTableName}...", verbose=True)
-                OpenMirror.drop_mirrored_table(schedule)
-                schedule.MirrorFileIndex = 1
-
-            #Get BQ table using sync config
-            schedule, df_bq, observation = BQDataProxy.get_schedule_data(schedule)
-
-            #Transform
-            try:
-                schedule, df_bq = SyncUtil.transform(schedule, df_bq)
-            except Exception as e:
-                raise SyncLoadError(msg=f"Transformation failed during sync: {e}", data=schedule)
-
-            #Save BQ table
-            self.FabricWriter.save_bq_table(schedule, df_bq, observation, lock)
-            
-
-        self.__show_sync_status(schedule, status=f"in {str(t)}")
-
-        return schedule
-
-    def __show_sync_status(self, schedule:SyncSchedule, status:str=None) -> None:
-        """
-        Displays the synchronization status for a given SyncSchedule.
-        This method displays the synchronization status for a given SyncSchedule, including the
-        table name, partition ID, and status information. If a status is provided, it is appended
-        to the status message; otherwise, the status message is displayed as "IN PROGRESS".
-        Args:
-            schedule (SyncSchedule): The synchronization schedule containing the table and status details.
-            status (str): An optional status message to append to the status information.
-        Returns:
-            None
-        """
-        msg = f"{schedule.SummaryLoadType} {schedule.ObjectType} {schedule.LakehouseTableName}"
-
-        if schedule.PartitionId:
-            msg = f"{msg}${schedule.PartitionId}"
-
-        if not status:
-            self.Logger.sync_status(f"{msg}...")
-        else:
-            self.Logger.sync_status(f"FINISHED {msg} {status}...")
-
-    @Telemetry.Sync_Load    
-    def __schedule_sync(self, schedule:SyncSchedule, lock=None) -> SyncSchedule:
-        """
-        Synchronizes a BigQuery table with a Lakehouse table based on the provided SyncSchedule.
-        This method retrieves a BigQuery table, transforms the data, saves the data to a Lakehouse table,
-        and updates the SyncSchedule with row counts, watermarks, and status information. It also handles
-        the logic for schema evolution, partitioning, and mirroring to a database landing zone, and returns
-        the updated SyncSchedule after the synchronization process is complete.
-        Args:
-            schedule (SyncSchedule): The synchronization schedule containing the BigQuery and Lakehouse details.
-            lock (Lock): A threading lock for partitioned sync loads.
-        Returns:
-            SyncSchedule: The updated SyncSchedule after the synchronization process is complete.
-        """
-        schedule.StartTime = datetime.now(timezone.utc)
-        schedule = self.__sync_bq_table(schedule, lock)
-        SyncUtil.save_schedule_telemetry(schedule) 
-
-        return schedule
-
-    def __schedule_sync_wrapper(self, value) -> SyncSchedule:
-        """
-        Wrapper function for synchronizing a BigQuery table with a Lakehouse table.
-        This method wraps the __schedule_sync method for use with the QueueProcessor, handling
-        the input value and returning the updated SyncSchedule after the synchronization process
-        is complete.
-        Args:
-            value (Any): A tuple containing the SyncSchedule object and an optional threading lock.
-        Returns:
-            SyncSchedule: The updated SyncSchedule after the synchronization process is complete.
-        """
-        schedule = value[2]
-        lock = self.TableLocks.get_or_set(schedule.LakehouseTableName, Lock())
-        return self.__schedule_sync(schedule, lock)
-
-    def __thread_exception_handler(self, value) -> None:
-        """
-        Exception handler for thread-based synchronization processes.
-        This method handles exceptions raised during thread-based synchronization processes,
-        updating the SyncSchedule status to FAILED and logging the error message.
-        Args:
-            value (Any): A tuple containing the SyncSchedule object and an optional threading lock.
-        Returns:
-            None
-        """
-        schedule = value[2]
-        err = value[3]
-        
-        print(f"ERROR - {schedule.LakehouseTableName} FAILED: {err}")
-
-        schedule.Status = SyncStatus.FAILED
-        schedule.SummaryLoadType = f"ERROR"
-        SyncUtil.save_schedule_telemetry(schedule) 
-
-        self.Logger.error(msg=f"ERROR - {schedule.LakehouseTableName} FAILED: {err}")
-
-    def run_schedule(self, schedule_type:str) -> bool:
-        """
-        Runs a synchronization schedule based on the provided schedule type.
-        This method retrieves a synchronization schedule from the Fabric Metastore, initializes
-        initial loads if necessary, and processes the schedule asynchronously or synchronously
-        based on the user configuration. It returns True if the schedule is successfully processed.
-        Args:
-            schedule_type (str): The type of synchronization schedule to run.
-        Returns:
-            bool: True if the schedule is successfully processed; False otherwise.
-        """
-        if self.UserConfig.Async.Enabled:
-            return self.__run_async_schedule(schedule_type, num_threads=self.UserConfig.Async.Parallelism)
-        else:
-            return self.__run_async_schedule(schedule_type, num_threads=1)
-
-    def __run_async_schedule(self, schedule_type:str, num_threads:int) -> bool:
-        """
-        Runs a synchronization schedule asynchronously based on the provided schedule type.
-        This method retrieves a synchronization schedule from the Fabric Metastore, initializes
-        initial loads if necessary, and processes the schedule asynchronously based on the user
-        configuration. It returns True if the schedule is successfully processed.
-        Args:
-            schedule_type (str): The type of synchronization schedule to run.
-            num_threads (int): The number of threads to use for the asynchronous schedule.
-        Returns:
-            bool: True if the schedule is successfully processed; False otherwise.
-        """
-        SyncUtil.ensure_sync_views()
-        self.Logger.sync_status(f"Async schedule started with parallelism of {self.UserConfig.Async.Parallelism}...", verbose=True)         
-
-        processor = QueueProcessor(num_threads=num_threads)
-
-        with SyncTimer() as t:
-            schedule = FabricMetastore.get_schedule(schedule_type)
-            initial_loads = self.FabricWriter.initialize_first_loads(schedule)
-
-            load_grps = [i["priority"] for i in schedule.select("priority").distinct().orderBy("priority").collect()]
-
-            if load_grps:
-                self.TableLocks = ThreadSafeDict()
-
-                for grp in load_grps:
-                    self.FabricWriter.MultiWrite = ThreadSafeDict()
-
-                    grp_nm = "LOAD GROUP {0}".format(grp)
-                    grp_df = schedule.where(f"priority = '{grp}'")
-
-                    group_schedule = []
-
-                    for tbl in grp_df.collect():
-                        s = SyncSchedule(**(tbl.asDict()))
-
-                        if not self.FabricWriter.MultiWrite.contains(s.LakehouseTableName):
-                            sync_track = {
-                                "tasks": 0,
-                                "observations": 0
-                            }
-                            self.FabricWriter.MultiWrite.set(s.LakehouseTableName, sync_track)
-
-                        group_schedule.append(s)
-
-                        nm = "{0}.{1}".format(s.Dataset, s.TableName)        
-
-                        if s.PartitionId is not None:
-                            nm = "{0}${1}".format(nm, s.PartitionId)        
-
-                        priority = s.LoadPriority
-                        processor.put((priority, nm, s))
-
-                    if not processor.empty():
-                        self.Logger.sync_status(f"### Processing {grp_nm}...", verbose=True)
-
-                        with SyncTimer() as t:                        
-                            processor.process(self.__schedule_sync_wrapper, self.__thread_exception_handler)
-
-                        if not processor.has_exceptions:                            
-                            self.Logger.sync_status(f"### {grp_nm} completed in {str(t)}...")
-                        else:
-                            self.Logger.sync_status(f"### {grp_nm} FAILED...")
-                            break
-
-                self.Logger.sync_status("Processing Sync Telemetry...", verbose=True)
-                FabricMetastore.process_load_group_telemetry(schedule_type)
-
-        self.Logger.sync_status(f"Async schedule sync finished in {str(t)}...")
-
-        return initial_loads
 
 class BQScheduleLoader(ConfigBase):    
     def __init__(self) -> None:
@@ -890,20 +669,37 @@ class BQScheduleLoader(ConfigBase):
             #Get BQ table using sync config
             schedule, df_bq, observation = BQDataProxy.get_schedule_data(schedule)
 
-            #Transform
-            try:
-                schedule, df_bq = SyncUtil.transform(schedule, df_bq)
-            except Exception as e:
-                raise SyncLoadError(msg=f"Transformation failed during sync: {e}", data=schedule)
+            if not df_bq.isEmpty():
+                #Transform
+                try:
+                    schedule, df_bq = SyncUtil.transform(schedule, df_bq)
+                except Exception as e:
+                    raise SyncLoadError(msg=f"Transformation failed during sync: {e}", data=schedule)
 
-            #Save BQ table
-            self.FabricWriter.save_bq_table(schedule, df_bq, observation, lock)
+                #Save BQ table
+                self.FabricWriter.save_bq_table(schedule, df_bq, observation, lock)
             
+                #Cleanup
+                self.__sync_cleanup(schedule)
+            else:
+                self.Logger.sync_status(f"No data returned from sync operation for {schedule.LakehouseTableName}...", verbose=True)
+                schedule.Status = SyncStatus.NO_DATA
+            
+            schedule.SparkAppId = self.Context.sparkContext.applicationId
+            schedule.EndTime = datetime.now(timezone.utc)
 
         self.__show_sync_status(schedule, status=f"in {str(t)}")
 
         return schedule
 
+    def __sync_cleanup(self, schedule:SyncSchedule) -> None:
+        if schedule.SyncAPI == BigQueryAPI.BUCKET and self.UserConfig.GCP.Storage.EnabledCleanUp:
+                self.Logger.sync_status(f"Cleaning up exported bucket data for {schedule.LakehouseTableName}...", verbose=True)
+                storage_client = BucketStorageClient(self.UserConfig, self.GCPCredential)
+                storage_client.delete_folder(
+                    self.UserConfig.GCP.Storage.BucketUri,
+                    storage_client.get_storage_prefix(schedule.ScheduleId, schedule.ID))
+        
     def __show_sync_status(self, schedule:SyncSchedule, status:str=None) -> None:
         """
         Displays the synchronization status for a given SyncSchedule.
@@ -916,7 +712,7 @@ class BQScheduleLoader(ConfigBase):
         Returns:
             None
         """
-        msg = f"{schedule.SummaryLoadType} {schedule.ObjectType} {schedule.LakehouseTableName}"
+        msg = f"{schedule.SummaryLoadType} - {schedule.LakehouseTableName}"
 
         if schedule.PartitionId:
             msg = f"{msg}${schedule.PartitionId}"

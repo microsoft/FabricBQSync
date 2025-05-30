@@ -34,7 +34,7 @@ class ConfigBase(ContextAwareBase):
             bq_client = BigQueryClient(self.UserConfig)
 
             match query.API:
-                case BigQueryAPI.STORAGE:
+                case BigQueryAPI.BUCKET:
                     df = bq_client.read_from_exported_bucket(query)
                 case BigQueryAPI.STANDARD:
                     df = bq_client.read_from_standard_api(query, schema)

@@ -447,10 +447,12 @@ class ConfigGCPStorage(SyncBaseModel):
     ConfigGCPStorage is a configuration model for Google Cloud Platform (GCP) storage settings.
     It includes fields for specifying the bucket URI, prefix path, and whether cleanup is enabled.
     Attributes:
+        ProjectID (Optional[str]): The GCP Project ID of the GCP storage bucket.
         BucketUri (Optional[str]): The URI of the GCP storage bucket.
         PrefixPath (Optional[str]): The prefix path within the bucket for storing data.
         EnabledCleanUp (Optional[bool]): Flag indicating whether to enable cleanup of old data (default: True).
     """
+    ProjectID:Optional[str] = Field(alias="project_id", default=None)
     BucketUri:Optional[str] = Field(alias="bucket_uri", default=None)
     PrefixPath:Optional[str] = Field(alias="prefix_path", default=None)
     EnabledCleanUp:Optional[bool] = Field(alias="enable_cleanup", default=True)
@@ -586,7 +588,6 @@ class ConfigBQTableDefault (SyncBaseModel):
     FlattenInPlace:Optional[bool] = Field(alias="flatten_inplace", default=True)
     ExplodeArrays:Optional[bool] = Field(alias="explode_arrays", default=True)
     UseBigQueryExport:Optional[bool] = Field(alias="use_bigquery_export", default=False)
-
     TableMaintenance:Optional[ConfigTableMaintenance] = Field(alias="table_maintenance", default=ConfigTableMaintenance())
 
 class ConfigBQTable (SyncBaseModel):
@@ -631,15 +632,11 @@ class ConfigBQTable (SyncBaseModel):
     FlattenInPlace:Optional[bool] = Field(alias="flatten_inplace", default=None)
     ExplodeArrays:Optional[bool] = Field(alias="explode_arrays", default=None)
     UseBigQueryExport:Optional[bool] = Field(alias="use_bigquery_export", default=False)
-
     TableMaintenance:Optional[ConfigTableMaintenance] = Field(alias="table_maintenance", default=ConfigTableMaintenance())
-
     TableName:Optional[str] = Field(alias="table_name", default=None)
     SourceQuery:Optional[str] = Field(alias="source_query", default=None)
     Predicate:Optional[str] = Field(alias="predicate", default=None)
-
     ColumnMap:Optional[List[MappedColumn]] = Field(alias="column_map", default=[MappedColumn()])
-
     LakehouseTarget:Optional[ConfigLakehouseTarget] = Field(alias="lakehouse_target", default=ConfigLakehouseTarget())
     BQPartition:Optional[ConfigPartition] = Field(alias="bq_partition", default=ConfigPartition())
     Keys:Optional[List[ConfigTableColumn]] = Field(alias="keys", default=[ConfigTableColumn()])

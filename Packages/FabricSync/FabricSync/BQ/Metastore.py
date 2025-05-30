@@ -221,6 +221,10 @@ class FabricMetastore(ContextAwareBase):
                     sorted_struct -> sorted_struct.column_name
                 )) AS table_columns
             FROM sorted_columns
+        ),
+        user_config AS (
+            SELECT gcp.api.enable_bigquery_export AS enable_bigquery_export
+            FROM user_config_json
         )
 
         SELECT
@@ -233,7 +237,7 @@ class FabricMetastore(ContextAwareBase):
             c.lakehouse_schema,c.lakehouse_table_name,c.lakehouse_partition,c.use_lakehouse_schema,
             c.enforce_expiration,c.allow_schema_evolution,c.table_maintenance_enabled,c.table_maintenance_interval,
             c.flatten_table,c.flatten_inplace,
-            c.use_bigquery_export,
+            uc.enable_bigquery_export, c.use_bigquery_export,
             c.explode_arrays,c.primary_keys,
             p.partition_id,p.require_partition_filter,
             s.group_schedule_id,s.schedule_id,s.status AS sync_status,s.started,s.completed,s.mirror_file_index,
@@ -257,6 +261,7 @@ class FabricMetastore(ContextAwareBase):
             AND c.dataset=ts.table_schema AND c.table_name=ts.table_name
         LEFT JOIN tbl_columns tc ON c.sync_id=tc.sync_id AND c.project_id=tc.table_catalog 
             AND c.dataset=tc.table_schema AND c.table_name=tc.table_name
+        CROSS JOIN user_config uc
         WHERE s.status IN ('SCHEDULED','FAILED') AND c.enabled=TRUE AND t.schedule_id IS NULL
             AND c.sync_id='{cls.ID}'
             AND s.schedule_type='{schedule_type}'
@@ -280,10 +285,10 @@ class FabricMetastore(ContextAwareBase):
             SELECT
                 sync_id,table_id,schedule_id,status,
                 MIN(started) OVER(PARTITION BY sync_id,schedule_id,table_id) AS started,
-                mAX(completed) OVER(PARTITION BY sync_id,schedule_id,table_id) AS completed,
+                MAX(completed) OVER(PARTITION BY sync_id,schedule_id,table_id) AS completed,
                 MAX(max_watermark) OVER(PARTITION BY sync_id,schedule_id,table_id) AS max_watermark,
 
-                SUM(CASE WHEN status='COMPLETE' THEN 1 ELSE 0 END) 
+                SUM(CASE WHEN status IN ('COMPLETE', 'SKIPPED', 'NO_DATA') THEN 1 ELSE 0 END) 
                     OVER(PARTITION BY sync_id,schedule_id,table_id,started) AS completed_activities,
                 SUM(CASE WHEN status='FAILED' THEN 1 ELSE 0 END) 
                     OVER(PARTITION BY sync_id,schedule_id,table_id,started) AS failed_activities,
@@ -360,7 +365,7 @@ class FabricMetastore(ContextAwareBase):
             FROM sync_schedule s
             JOIN sync_configuration c ON c.sync_id=s.sync_id AND c.project_id=s.project_id 
                 AND c.dataset=s.dataset AND c.table_name=s.table_name
-            WHERE s.status='COMPLETE' AND s.sync_id='{cls.ID}'
+            WHERE s.status IN ('COMPLETE', 'SKIPPED', 'NO_DATA') AND s.sync_id='{cls.ID}'
                 AND s.schedule_type='{schedule_type}' AND c.sync_state !='COMMIT'
             GROUP BY s.sync_id,s.project_id,s.dataset,s.table_name
         )
@@ -561,6 +566,7 @@ class FabricMetastore(ContextAwareBase):
         WITH default_config AS (
             SELECT 
                 gcp.api.use_cdc AS use_gcp_cdc,
+                gcp.api.enable_bigquery_export AS enable_bigquery_export,
                 COALESCE(autodiscover.autodetect,TRUE) AS autodetect,
                 autodiscover.materialized_views.enabled as materialized_views_enabled,
                 CASE WHEN autodiscover.materialized_views.enabled THEN
@@ -581,6 +587,26 @@ class FabricMetastore(ContextAwareBase):
                 COALESCE(fabric.enable_schemas,FALSE) AS enable_schemas,
                 maintenance.interval AS maintenance_interval,
                 maintenance.enabled AS maintenance_enabled
+            FROM user_config_json
+        ),
+        table_defaults AS (
+            SELECT 
+                table_defaults.project_id AS default_project_id,
+                table_defaults.dataset AS default_dataset,
+                table_defaults.object_type AS default_object_type,
+                table_defaults.priority AS default_priority,
+                table_defaults.load_strategy AS default_load_strategy,
+                table_defaults.load_type AS default_load_type,
+                table_defaults.interval AS default_interval,
+                table_defaults.enabled AS default_enabled,
+                table_defaults.enforce_expiration AS default_enforce_expiration,
+                table_defaults.allow_schema_evolution AS default_allow_schema_evolution,
+                table_defaults.flatten_table AS default_flatten_table,
+                table_defaults.flatten_inplace AS default_flatten_inplace,
+                table_defaults.explode_arrays AS default_explode_arrays,
+                table_defaults.use_bigquery_export AS default_use_bigquery_export,
+                table_defaults.table_maintenance.enabled AS default_table_maintenance_enabled,
+                table_defaults.table_maintenance.interval AS default_table_maintenance_inteval
             FROM user_config_json
         ),
         user_config_keys AS (
@@ -624,7 +650,7 @@ class FabricMetastore(ContextAwareBase):
                 m.sync_id,d.autodetect,d.enable_data_expiration,FALSE,
                 d.workspace_id,d.workspace_name,d.target_lakehouse_type,d.target_lakehouse_id,
                 d.target_lakehouse,d.target_schema,d.enable_schemas,
-                d.maintenance_interval,d.maintenance_enabled,
+                d.maintenance_interval,d.maintenance_enabled,d.enable_bigquery_export,
                 CASE WHEN object_type='BASE_TABLE' THEN d.load_all_tables
                     WHEN object_type='MATERIALIZED_VIEW' THEN d.load_all_materialized_views
                     WHEN object_type='VIEW' THEN d.load_all_views
@@ -646,8 +672,10 @@ class FabricMetastore(ContextAwareBase):
                 p.table_schema as dataset,
                 p.table_name as table_name,
                 p.object_type AS object_type,
-                CASE WHEN p.load_all THEN
-                    COALESCE(CAST(u.enabled AS BOOLEAN),TRUE) ELSE COALESCE(CAST(u.enabled AS BOOLEAN),FALSE) END AS enabled,               
+                CASE WHEN p.load_all THEN COALESCE(CAST(u.enabled AS BOOLEAN),
+                        CAST(x.default_enabled AS BOOLEAN), TRUE) 
+                    ELSE COALESCE(CAST(u.enabled AS BOOLEAN),
+                        CAST(x.default_enabled AS BOOLEAN), FALSE) END AS enabled,               
                 p.workspace_id,
                 p.workspace_name,
                 p.target_lakehouse_type AS lakehouse_type,
@@ -661,8 +689,8 @@ class FabricMetastore(ContextAwareBase):
                 COALESCE(u.lakehouse_partition,NULL) AS lakehouse_partition,
                 COALESCE(u.source_query,NULL) AS source_query,
                 COALESCE(u.source_predicate,NULL) AS source_predicate,
-                COALESCE(u.priority,'100') AS priority,
-                COALESCE(u.load_strategy,
+                COALESCE(u.priority, x.default_priority,'100') AS priority,
+                COALESCE(u.load_strategy, x.default_load_strategy, 
                     CASE WHEN (p.use_gcp_cdc AND p.object_type='BASE_TABLE' 
                             AND COALESCE(p.is_change_history_enabled,'NO')='YES' AND NOT COALESCE(p.require_partition_filter,FALSE)
                             AND SIZE(p.tbl_key_cols) > 0
@@ -678,7 +706,7 @@ class FabricMetastore(ContextAwareBase):
                             AND u.source_query IS NULL
                             AND u.source_predicate IS NULL) THEN 'CDC_APPEND'
                         ELSE 'FULL' END) AS load_strategy,
-                COALESCE(u.load_type,
+                COALESCE(u.load_type, x.default_load_type, 
                     CASE WHEN (p.use_gcp_cdc AND p.object_type='BASE_TABLE' 
                             AND COALESCE(p.is_change_history_enabled,'NO')='YES' AND NOT COALESCE(p.require_partition_filter,FALSE)
                             AND SIZE(p.tbl_key_cols) > 0) THEN 'MERGE'
@@ -686,12 +714,12 @@ class FabricMetastore(ContextAwareBase):
                         WHEN (p.use_gcp_cdc AND p.object_type='BASE_TABLE' 
                             AND NOT COALESCE(p.require_partition_filter,FALSE)) THEN 'APPEND'
                         ELSE 'OVERWRITE' END) AS load_type,
-                COALESCE(u.interval,'AUTO') AS interval,
+                COALESCE(u.interval,x.default_interval,'AUTO') AS interval,
 
                 CASE WHEN (p.object_type='BASE_TABLE') THEN p.tbl_key_cols 
                     ELSE k.user_key_cols END AS primary_keys,
 
-                COALESCE(CAST(u.partition_enabled AS BOOLEAN),p.is_partitioned,FALSE) AS is_partitioned,
+                COALESCE(CAST(u.partition_enabled AS BOOLEAN), p.is_partitioned,FALSE) AS is_partitioned,
                 COALESCE(u.partition_column,p.partition_col,NULL) AS partition_column,
                 COALESCE(u.partition_type,p.partitioning_type,NULL) AS partition_type,
                 COALESCE(u.partition_grain,p.partitioning_strategy,NULL) AS partition_grain,
@@ -700,15 +728,22 @@ class FabricMetastore(ContextAwareBase):
                 COALESCE(u.watermark_column,p.watermark_col,NULL) AS watermark_column,
                 p.autodetect,
                 p.enable_schemas AS use_lakehouse_schema,
-                CASE WHEN (p.enable_data_expiration) THEN
-                    COALESCE(CAST(u.enforce_expiration AS BOOLEAN),FALSE) ELSE FALSE END AS enforce_expiration,
-                COALESCE(CAST(u.allow_schema_evolution AS BOOLEAN),FALSE) AS allow_schema_evolution,
-                COALESCE(CAST(u.table_maintenance_enabled AS BOOLEAN),p.maintenance_enabled,FALSE) AS table_maintenance_enabled,
-                COALESCE(u.table_maintenance_interval,p.maintenance_interval,'AUTO') AS table_maintenance_interval,
-                COALESCE(CAST(u.flatten_table AS BOOLEAN),FALSE) AS flatten_table,
-                COALESCE(CAST(u.flatten_inplace AS BOOLEAN),TRUE) AS flatten_inplace,
-                COALESCE(CAST(u.explode_arrays AS BOOLEAN),FALSE) AS explode_arrays,
-                COALESCE(CAST(u.use_bigquery_export AS BOOLEAN),FALSE) AS use_bigquery_export,
+                CASE WHEN (p.enable_data_expiration) THEN COALESCE(CAST(u.enforce_expiration AS BOOLEAN),
+                    CAST(x.default_enforce_expiration AS BOOLEAN),FALSE) ELSE FALSE END AS enforce_expiration,
+                COALESCE(CAST(u.allow_schema_evolution AS BOOLEAN),
+                    CAST(x.default_allow_schema_evolution AS BOOLEAN),FALSE) AS allow_schema_evolution,
+                COALESCE(CAST(u.table_maintenance_enabled AS BOOLEAN),
+                    CAST(x.default_table_maintenance_enabled AS BOOLEAN),p.maintenance_enabled,FALSE) AS table_maintenance_enabled,
+                COALESCE(u.table_maintenance_interval,x.default_table_maintenance_inteval,p.maintenance_interval,'AUTO') AS table_maintenance_interval,
+                COALESCE(CAST(u.flatten_table AS BOOLEAN),
+                    CAST(x.default_flatten_table AS BOOLEAN),FALSE) AS flatten_table,
+                COALESCE(CAST(u.flatten_inplace AS BOOLEAN),
+                    CAST(x.default_flatten_inplace AS BOOLEAN),TRUE) AS flatten_inplace,
+                COALESCE(CAST(u.explode_arrays AS BOOLEAN),
+                    CAST(x.default_explode_arrays AS BOOLEAN),FALSE) AS explode_arrays,
+                CASE WHEN p.enable_bigquery_export THEN
+                    COALESCE(CAST(u.use_bigquery_export AS BOOLEAN), CAST(x.default_use_bigquery_export AS BOOLEAN),FALSE) 
+                    ELSE FALSE END AS use_bigquery_export,
                 COALESCE(u.column_map,NULL) AS column_map,
                 CASE WHEN u.table_name IS NULL THEN FALSE ELSE TRUE END AS config_override,
                 'INIT' AS sync_state,
@@ -721,6 +756,7 @@ class FabricMetastore(ContextAwareBase):
                 p.table_name=u.table_name AND p.object_type=u.object_type
             LEFT JOIN user_config_keys k ON
                 k.project_id=p.table_catalog AND k.dataset=p.table_schema AND k.table_name=p.table_name
+            CROSS JOIN table_defaults x
             WHERE CASE WHEN (p.load_all=TRUE) THEN TRUE ELSE
                 CASE WHEN (u.table_name IS NULL) THEN FALSE ELSE TRUE END END=TRUE       
                 AND p.type_enabled=TRUE  

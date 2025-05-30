@@ -33,7 +33,9 @@ class BQQueryModelPredicate(SyncBaseModel):
     Predicate:str = Field(alias="predicate", default=None)
 
 class BQQueryModel(SyncBaseModel):
+    ScheduleId:str = Field(alias="ScheduleId", default=None)
     ProjectId:str = Field(alias="ProjectId", default=None)
+    TaskId:str = Field(alias="TaskId", default=None)
     Dataset:str = Field(alias="Dataset", default=None)
     TableName:str = Field(alias="TableName", default=None)
     Query:Optional[str] = Field(alias="Query", default=None)

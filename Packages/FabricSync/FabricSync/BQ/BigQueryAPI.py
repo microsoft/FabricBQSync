@@ -12,6 +12,7 @@ from FabricSync.BQ.Core import ContextAwareBase
 from FabricSync.BQ.Utils import Util
 from FabricSync.BQ.Model import ConfigDataset, BQQueryModel
 from FabricSync.BQ.Validation import SqlValidator
+from FabricSync.BQ.GoogleStorageAPI import BucketStorageClient
 
 class BigQueryClient(ContextAwareBase):
     def __init__(self, config:ConfigDataset) -> None:
@@ -96,7 +97,9 @@ class BigQueryClient(ContextAwareBase):
         return bq_client.read_to_dataframe(sql_query, schema)
 
     def read_from_exported_bucket(self, query:BQQueryModel) -> DataFrame:
-        gcs_path = self.__get_gcs_storage_path(query)
+        bucket_client = BucketStorageClient(self.UserConfig, self.GCPCredential)
+        gcs_path = bucket_client.get_storage_path(query.ScheduleId, query.TaskId)
+        
         self.__export_bq_table(query, gcs_path)
 
         return self.Context.read.format("parquet").load(gcs_path)
@@ -112,18 +115,12 @@ class BigQueryClient(ContextAwareBase):
         overwrite=true) AS
         {self.__build_bq_query(query)}
         """
+        
+        #print(export_query)
 
         query_job = bq_client.run_query(export_query)
         job_result = query_job.result()
 
-    def __get_gcs_storage_path(self, query:BQQueryModel) -> str:
-        uri = self.UserConfig.GCP.Storage.BucketUri
-        prefix = self.UserConfig.GCP.Storage.PrefixPath
-
-        if prefix:
-            return f"{uri}/{prefix}/fabric_sync/{query.ProjectId}/{query.Dataset}/{query.TableName}"
-        else:
-            return f"{uri}/fabric_sync/{query.ProjectId}/{query.Dataset}/{query.TableName}"
 
     def __build_bq_query(self, query:BQQueryModel) -> str:
         """
@@ -166,13 +163,22 @@ class BigQueryStandardClient(ContextAwareBase):
             project_id (str): The project ID.
             credentials (str): The credentials.
         """
-        key = json.loads(b64.b64decode(credentials))
-        bq_credentials = gcpCredentials.from_service_account_info(key)
-
+        self.credentials = credentials
         self.project_id = project_id
-        self.client = bigquery.Client(project=project_id, credentials=bq_credentials)
+        self.__client:bigquery.Client = None
 
-        self.job_config = bigquery.QueryJobConfig(
+    @property
+    def _client(self) -> bigquery.Client:
+        if not self.__client:
+            key = json.loads(b64.b64decode(self.credentials))
+            gcp_credentials = gcpCredentials.from_service_account_info(key)        
+            self.__client = bigquery.Client(project=self.project_id, credentials=gcp_credentials)
+
+        return self.__client
+
+    @property
+    def _job_config(self) -> bigquery.QueryJobConfig:
+        return bigquery.QueryJobConfig(
             labels={
                 'msjobtype': 'fabricsync',
                 'msjobgroup': Util.remove_special_characters(self.ID.lower())
@@ -180,10 +186,10 @@ class BigQueryStandardClient(ContextAwareBase):
         )
 
     def run_query(self, sql:str):
-        query = self.client.query(sql, 
+        query = self._client.query(sql, 
             job_id=f"FABRIC_SYNC_{self.ID}_{uuid.uuid4()}", 
             job_retry=None,
-            job_config=self.job_config)
+            job_config=self._job_config)
             
         return query
 

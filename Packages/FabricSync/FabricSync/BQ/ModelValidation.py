@@ -435,6 +435,7 @@ class UserConfigurationValidation:
         errors = []
 
         errors.append(cls.__required_field(gcp_storage, "bucket_uri"))
+        errors.append(cls.__required_field(gcp_storage, "bucket_uri"))
         errors.append(cls.__required_field(gcp_storage, "enable_cleanup"))
 
         return [f"gcp_storage.{e}" for e in errors if e]
