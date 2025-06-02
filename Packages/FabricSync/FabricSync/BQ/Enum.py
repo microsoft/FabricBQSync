@@ -314,6 +314,7 @@ class BQDataType(str, BaseEnum):
         BIGINT (str): Represents a bigint data type.
         TINYINT (str): Represents a tinyint data type.
         BYTEINT (str): Represents a byteint data type.
+        DATETIME (str): Represents a datetime data type.
     """
     STRING = "STRING"
     FLOAT64 = "FLOAT64"
@@ -331,6 +332,7 @@ class BQDataType(str, BaseEnum):
     BIGINT = "BIGINT"
     TINYINT = "TINYINT"
     BYTEINT = "BYTEINT"
+    DATETIME = "DATETIME"
 
 class SyncLoadType(str, BaseEnum):
     """
