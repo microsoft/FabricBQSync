@@ -1,10 +1,10 @@
-from pyspark.sql.session import DataFrame
-from pyspark.sql.types import (
+from pyspark.sql.session import DataFrame # type: ignore
+from pyspark.sql.types  import (
     StructType, StructField, StringType, BooleanType, 
     IntegerType, LongType, TimestampType, ArrayType
-)
+) # type: ignore
 from typing import List
-from delta.tables import DeltaTable
+from delta.tables import DeltaTable  # type: ignore
 import functools
 import time
 
@@ -14,7 +14,7 @@ from FabricSync.BQ.Core import ContextAwareBase
 
 class FabricMetastoreSchema():
     data_type_map=StructType([StructField('data_type',StringType(),True),StructField('partition_type',StringType(),True),StructField('is_watermark',StringType(),True)])
-    sync_configuration=StructType([StructField('sync_id',StringType(),True),StructField('table_id',StringType(),True),StructField('project_id',StringType(),True),StructField('dataset',StringType(),True),StructField('table_name',StringType(),True),StructField('object_type',StringType(),True),StructField('enabled',BooleanType(),True),StructField('workspace_id',StringType(),True),StructField('workspace_name',StringType(),True),StructField('lakehouse_type',StringType(),True),StructField('lakehouse_id',StringType(),True),StructField('lakehouse',StringType(),True),StructField('lakehouse_schema',StringType(),True),StructField('lakehouse_table_name',StringType(),True),StructField('lakehouse_partition',StringType(),True),StructField('source_query',StringType(),True),StructField('source_predicate',StringType(),True),StructField('priority',IntegerType(),True),StructField('load_strategy',StringType(),True),StructField('load_type',StringType(),True),StructField('interval',StringType(),True),StructField('primary_keys',ArrayType(StringType(),True),True),StructField('is_partitioned',BooleanType(),True),StructField('partition_column',StringType(),True),StructField('partition_type',StringType(),True),StructField('partition_grain',StringType(),True),StructField('partition_data_type',StringType(),True),StructField('partition_range',StringType(),True),StructField('watermark_column',StringType(),True),StructField('autodetect',BooleanType(),True),StructField('use_lakehouse_schema',BooleanType(),True),StructField('enforce_expiration',BooleanType(),True),StructField('allow_schema_evolution',BooleanType(),True),StructField('table_maintenance_enabled',BooleanType(),True),StructField('table_maintenance_interval',StringType(),True),StructField('flatten_table',BooleanType(),True),StructField('flatten_inplace',BooleanType(),True),StructField('explode_arrays',BooleanType(),True),StructField('use_bigquery_export',BooleanType(),True),StructField('column_map',StringType(),True),StructField('config_override',BooleanType(),True),StructField('sync_state',StringType(),True),StructField('config_path',StringType(),True),StructField('created_dt',TimestampType(),True),StructField('last_updated_dt',TimestampType(),True)])
+    sync_configuration=StructType([StructField('sync_id',StringType(),True),StructField('table_id',StringType(),True),StructField('project_id',StringType(),True),StructField('dataset',StringType(),True),StructField('table_name',StringType(),True),StructField('object_type',StringType(),True),StructField('enabled',BooleanType(),True),StructField('workspace_id',StringType(),True),StructField('workspace_name',StringType(),True),StructField('lakehouse_type',StringType(),True),StructField('lakehouse_id',StringType(),True),StructField('lakehouse',StringType(),True),StructField('lakehouse_schema',StringType(),True),StructField('lakehouse_table_name',StringType(),True),StructField('lakehouse_partition',StringType(),True),StructField('source_query',StringType(),True),StructField('source_predicate',StringType(),True),StructField('priority',IntegerType(),True),StructField('load_strategy',StringType(),True),StructField('load_type',StringType(),True),StructField('interval',StringType(),True),StructField('primary_keys',ArrayType(StringType(),True),True),StructField('is_partitioned',BooleanType(),True),StructField('partition_column',StringType(),True),StructField('partition_type',StringType(),True),StructField('partition_grain',StringType(),True),StructField('partition_data_type',StringType(),True),StructField('partition_range',StringType(),True),StructField('watermark_column',StringType(),True),StructField('autodetect',BooleanType(),True),StructField('use_lakehouse_schema',BooleanType(),True),StructField('enforce_expiration',BooleanType(),True),StructField('allow_schema_evolution',BooleanType(),True),StructField('table_maintenance_enabled',BooleanType(),True),StructField('table_maintenance_interval',StringType(),True),StructField('flatten_table',BooleanType(),True),StructField('flatten_inplace',BooleanType(),True),StructField('explode_arrays',BooleanType(),True),StructField('use_bigquery_export',BooleanType(),True),StructField('use_standard_api',BooleanType(),True),StructField('column_map',StringType(),True),StructField('config_override',BooleanType(),True),StructField('sync_state',StringType(),True),StructField('config_path',StringType(),True),StructField('created_dt',TimestampType(),True),StructField('last_updated_dt',TimestampType(),True)])
     sync_data_expiration=StructType([StructField('sync_id',StringType(),True),StructField('table_catalog',StringType(),True),StructField('table_schema',StringType(),True),StructField('table_name',StringType(),True),StructField('partition_id',StringType(),True),StructField('expiration',TimestampType(),True)])
     sync_maintenance=StructType([StructField('sync_id',StringType(),True),StructField('table_id',StringType(),True),StructField('project_id',StringType(),True),StructField('dataset',StringType(),True),StructField('table_name',StringType(),True),StructField('partition_id',StringType(),True),StructField('lakehouse',StringType(),True),StructField('lakehouse_schema',StringType(),True),StructField('lakehouse_table_name',StringType(),True),StructField('lakehouse_partition',StringType(),True),StructField('row_count',LongType(),True),StructField('table_partition_size',LongType(),True),StructField('last_maintenance_type',StringType(),True),StructField('last_maintenance_interval',StringType(),True),StructField('last_maintenance',TimestampType(),True),StructField('last_optimize',TimestampType(),True),StructField('last_vacuum',TimestampType(),True),StructField('last_maintenance_status',StringType(),True),StructField('created_dt',TimestampType(),True),StructField('last_updated_dt',TimestampType(),True)])
     sync_schedule=StructType([StructField('group_schedule_id',StringType(),True),StructField('schedule_id',StringType(),True),StructField('sync_id',StringType(),True),StructField('table_id',StringType(),True),StructField('project_id',StringType(),True),StructField('dataset',StringType(),True),StructField('table_name',StringType(),True),StructField('schedule_type',StringType(),True),StructField('scheduled',TimestampType(),True),StructField('status',StringType(),True),StructField('started',TimestampType(),True),StructField('completed',TimestampType(),True),StructField('completed_activities',IntegerType(),True),StructField('failed_activities',IntegerType(),True),StructField('max_watermark',StringType(),True),StructField('mirror_file_index',LongType(),True),StructField('priority',IntegerType(),True)])
@@ -237,8 +237,11 @@ class FabricMetastore(ContextAwareBase):
             c.lakehouse_schema,c.lakehouse_table_name,c.lakehouse_partition,c.use_lakehouse_schema,
             c.enforce_expiration,c.allow_schema_evolution,c.table_maintenance_enabled,c.table_maintenance_interval,
             c.flatten_table,c.flatten_inplace,
-            uc.enable_bigquery_export, c.use_bigquery_export,
-            c.explode_arrays,c.primary_keys,
+            COALESCE(uc.enable_bigquery_export, FALSE) AS enable_bigquery_export, 
+            COALESCE(c.use_bigquery_export, FALSE) AS use_bigquery_export,
+            COALESCE(c.use_standard_api, FALSE) AS use_standard_api,
+            c.explode_arrays,
+            c.primary_keys,
             p.partition_id,p.require_partition_filter,
             s.group_schedule_id,s.schedule_id,s.status AS sync_status,s.started,s.completed,s.mirror_file_index,
             h.max_watermark,h.last_schedule_dt,c.column_map,
@@ -403,6 +406,7 @@ class FabricMetastore(ContextAwareBase):
                 tbl.flatten_inplace AS flatten_inplace,
                 tbl.explode_arrays AS explode_arrays,
                 tbl.use_bigquery_export AS use_bigquery_export,
+                tbl.use_standard_api AS use_standard_api,
                 tbl.table_maintenance.enabled AS table_maintenance_enabled,
                 tbl.table_maintenance.interval AS table_maintenance_interval,
                 tbl.source_query,
@@ -566,6 +570,7 @@ class FabricMetastore(ContextAwareBase):
         WITH default_config AS (
             SELECT 
                 gcp.api.use_cdc AS use_gcp_cdc,
+                gcp.api.use_standard_api as enable_standard_api,
                 gcp.api.enable_bigquery_export AS enable_bigquery_export,
                 COALESCE(autodiscover.autodetect,TRUE) AS autodetect,
                 autodiscover.materialized_views.enabled as materialized_views_enabled,
@@ -605,6 +610,7 @@ class FabricMetastore(ContextAwareBase):
                 table_defaults.flatten_inplace AS default_flatten_inplace,
                 table_defaults.explode_arrays AS default_explode_arrays,
                 table_defaults.use_bigquery_export AS default_use_bigquery_export,
+                table_defaults.use_standard_api AS default_use_standard_api,
                 table_defaults.table_maintenance.enabled AS default_table_maintenance_enabled,
                 table_defaults.table_maintenance.interval AS default_table_maintenance_inteval
             FROM user_config_json
@@ -650,7 +656,8 @@ class FabricMetastore(ContextAwareBase):
                 m.sync_id,d.autodetect,d.enable_data_expiration,FALSE,
                 d.workspace_id,d.workspace_name,d.target_lakehouse_type,d.target_lakehouse_id,
                 d.target_lakehouse,d.target_schema,d.enable_schemas,
-                d.maintenance_interval,d.maintenance_enabled,d.enable_bigquery_export,
+                d.maintenance_interval,d.maintenance_enabled,
+                d.enable_bigquery_export,d.enable_standard_api,
                 CASE WHEN object_type='BASE_TABLE' THEN d.load_all_tables
                     WHEN object_type='MATERIALIZED_VIEW' THEN d.load_all_materialized_views
                     WHEN object_type='VIEW' THEN d.load_all_views
@@ -715,10 +722,8 @@ class FabricMetastore(ContextAwareBase):
                             AND NOT COALESCE(p.require_partition_filter,FALSE)) THEN 'APPEND'
                         ELSE 'OVERWRITE' END) AS load_type,
                 COALESCE(u.interval,x.default_interval,'AUTO') AS interval,
-
                 CASE WHEN (p.object_type='BASE_TABLE') THEN p.tbl_key_cols 
                     ELSE k.user_key_cols END AS primary_keys,
-
                 COALESCE(CAST(u.partition_enabled AS BOOLEAN), p.is_partitioned,FALSE) AS is_partitioned,
                 COALESCE(u.partition_column,p.partition_col,NULL) AS partition_column,
                 COALESCE(u.partition_type,p.partitioning_type,NULL) AS partition_type,
@@ -743,7 +748,10 @@ class FabricMetastore(ContextAwareBase):
                     CAST(x.default_explode_arrays AS BOOLEAN),FALSE) AS explode_arrays,
                 CASE WHEN p.enable_bigquery_export THEN
                     COALESCE(CAST(u.use_bigquery_export AS BOOLEAN), CAST(x.default_use_bigquery_export AS BOOLEAN),FALSE) 
-                    ELSE FALSE END AS use_bigquery_export,
+                    ELSE FALSE END AS use_bigquery_export,                
+                CASE WHEN p.enable_standard_api THEN
+                    COALESCE(CAST(u.use_standard_api AS BOOLEAN), CAST(x.default_use_standard_api AS BOOLEAN), FALSE) 
+                    ELSE FALSE END AS use_standard_api,
                 COALESCE(u.column_map,NULL) AS column_map,
                 CASE WHEN u.table_name IS NULL THEN FALSE ELSE TRUE END AS config_override,
                 'INIT' AS sync_state,
@@ -788,6 +796,7 @@ class FabricMetastore(ContextAwareBase):
                 t.table_maintenance_enabled=s.table_maintenance_enabled,
                 t.table_maintenance_interval=s.table_maintenance_interval,
                 t.use_bigquery_export=s.use_bigquery_export,
+                t.use_standard_api=s.use_standard_api,
                 t.config_path=s.config_path,
                 t.last_updated_dt=CURRENT_TIMESTAMP()
         WHEN MATCHED AND t.sync_state='INIT' THEN

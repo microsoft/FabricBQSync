@@ -572,6 +572,7 @@ class ConfigBQTableDefault (SyncBaseModel):
         FlattenInPlace (Optional[bool]): Whether to flatten nested structures in place, default is True.
         ExplodeArrays (Optional[bool]): Whether to explode array fields in the table, default is True.
         UseBigQueryExport (Optional[bool]): Whether to use BigQuery export features, default is False.
+        UseStandardAPI (Optional[bool]): Whether to use BigQuery Standard API, default is False.
         TableMaintenance (Optional[ConfigTableMaintenance]): Configuration for table maintenance operations.
     """
     ProjectID:Optional[str] = Field(alias="project_id", default=None)
@@ -588,6 +589,7 @@ class ConfigBQTableDefault (SyncBaseModel):
     FlattenInPlace:Optional[bool] = Field(alias="flatten_inplace", default=True)
     ExplodeArrays:Optional[bool] = Field(alias="explode_arrays", default=True)
     UseBigQueryExport:Optional[bool] = Field(alias="use_bigquery_export", default=False)
+    UseStandardAPI:Optional[bool] = Field(alias="use_standard_api", default=False)
     TableMaintenance:Optional[ConfigTableMaintenance] = Field(alias="table_maintenance", default=ConfigTableMaintenance())
 
 class ConfigBQTable (SyncBaseModel):
@@ -608,6 +610,7 @@ class ConfigBQTable (SyncBaseModel):
         FlattenInPlace (Optional[bool]): Whether to flatten nested structures in place, default is None.
         ExplodeArrays (Optional[bool]): Whether to explode array fields in the table, default is None.
         UseBigQueryExport (Optional[bool]): Whether to use BigQuery export features, default is False.
+        UseStandardAPI (Optional[bool]): Whether to use BigQuery Standard API, default is False.
         TableMaintenance (Optional[ConfigTableMaintenance]): Configuration for table maintenance operations.
         TableName (Optional[str]): The name of the BigQuery table.
         SourceQuery (Optional[str]): The SQL query used to populate the table.
@@ -632,6 +635,7 @@ class ConfigBQTable (SyncBaseModel):
     FlattenInPlace:Optional[bool] = Field(alias="flatten_inplace", default=None)
     ExplodeArrays:Optional[bool] = Field(alias="explode_arrays", default=None)
     UseBigQueryExport:Optional[bool] = Field(alias="use_bigquery_export", default=False)
+    UseStandardAPI:Optional[bool] = Field(alias="use_standard_api", default=False)
     TableMaintenance:Optional[ConfigTableMaintenance] = Field(alias="table_maintenance", default=ConfigTableMaintenance())
     TableName:Optional[str] = Field(alias="table_name", default=None)
     SourceQuery:Optional[str] = Field(alias="source_query", default=None)
@@ -666,6 +670,17 @@ class ConfigBQTable (SyncBaseModel):
         
         return keys
 
+class ConfigStandardAPIExportConfig(SyncBaseModel):
+    """
+    ConfigStandardAPIExportConfig is a configuration model for standard API export settings in BigQuery synchronization.
+    It includes options for result partitions and page size, which control how data is exported from BigQuery.
+    Attributes:
+        ResultPartitions (Optional[int]): The number of partitions to use for the result set, default is 1.
+        PageSize (Optional[int]): The size of each page of results, default is 100000.
+    """
+    ResultPartitions:Optional[int] = Field(alias="result_partitions", default=1)
+    PageSize:Optional[int] = Field(alias="page_size", default=100000)
+
 class ConfigOptimization(SyncBaseModel):
     """
     ConfigOptimization is a configuration model for optimization settings in BigQuery synchronization.
@@ -676,6 +691,7 @@ class ConfigOptimization(SyncBaseModel):
     """
     UseApproximateRowCounts:Optional[bool] = Field(alias="use_approximate_row_counts", default=True)
     DisableDataframeCache:Optional[bool] = Field(alias="disable_dataframe_cache", default=False)
+    StandardAPIExport:Optional[ConfigStandardAPIExportConfig] = Field(alias="standard_api_export", default=ConfigStandardAPIExportConfig())
 
 class ConfigObjectFilter(SyncBaseModel):
     """

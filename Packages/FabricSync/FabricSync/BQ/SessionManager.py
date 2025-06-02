@@ -109,7 +109,7 @@ class StaticSessionMeta(type):
         Returns:
             str: The log level.
         """
-        return cls.get_setting(SparkSessionConfig.LOG_LEVEL, SyncLogLevel.SYNC_STATUS)
+        return cls.get_setting(SparkSessionConfig.LOG_LEVEL, SyncLogLevel.SYNC_STATUS.name)
     
     @LogLevel.setter
     def LogLevel(cls, value:str):
