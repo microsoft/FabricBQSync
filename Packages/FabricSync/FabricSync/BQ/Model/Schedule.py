@@ -97,6 +97,7 @@ class SyncSchedule(SyncBaseModel):
         - TableColumns: A JSON string representing the columns in the table.
         - TotalTableTasks: The total number of tasks for the table.
         - IsEmpty: Indicates if the sync operation was skipped (no data to process).
+        - HasComplexTypes: Indicates the source data contains complex data types
         """
     EndTime:Optional[datetime] = Field(alias="completed", default=None)
     SourceRows:Optional[int] = Field(alias="source_rows", default=0)
@@ -163,6 +164,7 @@ class SyncSchedule(SyncBaseModel):
     ColumnMap:Optional[str] = Field(alias="column_map", default=None)
     TableColumns:Optional[str] = Field(alias="table_columns", default=None)   
     TotalTableTasks:Optional[int] = Field(alias="total_table_tasks", default=0) 
+    HasComplexTypes:Optional[bool] = Field(alias="has_complex_types", default=False)
 
     IsEmpty:bool = Field(alias="is_skipped", default=False) 
 
@@ -417,12 +419,13 @@ class SyncSchedule(SyncBaseModel):
         Returns:
             BigQueryAPI: The API to be used for the sync operation.
         """
-        if self.EnableBigQueryExport and self.UseBigQueryExport:
-            return BigQueryAPI.BUCKET
-        elif self.EnableStandardAPI and self.UseStandardAPI:
-            return BigQueryAPI.STANDARD
-        else:
-            return BigQueryAPI.STORAGE
+        if not self.HasComplexTypes:
+            if self.EnableBigQueryExport and self.UseBigQueryExport:
+                return BigQueryAPI.BUCKET
+            elif self.EnableStandardAPI and self.UseStandardAPI:
+                return BigQueryAPI.STANDARD
+        
+        return BigQueryAPI.STORAGE
 
     def UpdateRowCounts(self, src:int = 0, insert:int = 0, update:int = 0) -> None:
         """

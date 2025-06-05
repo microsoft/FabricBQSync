@@ -161,6 +161,25 @@ class FabricMetastore(ContextAwareBase):
             )
             WHERE row_num=1
         ),
+        complex_type_cols AS (
+            SELECT
+                sync_id,table_catalog, table_schema, table_name,
+                CASE 
+                    WHEN LOCATE('STRUCT', data_type) > 0 THEN 1 
+                    WHEN LOCATE('ARRAY', data_type) > 0 THEN 1 
+                    WHEN LOCATE('MAP', data_type) > 0 THEN 1 
+                    ELSE 0 END AS is_complex_type
+            FROM dbo.information_schema_columns
+        ),
+        complex_types AS (
+            SELECT 
+                sync_id,table_catalog, table_schema, table_name, 
+                CASE 
+                    WHEN SUM(is_complex_type) > 0 THEN TRUE
+                    ELSE FALSE END AS has_complex_types
+            FROM complex_type_cols
+            GROUP BY sync_id,table_catalog, table_schema, table_name
+        ),
         tbl_options AS (
             SELECT sync_id,table_catalog,table_schema,table_name,CAST(option_value AS boolean) AS option_value
             FROM information_schema_table_options
@@ -257,6 +276,7 @@ class FabricMetastore(ContextAwareBase):
             COALESCE(ts.size_priority,100) AS size_priority,
             tc.table_columns,
             COALESCE(h.mirror_file_index,1) AS mirror_file_index,
+            COALESCE(xt.has_complex_types, FALSE) AS has_complex_types,
             COUNT(*) OVER(PARTITION BY c.sync_id,c.table_id) AS total_table_tasks
         FROM sync_configuration c
         JOIN sync_schedule s ON c.sync_id=s.sync_id AND c.table_id=s.table_id
@@ -269,6 +289,8 @@ class FabricMetastore(ContextAwareBase):
             AND c.dataset=ts.table_schema AND c.table_name=ts.table_name
         LEFT JOIN tbl_columns tc ON c.sync_id=tc.sync_id AND c.project_id=tc.table_catalog 
             AND c.dataset=tc.table_schema AND c.table_name=tc.table_name
+        LEFT JOIN complex_types xt ON c.sync_id=xt.sync_id AND c.project_id=xt.table_catalog 
+            AND c.dataset=xt.table_schema AND c.table_name=xt.table_name
         CROSS JOIN user_config uc
         WHERE s.status IN ('SCHEDULED','FAILED') AND c.enabled=TRUE AND t.schedule_id IS NULL
             AND c.sync_id='{cls.ID}'
@@ -1285,4 +1307,4 @@ class FabricMetastore(ContextAwareBase):
         """
         cls.create_userconfig_tables_proxy_view()        
         cls.create_userconfig_tables_cols_proxy_view()
-        cls.create_autodetect_view()     
+        cls.create_autodetect_view()   

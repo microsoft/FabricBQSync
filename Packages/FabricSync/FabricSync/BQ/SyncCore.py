@@ -41,7 +41,7 @@ class ConfigBase(ContextAwareBase):
                 case _:
                     df = bq_client.read_from_storage_api(query)
 
-            if query.Cached:
+            if df and query.Cached:
                 df.cache()
         except Exception as e:
             raise BQConnectorError(msg=f"Read to dataframe failed: {e}", query=query) from e

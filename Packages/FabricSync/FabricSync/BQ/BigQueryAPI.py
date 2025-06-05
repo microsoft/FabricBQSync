@@ -77,10 +77,12 @@ class BigQueryClient(ContextAwareBase):
         cfg = self.__get_bq_reader_config(query)
 
         if self.UserConfig.GCP.API.ForceBQJobConfig:
+            self.Logger.debug(f"BQ STORAGE API - FORCE JOB CONFIG...")
             dataset_id, table_id = self.__submit_bq_query_job(cfg["bigQueryJobLabel.msjobclient"], query)
 
             del cfg["filter"]
             cfg["dataset"] = dataset_id
+
             q = table_id
         else:
             q = query.TableName if not query.Query else query.Query
@@ -88,7 +90,12 @@ class BigQueryClient(ContextAwareBase):
             if query.Predicate:
                 q = self.__build_bq_query(query)
 
-        return self.Context.read.format("bigquery").options(**cfg).load(q)
+        df = self.Context.read.format("bigquery").options(**cfg).load(q)
+
+        if df.isEmpty():
+            return None
+
+        return df 
 
     def __submit_bq_query_job(self, client_id:str, query:BQQueryModel):
         """
@@ -149,7 +156,12 @@ class BigQueryClient(ContextAwareBase):
         
         self.__export_bq_table(query, gcs_path)
 
-        return self.Context.read.format("parquet").load(gcs_path)
+        df = self.Context.read.format("parquet").load(gcs_path)
+
+        if df.isEmpty():
+            return None
+
+        return df 
 
     def read_from_standard_export(self, query:BQQueryModel) -> DataFrame:
         """
@@ -358,7 +370,7 @@ class BigQueryStandardExport(BigQueryStandardClient):
             max_results=self.page_size
             ).to_dataframe()
         
-        if not df.empty:
+        if len(df) > 0:
             row_count = len(df)
             sdf = self.Context.createDataFrame(df)
 
@@ -408,6 +420,10 @@ class BigQueryStandardExport(BigQueryStandardClient):
 
             if not processor.has_exceptions:
                 self.Logger.debug(f"STANDARD API EXPORT - SUCCESS - CLIENT ({self._client_id}) - JOB ({self.__job_id}) - EXPORTED {self.__export_row_count} ROWS...")
+
+                if self.__data_df.isEmpty():
+                    return None
+
                 return self.__data_df.repartition(num_partitions)
             else:
                 self.Logger.debug(f"STANDARD API EXPORT - CLIENT ({self._client_id}) - JOB ({self.__job_id}) - FAILED...")
