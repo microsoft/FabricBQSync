@@ -428,6 +428,7 @@ class ConfigGCPAPI(SyncBaseModel):
         Endpoint (Optional[str]): The API endpoint for GCP services.
         UseStandardAPI (Optional[bool]): Flag indicating whether to use the standard API (default: False).
         EnableBigQueryExport (Optional[bool]): Flag indicating whether to enable BigQuery export (default: False).
+        ForceBQJobConfig (Optional[bool]): Flag indicating whether to force BigQuery job configuration (default: False).
         AutoSelect (Optional[bool]): Flag indicating whether to automatically select the API (default: False).
         UseCDC (Optional[bool]): Flag indicating whether to use Change Data Capture (CDC) (default: True).
         MaterializationProjectID (Optional[str]): The project ID for materialization, if applicable.
@@ -436,6 +437,7 @@ class ConfigGCPAPI(SyncBaseModel):
     """
     UseStandardAPI:Optional[bool] = Field(alias="use_standard_api", default=False)
     EnableBigQueryExport:Optional[bool] = Field(alias="enable_bigquery_export", default=False)
+    ForceBQJobConfig:Optional[bool] = Field(alias="force_bq_job_config", default=False)
     AutoSelect:Optional[bool] = Field(alias="auto_select", default=False)
     UseCDC:Optional[bool] = Field(alias="use_cdc", default=True)
     MaterializationProjectID:Optional[str] = Field(alias="materialization_project_id", default=None)

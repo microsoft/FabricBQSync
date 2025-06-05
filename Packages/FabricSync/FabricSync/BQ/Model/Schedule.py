@@ -83,6 +83,10 @@ class SyncSchedule(SyncBaseModel):
         - ExplodeArrays: Indicates if arrays should be exploded.
         - UseBigQueryExport: Indicates if BigQuery export should be used.
         - EnableBigQueryExport: Indicates if BigQuery export is enabled at the app level.
+        - UseStandardAPI: Indicates if the standard API should be used.
+        - EnableStandardAPI: Indicates if the standard API is enabled at the app level.
+        - AutoSelectAPI: Indicates if the API should be auto-selected based on conditions.
+        - SyncAPI: The API used for the sync operation (e.g., STORAGE, STANDARD, BUCKET).
         - Keys: List of primary keys for the sync.
         - TotalRows: The total number of rows in the table.
         - TotalLogicalMb: The total logical size of the table in MB.
@@ -147,6 +151,9 @@ class SyncSchedule(SyncBaseModel):
     ExplodeArrays:Optional[bool] = Field(alias="explode_arrays", default=False)    
     UseBigQueryExport:Optional[bool] = Field(alias="use_bigquery_export", default=False)
     EnableBigQueryExport:Optional[bool] = Field(alias="enable_bigquery_export", default=False)
+    UseStandardAPI:Optional[bool] = Field(alias="use_standard_api", default=False)
+    EnableStandardAPI:Optional[bool] = Field(alias="enable_standard_api", default=False)
+    AutoSelectAPI:Optional[bool] = Field(alias="auto_select_api", default=False)    
     Keys:Optional[List[str]] = Field(alias="primary_keys", default=[])
     TotalRows:Optional[int] = Field(alias="total_rows", default=0)
     TotalLogicalMb:Optional[int] = Field(alias="total_logical_mb", default=0)
@@ -402,8 +409,18 @@ class SyncSchedule(SyncBaseModel):
 
     @property
     def SyncAPI(self) -> BigQueryAPI:
+        """
+        Determines the API to be used for the sync operation based on the configuration settings.
+        It checks the EnableBigQueryExport and UseBigQueryExport flags to decide if the BigQuery export API should be used.
+        If the EnableStandardAPI and UseStandardAPI flags are set, it uses the Standard API.
+        If neither of these conditions are met, it defaults to using the Storage API.
+        Returns:
+            BigQueryAPI: The API to be used for the sync operation.
+        """
         if self.EnableBigQueryExport and self.UseBigQueryExport:
             return BigQueryAPI.BUCKET
+        elif self.EnableStandardAPI and self.UseStandardAPI:
+            return BigQueryAPI.STANDARD
         else:
             return BigQueryAPI.STORAGE
 

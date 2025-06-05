@@ -6,13 +6,18 @@ build-backend = "setuptools.build_meta"
 name = "FabricSync"
 version = "2.2.0"
 dependencies = [
-  "PyJWT>=2.6.0",
-  "pydantic>=2.10.6",
-  "pygithub>=2.5.0",
-  "mlflow-skinny>=2.20.0",
-  "google-cloud-bigquery>=3.29.0",
-  "google-cloud-storage>=3.1.0",
-  "db-dtypes>=1.4.0"
+  "virtualenv",
+  "fsspec-wrapper",
+  "nni",
+  "datasets",
+  "mlflow-skinny",
+  "db-dtypes",
+  "google-cloud-bigquery",
+  "google-cloud-storage",
+  "pydantic",
+  "pygithub",
+  "pyspark",
+  "delta-spark"
 ]
 requires-python = ">=3.11.8"
 authors = [

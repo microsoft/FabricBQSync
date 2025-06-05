@@ -166,7 +166,7 @@ class BQMetadataLoader(ConfigBase):
 
         bql = schema_model.get_base_sql(self.ID, project, dataset, alias="c")
         bql = bql + \
-            f" JOIN {project}.{dataset}.{SchemaView.INFORMATION_SCHEMA_TABLES} t ON t.table_catalog=c.table_catalog AND t.table_schema=c.table_schema AND t.table_name=c.table_name"
+            f" JOIN `{project}.{dataset}.{SchemaView.INFORMATION_SCHEMA_TABLES}` t ON t.table_catalog=c.table_catalog AND t.table_schema=c.table_schema AND t.table_name=c.table_name"
 
         if self.UserConfig.GCP.API.UseStandardAPI:
             bq_api = BigQueryAPI.STANDARD

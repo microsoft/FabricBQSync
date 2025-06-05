@@ -1,7 +1,7 @@
-from pyspark.sql import (
+from pyspark.sql import ( # type: ignore
     DataFrame, Observation
 )
-from pyspark.sql.functions import (
+from pyspark.sql.functions import ( # type: ignore
     col, lit, count, max
 )
 from datetime import (
@@ -11,7 +11,7 @@ from typing import (
     Tuple, Dict
 )
 from threading import Lock
-from delta.tables import DeltaTable
+from delta.tables import DeltaTable # type: ignore
 import json
 import base64 as b64
 
@@ -35,6 +35,7 @@ from FabricSync.BQ.Enum import (
     BigQueryAPI
 )
 from FabricSync.BQ.Core import DeltaTableMaintenance
+from FabricSync.BQ.GoogleStorageAPI import BucketStorageClient
 
 class BQDataProxy(ConfigBase):
     def __init__(self, schedule:SyncSchedule) -> None:

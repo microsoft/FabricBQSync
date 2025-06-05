@@ -1,8 +1,8 @@
 from pyspark.sql.session import DataFrame # type: ignore
-from pyspark.sql.types  import (
+from pyspark.sql.types  import (  # type: ignore
     StructType, StructField, StringType, BooleanType, 
     IntegerType, LongType, TimestampType, ArrayType
-) # type: ignore
+)
 from typing import List
 from delta.tables import DeltaTable  # type: ignore
 import functools
@@ -18,7 +18,7 @@ class FabricMetastoreSchema():
     sync_data_expiration=StructType([StructField('sync_id',StringType(),True),StructField('table_catalog',StringType(),True),StructField('table_schema',StringType(),True),StructField('table_name',StringType(),True),StructField('partition_id',StringType(),True),StructField('expiration',TimestampType(),True)])
     sync_maintenance=StructType([StructField('sync_id',StringType(),True),StructField('table_id',StringType(),True),StructField('project_id',StringType(),True),StructField('dataset',StringType(),True),StructField('table_name',StringType(),True),StructField('partition_id',StringType(),True),StructField('lakehouse',StringType(),True),StructField('lakehouse_schema',StringType(),True),StructField('lakehouse_table_name',StringType(),True),StructField('lakehouse_partition',StringType(),True),StructField('row_count',LongType(),True),StructField('table_partition_size',LongType(),True),StructField('last_maintenance_type',StringType(),True),StructField('last_maintenance_interval',StringType(),True),StructField('last_maintenance',TimestampType(),True),StructField('last_optimize',TimestampType(),True),StructField('last_vacuum',TimestampType(),True),StructField('last_maintenance_status',StringType(),True),StructField('created_dt',TimestampType(),True),StructField('last_updated_dt',TimestampType(),True)])
     sync_schedule=StructType([StructField('group_schedule_id',StringType(),True),StructField('schedule_id',StringType(),True),StructField('sync_id',StringType(),True),StructField('table_id',StringType(),True),StructField('project_id',StringType(),True),StructField('dataset',StringType(),True),StructField('table_name',StringType(),True),StructField('schedule_type',StringType(),True),StructField('scheduled',TimestampType(),True),StructField('status',StringType(),True),StructField('started',TimestampType(),True),StructField('completed',TimestampType(),True),StructField('completed_activities',IntegerType(),True),StructField('failed_activities',IntegerType(),True),StructField('max_watermark',StringType(),True),StructField('mirror_file_index',LongType(),True),StructField('priority',IntegerType(),True)])
-    sync_schedule_telemetry=StructType([StructField('schedule_id',StringType(),True),StructField('sync_id',StringType(),True),StructField('table_id',StringType(),True),StructField('project_id',StringType(),True),StructField('dataset',StringType(),True),StructField('table_name',StringType(),True),StructField('partition_id',StringType(),True),StructField('status',StringType(),True),StructField('started',TimestampType(),True),StructField('completed',TimestampType(),True),StructField('src_row_count',LongType(),True),StructField('inserted_row_count',LongType(),True),StructField('updated_row_count',LongType(),True),StructField('delta_version',LongType(),True),StructField('spark_application_id',StringType(),True),StructField('max_watermark',StringType(),True),StructField('summary_load',StringType(),True),StructField('source_query',StringType(),True),StructField('source_predicate',StringType(),True),StructField('mirror_file_index',LongType(),True)])
+    sync_schedule_telemetry=StructType([StructField('schedule_id',StringType(),True),StructField('sync_id',StringType(),True),StructField('table_id',StringType(),True),StructField('project_id',StringType(),True),StructField('dataset',StringType(),True),StructField('table_name',StringType(),True),StructField('partition_id',StringType(),True),StructField('status',StringType(),True),StructField('started',TimestampType(),True),StructField('completed',TimestampType(),True),StructField('src_row_count',LongType(),True),StructField('inserted_row_count',LongType(),True),StructField('updated_row_count',LongType(),True),StructField('delta_version',LongType(),True),StructField('spark_application_id',StringType(),True),StructField('max_watermark',StringType(),True),StructField('summary_load',StringType(),True),StructField('source_query',StringType(),True),StructField('source_predicate',StringType(),True),StructField('mirror_file_index',LongType(),True),StructField('bq_api',StringType(),True)])
 
 class Metastore():
     def Retry(func_=None,max_retries:int=3,backoff_factor:int=2):
@@ -223,7 +223,10 @@ class FabricMetastore(ContextAwareBase):
             FROM sorted_columns
         ),
         user_config AS (
-            SELECT gcp.api.enable_bigquery_export AS enable_bigquery_export
+            SELECT 
+                gcp.api.enable_bigquery_export AS enable_bigquery_export,
+                gcp.api.use_standard_api AS enable_standard_api,
+                gcp.api.auto_select AS auto_select_api
             FROM user_config_json
         )
 
@@ -239,7 +242,9 @@ class FabricMetastore(ContextAwareBase):
             c.flatten_table,c.flatten_inplace,
             COALESCE(uc.enable_bigquery_export, FALSE) AS enable_bigquery_export, 
             COALESCE(c.use_bigquery_export, FALSE) AS use_bigquery_export,
+            COALESCE(uc.enable_standard_api, FALSE) AS enable_standard_api,
             COALESCE(c.use_standard_api, FALSE) AS use_standard_api,
+            COALESCE(uc.auto_select_api, FALSE) AS auto_select_api,
             c.explode_arrays,
             c.primary_keys,
             p.partition_id,p.require_partition_filter,
@@ -1280,4 +1285,4 @@ class FabricMetastore(ContextAwareBase):
         """
         cls.create_userconfig_tables_proxy_view()        
         cls.create_userconfig_tables_cols_proxy_view()
-        cls.create_autodetect_view()       
+        cls.create_autodetect_view()     

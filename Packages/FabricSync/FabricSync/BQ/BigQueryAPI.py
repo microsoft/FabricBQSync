@@ -12,13 +12,11 @@ from google.cloud import bigquery
 from google.oauth2.service_account import Credentials as gcpCredentials # type: ignore
 
 from FabricSync.BQ.Core import ContextAwareBase
-from FabricSync.BQ.Utils import Util
 from FabricSync.BQ.Model.Core import BQQueryModel
 from FabricSync.BQ.Model.Config import ConfigDataset
 from FabricSync.BQ.Validation import SqlValidator
 from FabricSync.BQ.GoogleStorageAPI import BucketStorageClient
 from FabricSync.BQ.Threading import QueueProcessor
-from FabricSync.BQ.Logging import SyncLogger
 
 class BigQueryClient(ContextAwareBase):
     def __init__(self, config:ConfigDataset) -> None:
@@ -29,26 +27,22 @@ class BigQueryClient(ContextAwareBase):
 
     def __get_bq_reader_config(self, query:BQQueryModel) -> dict:
         """
-        Returns the configuration dictionary for the BigQuery Spark Connector.
+        Returns the configuration for reading from BigQuery.
         Parameters:
-            partition_filter (str, optional): Filter for tables that have mandatory partition filters or when reading table partitions.
+            query (BQQueryModel): The query model.
         Returns:
-            dict: Configuration dictionary containing Spark Reader options for the BigQuery Spark Connector, including:
-                - credentials: GCP service account credentials.
-                - viewsEnabled: Set to "true" to enable reading queries, views, or information schema.
-                - materializationProject (optional): Billing project ID where views will be materialized to temporary tables for storage API.
-                - materializationDataset (optional): Dataset where views will be materialized to temporary tables for storage API.
-                - parentProject (optional): Billing project ID for API transaction costs, defaults to service account project ID if not specified.
-                - filter (optional): Filter for tables that have mandatory partition filters or when reading table partitions.
+            dict: The configuration dictionary including project, dataset, credentials, and other options.
         """
         cfg = {
             "project": query.ProjectId,
             "dataset": query.Dataset,
             "credentials" : self.GCPCredential,
             "viewsEnabled" : "true",
-            "traceJobId" : f"FABRIC_SYNC_{self.ID}_{uuid.uuid4()}",
+            "traceJobId" : f"FABRIC_SYNC_JOB_{uuid.uuid4()}".lower(),
             "bigQueryJobLabel.msjobtype": "fabricsync",
-            "bigQueryJobLabel.msjobgroup": Util.remove_special_characters(self.ID.lower())
+            "bigQueryJobLabel.msjobgroup": self.SafeID,
+            "bigQueryJobLabel.msclienttype": "spark",
+            "bigQueryJobLabel.msjobclient": f"FABRIC_SYNC_CLIENT_{uuid.uuid4()}".lower()
         }
     
         if self.UserConfig.GCP.API.MaterializationProjectID:
@@ -79,14 +73,52 @@ class BigQueryClient(ContextAwareBase):
         Returns:
             DataFrame: The DataFrame.
         """
+        self.Logger.debug(f"BQ STORAGE API...")
         cfg = self.__get_bq_reader_config(query)
-        q = query.TableName if not query.Query else query.Query
 
-        if query.Predicate:
-            q = self.__build_bq_query(query)
+        if self.UserConfig.GCP.API.ForceBQJobConfig:
+            dataset_id, table_id = self.__submit_bq_query_job(cfg["bigQueryJobLabel.msjobclient"], query)
 
-        #print(q)
+            del cfg["filter"]
+            cfg["dataset"] = dataset_id
+            q = table_id
+        else:
+            q = query.TableName if not query.Query else query.Query
+
+            if query.Predicate:
+                q = self.__build_bq_query(query)
+
         return self.Context.read.format("bigquery").options(**cfg).load(q)
+
+    def __submit_bq_query_job(self, client_id:str, query:BQQueryModel):
+        """
+        Submits a BigQuery query job using the provided query model and client ID.
+        Parameters:
+            client_id (str): The client ID.
+            query (BQQueryModel): The query model containing the project ID, dataset, and other details.
+        Returns:
+            str: The table ID of the destination table where the query results are stored.
+        """
+        self.Logger.debug(f"BQ SUBMIT QUERY JOB...")
+        sql = self.__build_bq_query(query)
+        bq_client = BigQueryStandardClient(query.ProjectId, self.GCPCredential)
+
+        job_config = bigquery.QueryJobConfig(
+            allow_large_results=True,
+            labels={
+                'msjobtype': 'fabricsync',
+                'msjobgroup': self.SafeID,
+                'msclienttype': 'standard',
+                'msjobclient': client_id
+            }
+        )
+
+        query_job = bq_client.run_query(sql, job_cfg=job_config)
+        query_job.result()
+
+        self.Logger.debug(f"BQ SUBMIT QUERY JOB - TEMP TABLE - {query_job.destination.dataset_id}.{query_job.destination.table_id}...")
+
+        return (query_job.destination.dataset_id, query_job.destination.table_id)
 
     def read_from_standard_api(self, query:BQQueryModel, schema:StructType = None) -> DataFrame:
         """
@@ -97,6 +129,7 @@ class BigQueryClient(ContextAwareBase):
         Returns:
             DataFrame: The DataFrame.
         """
+        self.Logger.debug(f"BQ STANDARD API...")
         sql_query = self.__build_bq_query(query)
         bq_client = BigQueryStandardClient(query.ProjectId, self.GCPCredential)
 
@@ -106,10 +139,11 @@ class BigQueryClient(ContextAwareBase):
         """
         Reads the data from the given BigQuery query into a DataFrame using the exported bucket.
         Parameters:
-            query (BQQueryModel): The query model.
+            query (BQQueryModel): The query model.\
         Returns:
             DataFrame: The DataFrame.
         """
+        self.Logger.debug(f"BQ EXPORTED BUCKET...")
         bucket_client = BucketStorageClient(self.UserConfig, self.GCPCredential)
         gcs_path = bucket_client.get_storage_path(query.ScheduleId, query.TaskId)
         
@@ -125,6 +159,7 @@ class BigQueryClient(ContextAwareBase):
         Returns:
             DataFrame: The DataFrame.
         """
+        self.Logger.debug(f"BQ STANDARD API EXPORT...")
         sql_query = self.__build_bq_query(query)
         bq_client = BigQueryStandardExport(query.ProjectId, self.GCPCredential)
 
@@ -152,7 +187,7 @@ class BigQueryClient(ContextAwareBase):
         {self.__build_bq_query(query)}
         """
         
-        #print(export_query)
+        self.Logger.debug(f"BQ EXPORT QUERY -> {export_query}")
 
         query_job = bq_client.run_query(export_query)
         query_job.result()
@@ -188,6 +223,8 @@ class BigQueryClient(ContextAwareBase):
             else:
                 sql = f"{sql} {predicates}"
 
+        self.Logger.debug(f"BQ QUERY -> {sql}")
+
         return sql
 
 class BigQueryStandardClient(ContextAwareBase):
@@ -201,6 +238,16 @@ class BigQueryStandardClient(ContextAwareBase):
         self.credentials = credentials
         self.project_id = project_id
         self.__client:bigquery.Client = None
+
+        self._client_id = f"FABRIC_SYNC_CLIENT_{uuid.uuid4()}"
+
+    def generate_job_id(self) -> str:
+        """
+        Generates a unique job ID for the BigQuery job.
+        Returns:
+            str: A unique job ID in the format "FABRIC_SYNC_JOB_<uuid>".
+        """
+        return f"FABRIC_SYNC_JOB_{uuid.uuid4()}".lower()
 
     @property
     def _client(self) -> bigquery.Client:
@@ -229,22 +276,36 @@ class BigQueryStandardClient(ContextAwareBase):
             allow_large_results=True,
             labels={
                 'msjobtype': 'fabricsync',
-                'msjobgroup': Util.remove_special_characters(self.ID.lower())
+                'msjobgroup': self.SafeID,
+                'msclienttype': 'standard',
+                'msjobclient': self._client_id.lower()
             }
         )
 
-    def run_query(self, sql:str):
+    def run_query(self, sql:str, job_id:str = None, job_cfg:bigquery.QueryJobConfig = None):
         """
         Runs the given SQL query using the BigQuery client.
         Args:
             sql (str): The SQL query to run.
+            job_id (str, optional): The job ID for the query. If not provided, a new job ID is generated.
+            job_cfg (bigquery.QueryJobConfig, optional): The job configuration for the query. If not provided, the default job configuration is used.
         Returns:
             bigquery.QueryJob: The query job object containing the results of the query.
         """
+        if not job_id:
+            job_id = self.generate_job_id()
+
+        if not job_cfg:
+            job_cfg = self._job_config
+        
+        self._job_client_id = f"FABRIC_SYNC_{self.SafeID}_{uuid.uuid4()}"
+        
+        self.Logger.debug(f"STANDARD API - QUERY - CLIENT ({self._client_id}) - JOB ({job_id}) - {sql}")
+
         query = self._client.query(sql, 
-            job_id=f"FABRIC_SYNC_{self.ID}_{uuid.uuid4()}", 
+            job_id=job_id.lower(), 
             job_retry=None,
-            job_config=self._job_config)
+            job_config=job_cfg)
             
         return query
 
@@ -257,9 +318,12 @@ class BigQueryStandardClient(ContextAwareBase):
         Returns:
             DataFrame: The DataFrame.
         """
-        bq = self.run_query(sql).to_dataframe()
+        job_id = self.generate_job_id()
 
-        if not bq.empty:
+        self.Logger.debug(f"STANDARD API - TO_DATAFRAME - CLIENT ({self._client_id}) - JOB ({job_id})")
+        bq = self.run_query(sql, job_id).to_dataframe()
+
+        if len(bq) > 0:
             return self.Context.createDataFrame(bq, schema=schema)
         else:
             return None
@@ -278,7 +342,7 @@ class BigQueryStandardExport(BigQueryStandardClient):
         self.__data_df:DataFrame = None
         self.__export_row_count = 0
         self.__lock = Lock()
-        self.__log = SyncLogger.getLogger()
+        self.__job_id = self.generate_job_id()
 
     def __process_page(self, page:int):
         """
@@ -286,7 +350,7 @@ class BigQueryStandardExport(BigQueryStandardClient):
         Args:
             page (int): The page number to process.
         """
-        self.__log.sync_status(f"STANDARD API EXPORT - PROCESSING PAGE - {page}...", verbose=False)
+        self.Logger.debug(f"STANDARD API EXPORT - PROCESSING PAGE - CLIENT ({self._client_id}) - JOB ({self.__job_id}) - {page}...")
 
         df = self.__query_job.result(
             page_size=self.page_size,
@@ -311,7 +375,7 @@ class BigQueryStandardExport(BigQueryStandardClient):
         Args:
             value (Exception): The exception raised by the thread.
         """
-        self.__log.error(f"STANDARD API EXPORT - THREAD ERROR - {value}...", verbose=False)
+        self.Logger.error(f"STANDARD API EXPORT - THREAD ERROR - CLIENT ({self._client_id}) - JOB ({self.__job_id}) - {value}...")
     
     def export(self, sql:str, num_threads:int = 10, num_partitions:int = 1, page_size:int = 100000) -> DataFrame:
         """
@@ -325,7 +389,7 @@ class BigQueryStandardExport(BigQueryStandardClient):
             DataFrame: The DataFrame containing the exported data.
         """
         self.page_size = page_size
-        self.__query_job = self.run_query(sql)
+        self.__query_job = self.run_query(sql, self.__job_id)
         results = self.__query_job.result()
 
         total_rows = results.total_rows
@@ -337,16 +401,14 @@ class BigQueryStandardExport(BigQueryStandardClient):
         while(rows <= total_rows):
             rows = page * self.page_size
             processor.put(page)
-
-            #print(f"{page}-{(page - 1) * self.page_size}-{rows}-{total_rows}")
             page += 1 
         
         if not processor.empty():
             processor.process(self.__process_page, self.__thread_exception_handler)
 
             if not processor.has_exceptions:
-                self.__log.sync_status(f"STANDARD API EXPORT - SUCCESS - EXPORTED {self.__export_row_count} ROWS...", verbose=False)
+                self.Logger.debug(f"STANDARD API EXPORT - SUCCESS - CLIENT ({self._client_id}) - JOB ({self.__job_id}) - EXPORTED {self.__export_row_count} ROWS...")
                 return self.__data_df.repartition(num_partitions)
             else:
-                self.__log.sync_status(f"STANDARD API EXPORT - FAILED...", verbose=False)
+                self.Logger.debug(f"STANDARD API EXPORT - CLIENT ({self._client_id}) - JOB ({self.__job_id}) - FAILED...")
                 return None
