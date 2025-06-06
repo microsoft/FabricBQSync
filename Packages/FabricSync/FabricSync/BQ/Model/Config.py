@@ -425,7 +425,6 @@ class ConfigGCPAPI(SyncBaseModel):
     ConfigGCPAPI is a configuration model for Google Cloud Platform (GCP) API settings.
     It includes fields for specifying the API endpoint, whether to use the standard API, and options for BigQuery export.
     Attributes:
-        Endpoint (Optional[str]): The API endpoint for GCP services.
         UseStandardAPI (Optional[bool]): Flag indicating whether to use the standard API (default: False).
         EnableBigQueryExport (Optional[bool]): Flag indicating whether to enable BigQuery export (default: False).
         ForceBQJobConfig (Optional[bool]): Flag indicating whether to force BigQuery job configuration (default: False).
@@ -435,7 +434,7 @@ class ConfigGCPAPI(SyncBaseModel):
         MaterializationDataset (Optional[str]): The dataset for materialization, if applicable.
         BillingProjectID (Optional[str]): The project ID for billing purposes, if applicable.
     """
-    UseStandardAPI:Optional[bool] = Field(alias="use_standard_api", default=False)
+    UseStandardAPI:Optional[bool] = Field(alias="use_standard_api", default=True)
     EnableBigQueryExport:Optional[bool] = Field(alias="enable_bigquery_export", default=False)
     ForceBQJobConfig:Optional[bool] = Field(alias="force_bq_job_config", default=False)
     AutoSelect:Optional[bool] = Field(alias="auto_select", default=False)

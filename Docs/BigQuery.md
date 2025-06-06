@@ -3,6 +3,7 @@ There are only a few requirements needed to enable Fabric Sync.
 1. BigQuery Storage API - enabled by default for all GCP Projects where BigQuery is enabled.
 2. GCP Service Account 
 3. Service Account Permissions
+4. GCP Storage Bucket (when using BQ EXPORT DATA to sync data)
 
 ### GCP Service Account
 The Fabric Sync accelerator uses GCP Service Accounts for authentication and authorization to GCP and required BigQuery data and APIs. 
@@ -22,6 +23,13 @@ Additionally, the Service Account needs the following:
 
 ### APIs
 Fabric Sync is capable of using both the BigQuery Storage API and the standard BigQuery API. The Storage API is the default API used for all BQ operations. To learn about how and when the standard BigQuery API can be used by the accelerator please see the [Optimization](Optimizations.md) documentation.
+
+### BQ EXPORT DATA and GCP Buckets
+The BigQuery EXPORT DATA statement exports query results using a BigQuery Job to a storage bucket (and other cloud stores). The Fabric Sync Accelerator uses EXPORT DATA to sync incremental data to cloud storage in PARQUET format. The PARQUET data is then moved to either a OneLake Lakehouse or Fabric Mirrored Database (depending on configuration).
+
+Using EXPORT DATA requires a GCP Storage Bucket where with the following requirements:
+1. The Fabric Sync Service Account has the <code>roles/storage.objectAdmin</code> and <code>roles/storage.admin</code> roles.
+2. The Protection Policy is set to disable disable Soft Deletes.
 
 ### BigQuery Spark Connector
 

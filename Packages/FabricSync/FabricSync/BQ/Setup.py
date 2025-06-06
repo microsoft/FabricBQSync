@@ -177,7 +177,7 @@ class Installer(ContextAwareBase):
                     "materialization_project_id": self._data["gcp_project_id"],
                     "materialization_dataset": self._data["gcp_dataset_id"],
                     "billing_project_id": self._data["gcp_project_id"],
-                    "use_standard_api": False
+                    "use_standard_api": True
                 },
                 "projects": [
                 {

@@ -56,6 +56,82 @@ To enable this optimize, enable <code>use_standard_api</code> flag in the user c
     }
 </code>
 
+### Big Query Standard API for Data Sync
+For BQ Tables, Views and Materialized Views that are small to moderate in size, the BQ Standard API can be enabled to sync data fast and in a cost effective manner. Data Sync through the API uses paging where multiple threads are used to read pages in parallel for fast-data synchronization. 
+
+To enable at the table-level, the gcp/api <code>use_standard_api</code> setting reference above must first be enabled.
+
+The <code>use_standard_api</code> setting can then be added to the table_defaults or tables configuration as required to direct the Fabric Sync Accelerator to use the Standard API for data sync.
+
+**Configuration Example:**
+
+<code>
+    "table_defaults": {
+	    "use_standard_api": true
+        ...
+    },
+    ...
+    "tables": [
+        {
+            "project_id": "Project1",
+            "dataset"; "DatasetA",
+		    "table_name": "TableA",
+            "use_standard_api": true
+            ...
+        }
+    ]
+</code>
+
+The behavior of the Standard API can be tuned with the following settings:
+- <code>result_partitions</code> - used to control/reduce the number of partitions that result from paged reads. Defaults to 1.
+- <code>page_size</code> - number of rows to read per page. Defaults to 100,000.
+
+### BigQuery EXPORT DATA
+An alternate approach to reading data directly through the BigQuery Storage API is to use the BigQuery EXPORT DATA statement. The EXPORT DATA statement uses a BQ Job to export data to a GCP Bucket. The exported data is then read efficiently from the Bucket.
+
+This approach performs similarly to the Storage API without incurring the higher Storage API transaction/egress costs.
+
+<mark>Note - the EXPORT DATA runs BQ Jobs and is subject to the BigQuery Jobs limits</mark>
+
+EXPORT DATA can be enabled at the table-level or set as a table_default.
+
+To enable this:
+1. In the gcp/api config, set <code>enable_bigquery_export</code> to <code>TRUE</code>.
+2. Define the gcp/storage configuration:
+    <code>
+    "gcp_storage": {
+        "project_id": "my-project-id",
+		"bucket_uri": "mybucketuri",
+		"prefix_path": "myfolderpath",
+		"enable_cleanup": true
+	}
+    </code>
+3. Enable at the table-level or set as the table_default:
+    <code>
+    "table_defaults": {
+	    "use_bigquery_export": true
+        ...
+    },
+    ...
+    "tables": [
+        {
+            "project_id": "Project1",
+            "dataset"; "DatasetA",
+		    "table_name": "TableA",
+            "use_bigquery_export": true
+            ...
+        }
+    ]
+    </code>
+
+### Force Job_Config for Spark Connector/Storage API
+In some cases, syncing large data volumes through the Storage API can fail when data is retrieved from a View. To support this scenario its necessary to specify the job_config which the BQ Spark Connector currently does not support.
+
+To force the job_config, the Fabric Sync Accelerator will pre-submit a BQ job with the required job config before reading the results from the resulting destination table.
+
+To enable:
+ - Set the gcp/api <code>force_bq_job_config</code> setting to <code>TRUE</code>.
+
 ### Disable Spark Dataframe Caching
 The accelerator makes use of Spark dataframe caching to avoid multiple roundtrips to BigQuery. In a limited number of cases when syncing very large datasets, it is beneficial for a performance perspective to disable caching on the Spark side and allow the roundtrip back to BigQuery when required.
 This is most common during initial syncs for very large datasets. To use this optimization, set the <code>disable_dataframe_cache</code> flag as seen below.

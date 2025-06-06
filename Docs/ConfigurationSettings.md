@@ -132,7 +132,13 @@ _____
         <td>workspace_id</td>
         <td>STRING</td>
         <td>None</td>
-        <td>Fabric Workspace Id (UUID)</td>
+        <td>REQUIRED. Fabric Workspace Id (UUID)</td>
+    </tr>
+    <tr>
+        <td>workspace_name</td>
+        <td>STRING</td>
+        <td>None</td>
+        <td>REQUIRED. Fabric Workspace Name</td>
     </tr>
     <tr>
         <td>metadata_lakehouse_id</td>
@@ -177,10 +183,10 @@ _____
         <td>Flag to enable/disable three-part naming schema support. Schemas are currently in preview in Fabric. This capability may change based on the execution of the Fabric roadmap.</td>
     </tr> 
     <tr>
-        <td>target_schema</td>
+        <td>target_type</td>
         <td>STRING</td>
-        <td>None</td>
-        <td>Lakehouse schema name. REQUIRED when enable_schemas is TRUE</td>
+        <td>LAKEHOUSE</td>
+        <td>The destination type for the Fabric. Either LAKEHOUSE or MIRRORED_DATABASE.</td>
     </tr>
 </table>
 
@@ -198,6 +204,18 @@ The configuration specified here affects billing and perissions required on the 
         <td>BOOLEAN</td>
         <td>TRUE</td>
         <td>Enables the Standard Big Query API for Metadata Sync operations. See [Optimization](Optimizations.md) docs for more details.</td>
+    </tr>
+    <tr>
+        <td class="level1-item">enable_bigquery_export</td>
+        <td>BOOLEAN</td>
+        <td>FALSE</td>
+        <td>Enables the EXPORT DATA for data sync to GCP Buckets. See [Optimization](Optimizations.md) docs for more details.</td>
+    </tr>
+    <tr>
+        <td class="level1-item">force_bq_job_config</td>
+        <td>BOOLEAN</td>
+        <td>FALSE</td>
+        <td>Enables forced BQ Job Config with Standard API. See [Optimization](Optimizations.md) docs for more details.</td>
     </tr>
     <tr>
         <td class="level1-item">use_cdc</td>
@@ -268,6 +286,45 @@ The configuration specified here affects billing and perissions required on the 
         <td>None</td>
         <td>Base-64 encoded GCP Service Credential, created by default during Fabric Sync install. At least one of either, credentials or credential_path must be provided. If both are provided, credentials will cause the credential_path to be ignored.</td>
     </tr>
+    <tr>
+        <td class="level1-item">credential_secret_key_vault</td>
+        <td>STRING</td>
+        <td>None</td>
+        <td>The secret key vault for storing GCP credentials. For more information see [Azure Key Vault for GCP Service Credentials](Configuration.md).</td>
+    </tr>
+    <tr>
+        <td class="level1-item">credential_secret_key</td>
+        <td>STRING</td>
+        <td>None</td>
+        <td>The secret key for accessing the GCP credentials in the vault.For more information see [Azure Key Vault for GCP Service Credentials](Configuration.md).</td>
+    </tr>
+    <tr>
+        <td colspan="4" class="level1">storage</td>
+    </tr>
+    <tr>
+        <td class="level1-item">project_id</td>
+        <td>STRING</td>
+        <td>None</td>
+        <td>REQUIRED when enable_bigquery_export is TRUE. The GCP Project ID of the GCP storage bucket</td>
+    </tr>
+    <tr>
+        <td class="level1-item">bucket_uri</td>
+        <td>STRING</td>
+        <td>None</td>
+        <td>REQUIRED when enable_bigquery_export is TRUE. The URI of the GCP storage bucket without the gs:// prefix.</td>
+    </tr>
+    <tr>
+        <td class="level1-item">prefix_path</td>
+        <td>STRING</td>
+        <td>None</td>
+        <td>The folder prefix path within the bucket for storing data.</td>
+    </tr>
+    <tr>
+        <td class="level1-item">enable_cleanup</td>
+        <td>BOOLEAN</td>
+        <td>TRUE</td>
+        <td>Flag indicating whether to remove sync files automatically.</td>
+    </tr>
 </table>
 
 _____
@@ -299,6 +356,21 @@ _____
         <td>BOOLEAN</td>
         <td>TRUE</td>
         <td>Enable/Disable the approximate row count optimization. Applies to all tables with the configuration scope. See [Optimization](Optimizations.md) docs for more details.</td>
+    </tr>
+    <tr>
+        <td colspan="4" class="level1">standard_api_export</td>
+    </tr>
+    <tr>
+        <td>result_partitions</td>
+        <td>INTEGER</td>
+        <td>1</td>
+        <td>Number of partitions to coalesce data to before syncing to Fabric.</td>
+    </tr>
+    <tr>
+        <td>page_size</td>
+        <td>INTEGER</td>
+        <td>100000</td>
+        <td>Number of rows to read per page.</td>
     </tr>
 </table>
 
@@ -385,6 +457,18 @@ Table defaults are provided as a mechanism to simplify configuration through abs
         <td>BOOLEAN</td>
         <td>FALSE</td>
         <td>Default flag to enable/disable flattening or explosion of complex (ARRAY) types during the sync process. For more information see [Table Configuration](TableConfiguration.md) doc.</td>
+    </tr>
+    <tr>
+        <td>use_bigquery_export</td>
+        <td>BOOLEAN</td>
+        <td>FALSE</td>
+        <td>Use BigQuery EXPORT DATA. Ignored when enable_bigquery_export is FALSE.</td>
+    </tr>
+    <tr>
+        <td>use_standard_api</td>
+        <td>BOOLEAN</td>
+        <td>FALSE</td>
+        <td>Use BQ Standard API for data sync. Ignored when gcp/api use_standard_api is FALSE.</td>
     </tr>
     <tr>
         <td colspan="4" class="level1">table_maintenance</td>
@@ -504,6 +588,18 @@ The core of configuration is tables. When the load all option is not used, the i
         <td>BOOLEAN</td>
         <td>FALSE</td>
         <td>Flag to enable/disable flattening or explosion of complex (ARRAY) types during the sync process. For more information see [Table Configuration](TableConfiguration.md) doc.</td>
+    </tr>
+    <tr>
+        <td>use_bigquery_export</td>
+        <td>BOOLEAN</td>
+        <td>FALSE</td>
+        <td>Use BigQuery EXPORT DATA. Ignored when enable_bigquery_export is FALSE.</td>
+    </tr>
+    <tr>
+        <td>use_standard_api</td>
+        <td>BOOLEAN</td>
+        <td>FALSE</td>
+        <td>Use BQ Standard API for data sync. Ignored when gcp/api use_standard_api is FALSE.</td>
     </tr>
     <tr>
         <td colspan="4" class="level1">table_maintenance</td>
