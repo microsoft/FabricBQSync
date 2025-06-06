@@ -1,4 +1,4 @@
-from pyspark.sql import Row
+from pyspark.sql import Row # type: ignore
 
 from FabricSync.BQ.Metastore import FabricMetastore
 from FabricSync.BQ.SyncCore import ConfigBase

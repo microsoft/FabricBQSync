@@ -16,6 +16,18 @@ from FabricSync.BQ.Enum import (
 )
 
 class SyncBaseModel(BaseModel):
+    """
+    SyncBaseModel is a specialized Pydantic model providing enhanced functionality such as:
+    - model_config: Defines custom configuration for field population, enum usage, arbitrary types, and excluding unset fields.
+    - model_dump(**kwargs): Dumps the model’s data as a dictionary using field aliases.
+    - model_dump_json(**kwargs): Dumps the model’s data as a JSON string using field aliases.
+    - is_field_set(item): Checks if a particular field has been set on the model.
+    - get_field_default(item): Returns the default value for a specified field, if one exists.
+    - _get_field_meta(item): Internal method for retrieving field metadata using an alias.
+    - __getattr__(item): Magic method allowing access to fields by their alias names.
+    - _get_alias(item_name): Internal method to retrieve the alias for a given field name.
+    """
+
     model_config = ConfigDict(
         populate_by_name=True, 
         use_enum_values = True,
@@ -24,15 +36,49 @@ class SyncBaseModel(BaseModel):
         )
     
     def model_dump(self, **kwargs) -> dict[str, Any]:
+        """
+        Generate a dictionary representation of the model, using aliases for field names.
+        Calls the parent class's model_dump method to produce a dictionary
+        of the model's fields. The 'by_alias' parameter is set to True by default
+        to use alias-based field names.
+        :param kwargs: Additional keyword arguments to pass to the parent model_dump method.
+        :return: A dictionary with alias-based keys representing the model fields.
+        :rtype: dict[str, Any]
+        """
+
         return super().model_dump(by_alias=True, **kwargs)
     
     def model_dump_json(self, **kwargs) -> dict[str, Any]:
+        """
+        Serialize the current model instance to a JSON-compatible dictionary.
+        This method uses the parent class's JSON dumping mechanism while enforcing
+        the use of field aliases. Keyword arguments are passed through to the
+        underlying serializer.
+        :param kwargs: Additional keyword arguments to customize serialization.
+        :return: A dictionary containing the serialized model data, with field aliases applied.
+        :rtype: dict[str, Any]
+        """
+
         return super().model_dump_json(by_alias=True, **kwargs)
     
     def is_field_set(self, item) -> bool:
+        """
+        Checks if the specified item is among the fields that have been set.
+        :param item: The field to check in the model's set of fields.
+        :type item: Any
+        :return: True if the field is set, otherwise False.
+        :rtype: bool
+        """
+
         return item in self.model_fields_set
 
     def get_field_default(self, item) -> Any:
+        """
+        Retrieve the default value defined for a given field.
+        :param item: The name or identifier of the field to examine.
+        :return: The default value configured for the specified field, or None if none exists.
+        """
+
         meta = self._get_field_meta(item)
         
         if not meta:
@@ -41,6 +87,12 @@ class SyncBaseModel(BaseModel):
         return meta.default
 
     def _get_field_meta(self, item):
+        """
+        Retrieves the metadata object for a given item by matching its alias in the model_fields dictionary.
+        :param item: The alias of the field to look up.
+        :return: A metadata object if the alias is found, otherwise None.
+        """
+
         for _, meta in self.model_fields.items():
             if meta.alias == item:
                 return meta
@@ -48,12 +100,28 @@ class SyncBaseModel(BaseModel):
         return None
     
     def __getattr__(self, item):
+        """
+        Retrieves an attribute by its alias from the model_fields dictionary, returning
+        the corresponding attribute if found. If no matching alias exists, this method
+        defers to the superclass __getattr__.
+        :param item: The alias name of the attribute being accessed.
+        :return: The value of the attribute if found; otherwise defers to superclass __getattr__.
+        """
+
         for field, meta in self.model_fields.items():
             if meta.alias == item:
                 return getattr(self, field)
         return super().__getattr__(item)
     
     def _get_alias(self, item_name):
+        """
+        Retrieves the alias associated with a given field name in the model.
+        Args:
+            item_name (str): The name of the field for which to retrieve the alias.
+        Returns:
+            str or None: The alias for the given field name if found, otherwise None.
+        """
+
         for field, meta in self.model_fields.items():
             if field == item_name:
                 return meta.alias
@@ -61,18 +129,54 @@ class SyncBaseModel(BaseModel):
         return None
 
 class ConfigLogging(SyncBaseModel):
+    """
+    Represents the logging configuration for the synchronization process.
+    Attributes:
+        LogLevel (Optional[SyncLogLevelName]): The level of logging to use.
+        Telemetry (Optional[bool]): Indicates whether telemetry is enabled.
+        TelemetryEndPoint (Optional[str]): The endpoint for sending telemetry data.
+        LogPath (Optional[str]): The file path where logs are saved.
+    """
+
     LogLevel:Optional[SyncLogLevelName] = Field(alias="log_level", default=SyncLogLevelName.SYNC_STATUS)
     Telemetry:Optional[bool] = Field(alias="telemetry", default=True)
     TelemetryEndPoint:Optional[str]=Field(alias="telemetry_endpoint", default="prdbqsyncinsights")
     LogPath:Optional[str] = Field(alias="log_path", default="/lakehouse/default/Files/Fabric_Sync_Process/logs/fabric_sync.log")
 
 class ConfigIntelligentMaintenance(SyncBaseModel):
+    """
+    ConfigIntelligentMaintenance is a model that contains configuration thresholds
+    for maintenance operations in BigQuery.
+    Attributes:
+        RowsChanged (float): The threshold factor of changed rows before a maintenance task is triggered.
+        TableSizeGrowth (float): The threshold factor of table size increase indicating potential need for optimization.
+        FileFragmentation (float): The threshold factor measuring file fragmentation to determine if defragmentation is needed.
+        OutOfScopeSize (float): The threshold factor of out-of-scope data size prompting possible cleanup or archiving.
+    """
+
     RowsChanged:Optional[float] = Field(alias="rows_changed", default=float(0.10))
     TableSizeGrowth:Optional[float] = Field(alias="table_size_growth", default=float(0.10))
     FileFragmentation:Optional[float] = Field(alias="file_fragmentation", default=float(0.10))
     OutOfScopeSize:Optional[float] = Field(alias="out_of_scope_size", default=float(0.10))
 
 class ConfigMaintenance(SyncBaseModel):
+    """
+    ConfigMaintenance is a configuration model used to define maintenance-related settings for a synchronization process.
+    Attributes:
+        Enabled (bool):
+            Indicates whether the maintenance process is enabled.
+        TrackHistory (bool):
+            Specifies if history tracking is enabled during maintenance.
+        RetentionHours (int):
+            Number of hours to retain data, defaults to one week (168 hours).
+        Strategy (MaintenanceStrategy):
+            Defines the maintenance strategy, such as scheduled or on-demand.
+        Thresholds (ConfigIntelligentMaintenance):
+            Holds threshold configurations for intelligent maintenance, if applicable.
+        Interval (str):
+            Time interval or schedule for the maintenance process, defaults to "AUTO".
+    """
+
     Enabled:Optional[bool] = Field(alias="enabled", default=False)
     TrackHistory:Optional[bool] = Field(alias="track_history", default=False)
     RetentionHours:Optional[int] = Field(alias="retention_hours", default=168)
@@ -81,14 +185,43 @@ class ConfigMaintenance(SyncBaseModel):
     Interval:Optional[str] = Field(alias="interval", default="AUTO")
 
 class ConfigTableMaintenance(SyncBaseModel):
+    """
+    ConfigTableMaintenance manages the configuration settings for table maintenance.
+    Attributes:
+        Enabled (bool): 
+            Indicates whether periodic maintenance is enabled.
+        Interval (MaintenanceInterval): 
+            Defines how often maintenance should occur, with the default set to AUTO.
+    """
+
     Enabled:Optional[bool] = Field(alias="enabled", default=False)
     Interval:Optional[MaintenanceInterval] = Field(alias="interval", default=MaintenanceInterval.AUTO)
                 
 class ConfigAsync(SyncBaseModel):
+    """
+    The ConfigAsync class provides configuration settings for asynchronous operations.
+    Attributes:
+        Enabled (bool): Flag indicating if asynchronous operations are enabled (default: True).
+        Parallelism (int): Number of concurrent operations allowed (default: 10).
+    """
+
     Enabled:Optional[bool] = Field(alias="enabled", default=True)
     Parallelism:Optional[int] = Field(alias="parallelism", default=10)
 
 class ConfigLakehouseTarget(SyncBaseModel):
+    """
+    ConfigLakehouseTarget serves as a data model for specifying lakehouse-related
+    target configurations when synchronizing data. Each field corresponds to a
+    relevant configuration parameter for defining or identifying a specific lakehouse 
+    destination within a synchronization process.
+    Attributes:
+        LakehouseID (str): Identifier of the target lakehouse. Maps to 'lakehouse_id'.
+        Lakehouse (str): The name of the lakehouse resource. Maps to 'lakehouse'.
+        Schema (str): The schema name within the lakehouse. Maps to 'schema'.
+        Table (str): The name of the target table. Maps to 'table_name'.
+        PartitionBy (str): Optional partition strategy for the target table. Maps to 'partition_by'.
+    """
+
     LakehouseID:Optional[str] = Field(alias="lakehouse_id", default=None)
     Lakehouse:Optional[str] = Field(alias="lakehouse", default=None)
     Schema:Optional[str] = Field(alias="schema", default=None)
@@ -96,6 +229,17 @@ class ConfigLakehouseTarget(SyncBaseModel):
     PartitionBy:Optional[str] = Field(alias="partition_by", default=None)
                 
 class ConfigPartition(SyncBaseModel):
+    """
+    ConfigPartition represents the configuration for partitioning in BigQuery.
+    Attributes:
+        Enabled (bool): Indicates whether the partitioning is enabled.
+        PartitionType (BQPartitionType): Specifies the type of partitioning to use.
+        PartitionColumn (str): The name of the column used for partitioning.
+        Granularity (CalendarInterval): The partition granularity (e.g., DAILY, MONTHLY).
+        PartitionDataType (BQDataType): The data type of the partitioned column.
+        PartitionRange (str): An optional range for partitioning.
+    """
+
     Enabled:Optional[bool] = Field(alias="enabled", default=None)
     PartitionType:Optional[BQPartitionType] = Field(alias="type", default=None)
     PartitionColumn:Optional[str] = Field(alias="column", default=None)
@@ -104,6 +248,43 @@ class ConfigPartition(SyncBaseModel):
     PartitionRange:Optional[str] = Field(alias="partition_range", default=None)
 
 class ConfigFabric(SyncBaseModel):
+    """
+    ConfigFabric is a configuration class that holds metadata and destination settings
+    for syncing operations in a Fabric environment. It includes both static information
+    (e.g., workspace details) and dynamic options (e.g., whether to enable schema-based
+    namespaces). The class methods build string paths and namespaces for use in various
+    sync operations.
+    Attributes:
+        WorkspaceID (str, optional): The unique identifier of the workspace.
+        WorkspaceName (str, optional): The display name of the workspace.
+        MetadataLakehouse (str, optional): The name of the lakehouse that holds metadata.
+        MetadataSchema (str, optional): The default schema for metadata tables.
+        MetadataLakehouseID (str, optional): The unique identifier of the metadata lakehouse.
+        TargetType (FabricDestinationType, optional): The target destination type for sync.
+        TargetLakehouse (str, optional): The name of the target lakehouse for sync.
+        TargetLakehouseID (str, optional): The unique identifier of the target lakehouse.
+        TargetLakehouseSchema (str, optional): The schema name used within the target lakehouse.
+        EnableSchemas (bool, optional): Flag indicating whether schema usage is enabled.
+    Methods:
+        get_metadata_namespace():
+            Returns a string path including or excluding the schema, based on EnableSchemas,
+            for referencing the metadata tables in the workspace.
+        get_metadata_lakehouse():
+            Returns the metadata lakehouse string including or excluding the schema, based
+            on the EnableSchemas flag.
+        get_target_namespace():
+            Returns the namespace path for target tables, taking into account the workspace
+            name, target lakehouse name, and schema usage settings.
+        get_target_lakehouse():
+            Returns the target lakehouse reference, including the schema if schemas are enabled.
+        get_target_table_path(table):
+            Builds a fully qualified path (including lakehouse and schema if enabled) for a
+            specific table in the target.
+        get_metadata_table_path(table):
+            Builds a fully qualified path (including lakehouse and schema if enabled) for a
+            specific metadata table.
+    """
+
     WorkspaceID:Optional[str] = Field(alias="workspace_id", default=None)
     WorkspaceName:Optional[str] = Field(alias="workspace_name", default=None)
     MetadataLakehouse:Optional[str] = Field(alias="metadata_lakehouse", default=None)
@@ -116,49 +297,123 @@ class ConfigFabric(SyncBaseModel):
     EnableSchemas:Optional[bool] = Field(alias="enable_schemas", default=False)
 
     def get_metadata_namespace(self) -> str:
+        """
+        Returns the full metadata namespace for the current workspace.
+        The returned namespace includes the workspace name, the metadata lakehouse,
+        and optionally appends the .dbo schema segment if schemas are enabled.
+        Returns:
+            str: The formatted metadata namespace.
+        """
+
         if self.EnableSchemas:
             return f"`{self.WorkspaceName}`.{self.MetadataLakehouse}.dbo"
         else:
             return f"`{self.WorkspaceName}`.{self.MetadataLakehouse}"
 
     def get_metadata_lakehouse(self) -> str:
+        """
+        Returns the metadata lakehouse path as a string.
+        If schemas are enabled (EnableSchemas is True), appends '.dbo' to the lakehouse name.
+        Otherwise, returns the lakehouse name unchanged.
+        Returns:
+            str: The constructed metadata lakehouse path.
+        """
+
         if self.EnableSchemas:
             return f"{self.MetadataLakehouse}.dbo"
         else:
             return f"{self.MetadataLakehouse}"
     
     def get_target_namespace(self) -> str:
+        """
+        Retrieves the fully qualified target namespace string.
+        If EnableSchemas is True, the returned string includes the WorkspaceName,
+        TargetLakehouse, and TargetLakehouseSchema in dotted format with backticks.
+        If EnableSchemas is False, schema information is omitted.
+        Returns:
+            str: The formatted target namespace string.
+        """
+
         if self.EnableSchemas:
             return f"`{self.WorkspaceName}`.{self.TargetLakehouse}.{self.TargetLakehouseSchema}"
         else:
             return f"`{self.WorkspaceName}`.{self.TargetLakehouse}"
 
     def get_target_lakehouse(self) -> str:
+        """
+        Returns the target lakehouse reference, including the schema if schemas are enabled.
+        If EnableSchemas is True, the schema is appended to the lakehouse name.
+        Otherwise, it returns just the lakehouse name.
+        Returns:
+            str: The target lakehouse reference, potentially including the schema.
+        """
         if self.EnableSchemas:
             return f"{self.TargetLakehouse}.{self.TargetLakehouseSchema}"
         else:
             return f"{self.TargetLakehouse}"
     
     def get_target_table_path(self, table:str) -> str:
+        """
+        Constructs the fully qualified path for a target table.
+        If EnableSchemas is True, the path includes the TargetLakehouse and TargetLakehouseSchema.
+        Otherwise, it returns just the table name.
+        Args:
+            table (str): The name of the table for which to construct the path.
+        Returns:
+            str: The fully qualified path for the target table.
+        """
         if self.EnableSchemas:
             return f"{self.TargetLakehouse}.{self.TargetLakehouseSchema}.{table}"
         else:
             return table
 
     def get_metadata_table_path(self, table:str) -> str:
+        """
+        Constructs the fully qualified path for a metadata table.
+        If EnableSchemas is True, the path includes the MetadataLakehouse and MetadataSchema.
+        Otherwise, it returns just the table name.
+        Args:
+            table (str): The name of the metadata table for which to construct the path.
+        Returns:
+            str: The fully qualified path for the metadata table.
+        """
         if self.EnableSchemas:
             return f"{self.MetadataLakehouse}.dbo.{table}"
         else:
             return table
 
 class ConfigGCPDataset(SyncBaseModel):
+    """
+    ConfigGCPDataset is a configuration model for Google Cloud Platform (GCP) datasets.
+    It contains fields for specifying the project ID and dataset name, which are essential
+    for identifying and managing datasets within GCP BigQuery.
+    Attributes:
+        Dataset (Optional[str]): The name of the dataset within the GCP project.
+    """
     Dataset:Optional[str] = Field(alias="dataset", default=None)
     
 class ConfigGCPProject(SyncBaseModel):
+    """
+    ConfigGCPProject is a configuration model for Google Cloud Platform (GCP) projects.
+    It includes fields for specifying the project ID and a list of datasets associated with the project.
+    Attributes:
+        ProjectID (Optional[str]): The unique identifier for the GCP project.
+        Datasets (Optional[List[ConfigGCPDataset]]): A list of datasets associated with the project.
+    """
     ProjectID:Optional[str] = Field(alias="project_id", default=None)
     Datasets:Optional[List[ConfigGCPDataset]] = Field(alias="datasets", default=[ConfigGCPDataset()])
 
 class ConfigGCPCredential(SyncBaseModel):
+    """
+    ConfigGCPCredential is a configuration model for Google Cloud Platform (GCP) credentials.
+    It includes fields for specifying the credential path, access token, and other related parameters.
+    Attributes:
+        CredentialPath (Optional[str]): The file path to the GCP credentials JSON file.
+        AccessToken (Optional[str]): The access token for GCP authentication.
+        Credential (Optional[str]): The GCP credential string, if provided.
+        CredentialSecretKeyVault (Optional[str]): The secret key vault for storing GCP credentials.
+        CredentialSecretKey (Optional[str]): The secret key for accessing the GCP credentials in the vault.
+    """
     CredentialPath:Optional[str] = Field(alias="credential_path", default=None)
     AccessToken:Optional[str] = Field(alias="access_token", default=None)
     Credential:Optional[str] = Field(alias="credential", default=None)
@@ -166,20 +421,66 @@ class ConfigGCPCredential(SyncBaseModel):
     CredentialSecretKey:Optional[str] = Field(alias="credential_secret_key", default=None)
 
 class ConfigGCPAPI(SyncBaseModel):
-    UseStandardAPI:Optional[bool] = Field(alias="use_standard_api", default=False)
+    """
+    ConfigGCPAPI is a configuration model for Google Cloud Platform (GCP) API settings.
+    It includes fields for specifying the API endpoint, whether to use the standard API, and options for BigQuery export.
+    Attributes:
+        UseStandardAPI (Optional[bool]): Flag indicating whether to use the standard API (default: False).
+        EnableBigQueryExport (Optional[bool]): Flag indicating whether to enable BigQuery export (default: False).
+        ForceBQJobConfig (Optional[bool]): Flag indicating whether to force BigQuery job configuration (default: False).
+        AutoSelect (Optional[bool]): Flag indicating whether to automatically select the API (default: False).
+        UseCDC (Optional[bool]): Flag indicating whether to use Change Data Capture (CDC) (default: True).
+        MaterializationProjectID (Optional[str]): The project ID for materialization, if applicable.
+        MaterializationDataset (Optional[str]): The dataset for materialization, if applicable.
+        BillingProjectID (Optional[str]): The project ID for billing purposes, if applicable.
+    """
+    UseStandardAPI:Optional[bool] = Field(alias="use_standard_api", default=True)
+    EnableBigQueryExport:Optional[bool] = Field(alias="enable_bigquery_export", default=False)
+    ForceBQJobConfig:Optional[bool] = Field(alias="force_bq_job_config", default=False)
     AutoSelect:Optional[bool] = Field(alias="auto_select", default=False)
     UseCDC:Optional[bool] = Field(alias="use_cdc", default=True)
     MaterializationProjectID:Optional[str] = Field(alias="materialization_project_id", default=None)
     MaterializationDataset:Optional[str] = Field(alias="materialization_dataset", default=None)
     BillingProjectID:Optional[str] = Field(alias="billing_project_id", default=None)
 
+class ConfigGCPStorage(SyncBaseModel):
+    """
+    ConfigGCPStorage is a configuration model for Google Cloud Platform (GCP) storage settings.
+    It includes fields for specifying the bucket URI, prefix path, and whether cleanup is enabled.
+    Attributes:
+        ProjectID (Optional[str]): The GCP Project ID of the GCP storage bucket.
+        BucketUri (Optional[str]): The URI of the GCP storage bucket.
+        PrefixPath (Optional[str]): The prefix path within the bucket for storing data.
+        EnabledCleanUp (Optional[bool]): Flag indicating whether to enable cleanup of old data (default: True).
+    """
+    ProjectID:Optional[str] = Field(alias="project_id", default=None)
+    BucketUri:Optional[str] = Field(alias="bucket_uri", default=None)
+    PrefixPath:Optional[str] = Field(alias="prefix_path", default=None)
+    EnabledCleanUp:Optional[bool] = Field(alias="enable_cleanup", default=True)
+
 class ConfigGCP(SyncBaseModel):
+    """
+    ConfigGCP is a configuration model for Google Cloud Platform (GCP) settings.
+    It includes fields for specifying API settings, projects, credentials, and storage configurations.
+    Attributes:
+        API (Optional[ConfigGCPAPI]): The API configuration for GCP services.
+        Projects (List[ConfigGCPProject]): A list of GCP projects, each with its own ID and datasets.
+        GCPCredential (ConfigGCPCredential): The GCP credential configuration for authentication.
+        GCPStorage (ConfigGCPStorage): The GCP storage configuration for managing data storage.
+    """
     API:Optional[ConfigGCPAPI] = Field(alias="api", default=ConfigGCPAPI())
     Projects:List[ConfigGCPProject] = Field(alias="projects", default=[ConfigGCPProject()])
     GCPCredential:ConfigGCPCredential = Field(alias="gcp_credentials", default=ConfigGCPCredential())
+    Storage:ConfigGCPStorage = Field(alias="gcp_storage", default=ConfigGCPStorage())
 
     @property
     def DefaultProjectID(self) -> str:
+        """
+        Returns the default project ID from the first project in the Projects list.
+        If no projects are defined, it returns None.
+        Returns:
+            str: The project ID of the first project in the Projects list, or None if no projects exist.
+        """
         if self.Projects:
             return self.Projects[0].ProjectID
         
@@ -187,6 +488,12 @@ class ConfigGCP(SyncBaseModel):
     
     @property
     def DefaultDataset(self) -> str:
+        """
+        Returns the default dataset from the first dataset in the first project of the Projects list.
+        If no projects or datasets are defined, it returns None.
+        Returns:
+            str: The dataset name of the first dataset in the first project, or None if no datasets exist.
+        """
         if self.Projects:
             if self.Projects[0].Datasets:
                 return self.Projects[0].Datasets[0].Dataset
@@ -194,13 +501,35 @@ class ConfigGCP(SyncBaseModel):
         return None
 
 class ConfigTableColumn(SyncBaseModel):
+    """
+    ConfigTableColumn represents a column configuration for a table in BigQuery.
+    It includes the column name and other optional attributes.
+    Attributes:
+        Column (Optional[str]): An alias for the column name, if applicable.
+    """
     Column:Optional[str] = Field(alias="column", default=None)
 
 class TypedColumn(SyncBaseModel):
+    """
+    TypedColumn represents a column with its name and type in BigQuery.
+    It is used to define the structure of a column in a table, including its name and data type.
+    Attributes:
+        Name (Optional[str]): The name of the column.
+        Type (Optional[str]): The data type of the column, such as STRING, INTEGER, etc.
+    """
     Name:Optional[str] = Field(alias="name", default=None)
     Type:Optional[str] = Field(alias="type", default=None)
 
 class MappedColumn(SyncBaseModel):
+    """
+    MappedColumn represents a mapping between a source column and a destination column in BigQuery.
+    It includes the source and destination columns, the format for the mapping, and whether to drop the source column after mapping.
+    Attributes:
+        Source (Optional[TypedColumn]): The source column being mapped, including its name and type.
+        Destination (Optional[TypedColumn]): The destination column where the source column is mapped, including its name and type.
+        Format (Optional[str]): The format string used for the mapping, if applicable.
+        DropSource (Optional[bool]): A flag indicating whether to drop the source column after mapping (default: None).
+    """
     Source:Optional[TypedColumn] = Field(alias="source", default=None)
     Destination:Optional[TypedColumn] = Field(alias="destination", default=None)
     Format:Optional[str] = Field(alias="format", default=None)
@@ -208,13 +537,45 @@ class MappedColumn(SyncBaseModel):
 
     @property
     def IsTypeConversion(self) -> bool:
+        """
+        Checks if the source and destination columns have different types.
+        Returns:
+            bool: True if the source and destination types are different, otherwise False.
+        """
         return self.Source.Type != self.Destination.Type
     
     @property
     def IsRename(self) -> bool:
+        """
+        Checks if the source and destination columns have different names.
+        Returns:
+            bool: True if the source and destination names are different, otherwise False.
+        """
         return self.Source.Name != self.Destination.Name
 
 class ConfigBQTableDefault (SyncBaseModel):
+    """
+    ConfigBQTableDefault is a configuration model for default settings applied to BigQuery tables.
+    It includes fields for specifying the project ID, dataset, object type, load strategy, load type,
+    sync interval, and various table properties such as priority, enabled status, and schema evolution options.
+    Attributes:
+        ProjectID (Optional[str]): The ID of the GCP project where the table resides.
+        Dataset (Optional[str]): The name of the dataset containing the table.
+        ObjectType (Optional[BigQueryObjectType]): The type of object (e.g., TABLE, VIEW) in BigQuery.
+        Priority (Optional[int]): The priority level for loading data into the table, default is 100.
+        LoadStrategy (Optional[SyncLoadStrategy]): The strategy for loading data into the table.
+        LoadType (Optional[SyncLoadType]): The type of load operation to perform on the table.
+        Interval (Optional[SyncScheduleType]): The synchronization interval for the table, default is AUTO.
+        Enabled (Optional[bool]): Indicates whether the table is enabled for synchronization, default is True.
+        EnforceExpiration (Optional[bool]): Whether to enforce data expiration policies on the table, default is False.
+        AllowSchemaEvolution (Optional[bool]): Whether to allow schema evolution during data loads, default is False.
+        FlattenTable (Optional[bool]): Whether to flatten nested structures in the table, default is False.
+        FlattenInPlace (Optional[bool]): Whether to flatten nested structures in place, default is True.
+        ExplodeArrays (Optional[bool]): Whether to explode array fields in the table, default is True.
+        UseBigQueryExport (Optional[bool]): Whether to use BigQuery export features, default is False.
+        UseStandardAPI (Optional[bool]): Whether to use BigQuery Standard API, default is False.
+        TableMaintenance (Optional[ConfigTableMaintenance]): Configuration for table maintenance operations.
+    """
     ProjectID:Optional[str] = Field(alias="project_id", default=None)
     Dataset:Optional[str] = Field(alias="dataset", default=None)
     ObjectType:Optional[BigQueryObjectType] = Field(alias="object_type", default=None)
@@ -228,10 +589,39 @@ class ConfigBQTableDefault (SyncBaseModel):
     FlattenTable:Optional[bool] = Field(alias="flatten_table", default=False)
     FlattenInPlace:Optional[bool] = Field(alias="flatten_inplace", default=True)
     ExplodeArrays:Optional[bool] = Field(alias="explode_arrays", default=True)
-
+    UseBigQueryExport:Optional[bool] = Field(alias="use_bigquery_export", default=False)
+    UseStandardAPI:Optional[bool] = Field(alias="use_standard_api", default=False)
     TableMaintenance:Optional[ConfigTableMaintenance] = Field(alias="table_maintenance", default=ConfigTableMaintenance())
 
 class ConfigBQTable (SyncBaseModel):
+    """
+    ConfigBQTable is a configuration model for BigQuery tables used in synchronization processes.
+    Arguments:
+        ProjectID (Optional[str]): The ID of the GCP project where the table resides.
+        Dataset (Optional[str]): The name of the dataset containing the table.
+        ObjectType (Optional[BigQueryObjectType]): The type of object in BigQuery (e.g., TABLE, VIEW).
+        Priority (Optional[int]): The priority level for loading data into the table, default is None.
+        LoadStrategy (Optional[SyncLoadStrategy]): The strategy for loading data into the table.
+        LoadType (Optional[SyncLoadType]): The type of load operation to perform on the table.
+        Interval (Optional[SyncScheduleType]): The synchronization interval for the table, default is None.
+        Enabled (Optional[bool]): Indicates whether the table is enabled for synchronization, default is None.
+        EnforceExpiration (Optional[bool]): Whether to enforce data expiration policies on the table, default is None.
+        AllowSchemaEvolution (Optional[bool]): Whether to allow schema evolution during data loads, default is None.
+        FlattenTable (Optional[bool]): Whether to flatten nested structures in the table, default is None.
+        FlattenInPlace (Optional[bool]): Whether to flatten nested structures in place, default is None.
+        ExplodeArrays (Optional[bool]): Whether to explode array fields in the table, default is None.
+        UseBigQueryExport (Optional[bool]): Whether to use BigQuery export features, default is False.
+        UseStandardAPI (Optional[bool]): Whether to use BigQuery Standard API, default is False.
+        TableMaintenance (Optional[ConfigTableMaintenance]): Configuration for table maintenance operations.
+        TableName (Optional[str]): The name of the BigQuery table.
+        SourceQuery (Optional[str]): The SQL query used to populate the table.
+        Predicate (Optional[str]): An optional predicate for filtering data in the table.
+        ColumnMap (Optional[List[MappedColumn]]): A list of mapped columns defining the source and destination mappings.
+        LakehouseTarget (Optional[ConfigLakehouseTarget]): Configuration for the lakehouse target.
+        BQPartition (Optional[ConfigPartition]): Configuration for BigQuery partitioning.
+        Keys (Optional[List[ConfigTableColumn]]): A list of keys for the table, used for identifying unique records.
+        Watermark (Optional[ConfigTableColumn]): A column used for watermarking, typically for incremental loads.   
+    """
     ProjectID:Optional[str] = Field(alias="project_id", default=None)
     Dataset:Optional[str] = Field(alias="dataset", default=None)
     ObjectType:Optional[BigQueryObjectType] = Field(alias="object_type", default=None)
@@ -245,15 +635,13 @@ class ConfigBQTable (SyncBaseModel):
     FlattenTable:Optional[bool] = Field(alias="flatten_table", default=None)
     FlattenInPlace:Optional[bool] = Field(alias="flatten_inplace", default=None)
     ExplodeArrays:Optional[bool] = Field(alias="explode_arrays", default=None)
-
+    UseBigQueryExport:Optional[bool] = Field(alias="use_bigquery_export", default=False)
+    UseStandardAPI:Optional[bool] = Field(alias="use_standard_api", default=False)
     TableMaintenance:Optional[ConfigTableMaintenance] = Field(alias="table_maintenance", default=ConfigTableMaintenance())
-
     TableName:Optional[str] = Field(alias="table_name", default=None)
     SourceQuery:Optional[str] = Field(alias="source_query", default=None)
     Predicate:Optional[str] = Field(alias="predicate", default=None)
-
     ColumnMap:Optional[List[MappedColumn]] = Field(alias="column_map", default=[MappedColumn()])
-
     LakehouseTarget:Optional[ConfigLakehouseTarget] = Field(alias="lakehouse_target", default=ConfigLakehouseTarget())
     BQPartition:Optional[ConfigPartition] = Field(alias="bq_partition", default=ConfigPartition())
     Keys:Optional[List[ConfigTableColumn]] = Field(alias="keys", default=[ConfigTableColumn()])
@@ -261,9 +649,21 @@ class ConfigBQTable (SyncBaseModel):
 
     @property
     def BQ_FQName(self) -> str:
+        """
+        Returns the fully qualified name of the BigQuery table in the format "ProjectID.Dataset.TableName".
+        This property constructs the fully qualified name using the ProjectID, Dataset, and TableName attributes.
+        Returns:
+            str: The fully qualified name of the BigQuery table.
+        """
         return f"{self.ProjectID}.{self.Dataset}.{self.TableName}"
 
     def get_table_keys(self) -> list[str]:
+        """
+        Returns a list of column names that are defined as keys for the table.
+        If no keys are defined, it returns an empty list.
+        Returns:
+            list[str]: A list of column names that are keys for the table.
+        """
         keys = []
 
         if self.Keys:
@@ -271,27 +671,87 @@ class ConfigBQTable (SyncBaseModel):
         
         return keys
 
+class ConfigStandardAPIExportConfig(SyncBaseModel):
+    """
+    ConfigStandardAPIExportConfig is a configuration model for standard API export settings in BigQuery synchronization.
+    It includes options for result partitions and page size, which control how data is exported from BigQuery.
+    Attributes:
+        ResultPartitions (Optional[int]): The number of partitions to use for the result set, default is 1.
+        PageSize (Optional[int]): The size of each page of results, default is 100000.
+    """
+    ResultPartitions:Optional[int] = Field(alias="result_partitions", default=1)
+    PageSize:Optional[int] = Field(alias="page_size", default=100000)
+
 class ConfigOptimization(SyncBaseModel):
+    """
+    ConfigOptimization is a configuration model for optimization settings in BigQuery synchronization.
+    It includes options for using approximate row counts, disabling the dataframe cache, and other optimization parameters.
+    Attributes:
+        UseApproximateRowCounts (Optional[bool]): Flag indicating whether to use approximate row counts for optimization (default: True).
+        DisableDataframeCache (Optional[bool]): Flag indicating whether to disable the dataframe cache (default: False).
+    """
     UseApproximateRowCounts:Optional[bool] = Field(alias="use_approximate_row_counts", default=True)
     DisableDataframeCache:Optional[bool] = Field(alias="disable_dataframe_cache", default=False)
+    StandardAPIExport:Optional[ConfigStandardAPIExportConfig] = Field(alias="standard_api_export", default=ConfigStandardAPIExportConfig())
 
 class ConfigObjectFilter(SyncBaseModel):
+    """
+    ConfigObjectFilter is a configuration model for filtering objects in BigQuery synchronization.
+    It allows specifying patterns and types for filtering tables, views, and materialized views.
+    Attributes:
+        pattern (Optional[str]): A regex pattern to filter objects by name.
+        type (Optional[ObjectFilterType]): The type of object to filter (e.g., TABLE, VIEW, MATERIALIZED_VIEW).
+    """
     pattern:Optional[str] = Field(alias="pattern", default=None)
     type:Optional[ObjectFilterType] = Field(alias="type", default=None)
 
 class ConfigDiscoverObject(SyncBaseModel):
+    """
+    ConfigDiscoverObject is a configuration model for discovering objects in BigQuery synchronization.
+    It includes options for enabling discovery, loading all objects, and applying filters.
+    Attributes:
+        Enabled (Optional[bool]): Flag indicating whether discovery is enabled for the object (default: False).
+        LoadAll (Optional[bool]): Flag indicating whether to load all objects of this type (default: False).
+        Filter (Optional[ConfigObjectFilter]): An optional filter to apply when discovering objects.
+    """
     Enabled:Optional[bool] = Field(alias="enabled", default=False)
     LoadAll:Optional[bool] = Field(alias="load_all", default=False) 
     Filter:Optional[ConfigObjectFilter] = Field(alias="filter", default=None) 
 
 class ConfigAutodiscover(SyncBaseModel):
+    """
+    ConfigAutodiscover is a configuration model for automatic discovery of BigQuery objects.
+    It includes options for enabling autodiscovery, loading all objects, and configuring tables, views, and materialized views.
+    Attributes:
+        Autodetect (Optional[bool]): Flag indicating whether to automatically detect objects (default: True).
+        Tables (Optional[ConfigDiscoverObject]): Configuration for discovering tables.
+        Views (Optional[ConfigDiscoverObject]): Configuration for discovering views.
+        MaterializedViews (Optional[ConfigDiscoverObject]): Configuration for discovering materialized views.
+    """
     Autodetect:Optional[bool] = Field(alias="autodetect", default=True)
-
     Tables:Optional[ConfigDiscoverObject] = Field(alias="tables", default=ConfigDiscoverObject())
     Views:Optional[ConfigDiscoverObject] = Field(alias="views", default=ConfigDiscoverObject())
     MaterializedViews:Optional[ConfigDiscoverObject] = Field(alias="materialized_views", default=ConfigDiscoverObject())
 
 class ConfigDataset(SyncBaseModel):
+    """
+    ConfigDataset is a configuration model for managing dataset synchronization settings in a Fabric environment.
+    It includes metadata about the dataset, synchronization options, and configurations for various components such as GCP, logging, and fabric settings.
+    Attributes:
+        ApplicationID (Optional[str]): The correlation ID for the application, used for tracking and logging purposes.
+        ID (Optional[str]): The unique identifier for the dataset configuration, default is "FABRIC_SYNC_LOADER".
+        Version (Optional[str]): The version of the dataset configuration.
+        EnableDataExpiration (Optional[bool]): Flag indicating whether data expiration is enabled, default is False.
+        Optimization (Optional[ConfigOptimization]): Configuration for optimization settings.
+        Maintenance (Optional[ConfigMaintenance]): Configuration for maintenance settings.
+        AutoDiscover (Optional[ConfigAutodiscover]): Configuration for automatic discovery of objects in BigQuery.
+        Logging (Optional[ConfigLogging]): Configuration for logging settings.
+        Fabric (Optional[ConfigFabric]): Configuration for fabric-related settings.
+        GCP (Optional[ConfigGCP]): Configuration for Google Cloud Platform settings.
+        Async (Optional[ConfigAsync]): Configuration for asynchronous operations.
+        TableDefaults (Optional[ConfigBQTableDefault]): Default settings applied to BigQuery tables.
+        Tables (Optional[List[ConfigBQTable]]): A list of configurations for individual BigQuery tables.
+    """
     ApplicationID:Optional[str] = Field(alias="correlation_id", default=None)
     ID:Optional[str] = Field(alias='id', default="FABRIC_SYNC_LOADER")    
     Version:Optional[str] = Field(alias='version', default=None)    
@@ -311,33 +771,83 @@ class ConfigDataset(SyncBaseModel):
 
     @property
     def Autodetect(self) -> bool:
+        """
+        Returns whether automatic detection of objects is enabled in the autodiscovery configuration.
+        This property checks the Autodetect field in the AutoDiscover configuration.
+        Returns:
+            bool: True if autodetection is enabled, otherwise False.
+        """
         return self.AutoDiscover.Autodetect
     
     @property
     def LoadAllTables(self) -> bool:
+        """
+        Returns whether all tables should be loaded based on the autodiscovery configuration.
+        This property checks the LoadAll field in the Tables configuration of AutoDiscover.
+        Returns:
+            bool: True if all tables should be loaded, otherwise False.
+        """
         return self.AutoDiscover.Tables.LoadAll
     
     @property
     def EnableTables(self) -> bool:
+        """
+        Returns whether table discovery is enabled based on the autodiscovery configuration.
+        This property checks the Enabled field in the Tables configuration of AutoDiscover.
+        Returns:
+            bool: True if table discovery is enabled, otherwise False.
+        """
         return self.AutoDiscover.Tables.Enabled
     
     @property
     def LoadAllViews(self) -> bool:
+        """
+        Returns whether all views should be loaded based on the autodiscovery configuration.
+        This property checks the LoadAll field in the Views configuration of AutoDiscover.
+        Returns:
+            bool: True if all views should be loaded, otherwise False.
+        """
         return self.AutoDiscover.Views.LoadAll
     
     @property
     def EnableViews(self) -> bool:
+        """
+        Returns whether view discovery is enabled based on the autodiscovery configuration.
+        This property checks the Enabled field in the Views configuration of AutoDiscover.
+        Returns:
+            bool: True if view discovery is enabled, otherwise False.
+        """
         return self.AutoDiscover.Views.Enabled
     
     @property
     def LoadAllMaterializedViews(self) -> bool:
+        """
+        Returns whether all materialized views should be loaded based on the autodiscovery configuration.
+        This property checks the LoadAll field in the MaterializedViews configuration of AutoDiscover.
+        Returns:
+            bool: True if all materialized views should be loaded, otherwise False.
+        """
         return self.AutoDiscover.MaterializedViews.LoadAll
     
     @property
     def EnableMaterializedViews(self) -> bool:
+        """
+        Returns whether materialized view discovery is enabled based on the autodiscovery configuration.
+        This property checks the Enabled field in the MaterializedViews configuration of AutoDiscover.
+        Returns:
+            bool: True if materialized view discovery is enabled, otherwise False.
+        """
         return self.AutoDiscover.MaterializedViews.Enabled
 
     def get_table_config(self, bq_table:str) -> ConfigBQTable:
+        """
+        Returns the configuration for a specific BigQuery table based on its fully qualified name.
+        If the table is not found in the configuration, it returns None.
+        Args:
+            bq_table (str): The fully qualified name of the BigQuery table in the format "ProjectID.Dataset.TableName".
+        Returns:
+            ConfigBQTable: The configuration for the specified BigQuery table, or None if not found.
+        """
         if self.Tables:
             return next((t for t in self.Tables if t.BQ_FQName == bq_table), None)
         else:
@@ -345,7 +855,14 @@ class ConfigDataset(SyncBaseModel):
 
     def get_table_name_list(self, project:str, dataset:str, obj_type:BigQueryObjectType, only_enabled:bool = False) -> list[str]:
         """
-        Returns a list of table names from the user configuration
+        Returns a list of table names based on the specified project, dataset, and object type.
+        If only_enabled is True, it filters the tables to include only those that are enabled.
+        Args:
+            project (str): The ID of the GCP project.
+            dataset (str): The name of the dataset within the project.
+            obj_type (BigQueryObjectType): The type of object to filter by (e.g., TABLE, VIEW).
+        Returns:
+            list[str]: A list of table names that match the specified criteria.
         """
         tables = [t for t in self.Tables if t.ProjectID == project and t.Dataset == dataset and t.ObjectType == obj_type]
 
@@ -355,9 +872,23 @@ class ConfigDataset(SyncBaseModel):
         return [str(x.TableName) for x in tables]
     
     def __init__(self, **kwargs) -> None:
+        """
+        Initializes the ConfigDataset instance with the provided keyword arguments.
+        This constructor allows for dynamic configuration of the dataset settings.
+        Args:
+            **kwargs: Arbitrary keyword arguments to set the attributes of the ConfigDataset instance.
+        """
         super().__init__(**kwargs)
 
     def apply_defaults(self) -> None:
+        """
+        Applies default values to the ConfigDataset instance based on the provided configuration.
+        This method sets default values for various fields, including the GCP project and dataset,
+        and ensures that the TargetLakehouseSchema is set if EnableSchemas is True.
+        It also applies default settings to each table in the Tables list based on the TableDefaults configuration.
+        Returns:
+            None
+        """
         if self.Fabric.EnableSchemas:
             if not self.Fabric.TargetLakehouseSchema:
                 self.Fabric.TargetLakehouseSchema = self.GCP.DefaultDataset
@@ -366,6 +897,14 @@ class ConfigDataset(SyncBaseModel):
 
 
     def __apply_table_defaults(self) -> None:
+        """
+        Applies default values to each table in the Tables list based on the TableDefaults configuration.
+        This method iterates through each table and sets any fields that are not already set
+        to the corresponding default values from TableDefaults.
+        It ensures that each table has the necessary default settings applied, such as project ID, dataset, and other properties.
+        Returns:
+            None
+        """
         if self.is_field_set("TableDefaults") and self.is_field_set("Tables"):
             for table in self.Tables:
                 default_fields = [f for f in table.model_fields 
@@ -378,6 +917,17 @@ class ConfigDataset(SyncBaseModel):
         
     @classmethod
     def from_json(cls, path:str, with_defaults:bool=True) -> 'ConfigDataset':
+        """
+        Reads a JSON configuration file from the specified path and returns an instance of ConfigDataset.
+        If with_defaults is True, it applies default values to the configuration.
+        Args:
+            path (str): The file path to the JSON configuration file.
+            with_defaults (bool): Whether to apply default values to the configuration (default: True).
+        Returns:
+            ConfigDataset: An instance of ConfigDataset populated with the data from the JSON file.
+        Raises:
+            Exception: If the configuration file is not found or cannot be read.
+        """
         data = cls.__read_json_config(path)
 
         config = ConfigDataset(**data)      
@@ -389,6 +939,15 @@ class ConfigDataset(SyncBaseModel):
 
     @classmethod
     def __read_json_config(self, path) -> 'ConfigDataset':
+        """
+        Reads a JSON configuration file from the specified path and returns the parsed data.
+        Args:
+            path (str): The file path to the JSON configuration file.
+        Returns:
+            dict: The parsed JSON data as a dictionary.
+        Raises:
+            Exception: If the configuration file does not exist or cannot be read.
+        """
         if os.path.exists(path):
             with open(path, 'r', encoding="utf-8") as f:
                 data = json.load(f)
@@ -397,6 +956,14 @@ class ConfigDataset(SyncBaseModel):
             raise Exception(f"Configuration file not found ({path})")
     
     def to_json(self, path:str) -> None:
+        """
+        Saves the current configuration to a JSON file at the specified path.
+        This method serializes the ConfigDataset instance to JSON format and writes it to the specified file.
+        Args:
+            path (str): The file path where the JSON configuration will be saved.
+        Raises:
+            Exception: If the configuration file cannot be saved to the specified path.
+        """
         try:
             with open(path, 'w', encoding="utf-8") as f:
                 json.dump(self.model_dump(exclude_none=True, exclude_unset=True), f)

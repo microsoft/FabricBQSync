@@ -1,5 +1,7 @@
+PyJWT
 pydantic
 mlflow-skinny
 google-cloud-bigquery
+google-cloud-storage
 PyGithub
 db-dtypes

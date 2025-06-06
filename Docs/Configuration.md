@@ -8,6 +8,11 @@ Some configuration settings can be changed at any point, these setting are:
  - (table) enabled
  - (schedule) interval
  - (load) priority
+ - workspace_id/worskspace_name
+ - lakehouse_type/lakehouse_id/lakehouse
+ - lakehouse_schema
+ - lakehouse_table_name
+ - lakeouse_partition
  - source_query
  - source_predicate
  - enforce_expiration
@@ -15,6 +20,8 @@ Some configuration settings can be changed at any point, these setting are:
  - allow_schema_evolution
  - table_maintenance_enabled
  - table_maintenance_interval
+ - use_bigquery_export
+ - use_standard_api
 
 For more information on the all the settings available for configuration, please see the [Configuration Settings](ConfigurationSettings.md) index.
 

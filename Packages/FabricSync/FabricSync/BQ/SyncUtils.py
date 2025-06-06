@@ -669,7 +669,8 @@ class SyncUtil(ContextAwareBase):
             summary_load=schedule.SummaryLoadType, 
             source_query=schedule.SourceQuery, 
             source_predicate=schedule.SourcePredicate,
-            mirror_file_index=schedule.MirrorFileIndex 
+            mirror_file_index=schedule.MirrorFileIndex,
+            bq_api=str(schedule.SyncAPI)
         )])
 
         FabricMetastore.save_schedule_telemetry(rdd)
