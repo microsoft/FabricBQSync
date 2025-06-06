@@ -5,6 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "FabricSync"
 version = "2.2.0"
+
 dependencies = [
   "virtualenv",
   "fsspec-wrapper",
