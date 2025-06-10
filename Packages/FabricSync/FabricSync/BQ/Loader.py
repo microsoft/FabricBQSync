@@ -36,6 +36,7 @@ from FabricSync.BQ.Enum import (
 )
 from FabricSync.BQ.Core import DeltaTableMaintenance
 from FabricSync.BQ.GoogleStorageAPI import BucketStorageClient
+from FabricSync.BQ.BigQueryAPI import BigQueryClient
 
 class BQDataProxy(ConfigBase):
     def __init__(self, schedule:SyncSchedule) -> None:
@@ -158,6 +159,7 @@ class BQDataProxy(ConfigBase):
             "ProjectId": self.schedule.ProjectId,
             "Dataset": self.schedule.Dataset,
             "TableName": self.schedule.BQTableName,
+            "TempTableId": self.schedule.TempTableId,
             "API": self.schedule.SyncAPI,
             "Predicate": []
         }
@@ -698,11 +700,14 @@ class BQScheduleLoader(ConfigBase):
 
     def __sync_cleanup(self, schedule:SyncSchedule) -> None:
         if schedule.SyncAPI == BigQueryAPI.BUCKET and self.UserConfig.GCP.Storage.EnabledCleanUp:
-                self.Logger.debug(f"Cleaning up exported bucket data for {schedule.LakehouseTableName}...")
-                storage_client = BucketStorageClient(self.UserConfig, self.GCPCredential)
-                storage_client.delete_folder(
-                    self.UserConfig.GCP.Storage.BucketUri,
-                    storage_client.get_storage_prefix(schedule.ScheduleId, schedule.ID))
+            self.Logger.debug(f"Cleaning up exported bucket data for {schedule.LakehouseTableName}...")
+            storage_client = BucketStorageClient(self.UserConfig, self.GCPCredential)
+            storage_client.delete_folder(self.UserConfig.GCP.Storage.BucketUri,
+                storage_client.get_storage_prefix(schedule.ScheduleId, schedule.ID))
+        
+        if self.UserConfig.GCP.API.ForceBQJobConfig:
+            bq_client = BigQueryClient(self.UserConfig)
+            bq_client.drop_temp_table(schedule.ProjectId, schedule.TempTableId)
         
     def __show_sync_status(self, schedule:SyncSchedule, status:str=None) -> None:
         """

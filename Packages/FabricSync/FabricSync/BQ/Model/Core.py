@@ -72,11 +72,13 @@ class BQQueryModel(SyncBaseModel):
     TaskId:str = Field(alias="TaskId", default=None)
     Dataset:str = Field(alias="Dataset", default=None)
     TableName:str = Field(alias="TableName", default=None)
+    TempTableId:str = Field(alias="TempTableId", default=None)
     Query:Optional[str] = Field(alias="Query", default=None)
     PartitionFilter:str = Field(alias="PartitionFilter", default=None)
     Predicate:Optional[List[BQQueryModelPredicate]] = Field(alias="Predicate", default=None)
     API:BigQueryAPI = Field(alias="API", default=BigQueryAPI.STORAGE)
     Cached:bool = Field(alias="Cached", default=True)
+    Metadata:bool = Field(alias="Metadata", default=False)
 
     def add_predicate(self, predicate:str, type:PredicateType=PredicateType.AND) -> None:
         """

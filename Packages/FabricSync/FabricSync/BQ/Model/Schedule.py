@@ -165,6 +165,7 @@ class SyncSchedule(SyncBaseModel):
     TableColumns:Optional[str] = Field(alias="table_columns", default=None)   
     TotalTableTasks:Optional[int] = Field(alias="total_table_tasks", default=0) 
     HasComplexTypes:Optional[bool] = Field(alias="has_complex_types", default=False)
+    TempTableId:Optional[str] = Field(alias="temp_table_id", default=None)
 
     IsEmpty:bool = Field(alias="is_skipped", default=False) 
 
