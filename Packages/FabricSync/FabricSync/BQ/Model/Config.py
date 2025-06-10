@@ -689,6 +689,7 @@ class ConfigOptimization(SyncBaseModel):
     Attributes:
         UseApproximateRowCounts (Optional[bool]): Flag indicating whether to use approximate row counts for optimization (default: True).
         DisableDataframeCache (Optional[bool]): Flag indicating whether to disable the dataframe cache (default: False).
+        StandardAPIExport (Optional[ConfigStandardAPIExportConfig]): Configuration for standard API export settings.
     """
     UseApproximateRowCounts:Optional[bool] = Field(alias="use_approximate_row_counts", default=True)
     DisableDataframeCache:Optional[bool] = Field(alias="disable_dataframe_cache", default=False)

@@ -84,7 +84,8 @@ class BQMetadataLoader(ConfigBase):
                 "Dataset": dataset,
                 "Query": schema_model.get_base_sql(self.ID, project, dataset),
                 "API": bq_api,
-                "Cached": False
+                "Cached": False,
+                "Metadata": True
             }
             query_model = BQQueryModel(**qm)
 
@@ -178,7 +179,8 @@ class BQMetadataLoader(ConfigBase):
             "Dataset": dataset,
             "Query": bql,
             "API": bq_api,
-            "Cached": False
+            "Cached": False,
+            "Metadata": True
         }
 
         query_model = BQQueryModel(**qm)

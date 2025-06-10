@@ -4,9 +4,9 @@ from pyspark.sql.types import StructType # type: ignore
 import json
 import base64 as b64
 import uuid
+import time
 
 from threading import Lock
-
 
 from google.cloud import bigquery
 from google.oauth2.service_account import Credentials as gcpCredentials # type: ignore
@@ -76,11 +76,13 @@ class BigQueryClient(ContextAwareBase):
         self.Logger.debug(f"BQ STORAGE API...")
         cfg = self.__get_bq_reader_config(query)
 
-        if self.UserConfig.GCP.API.ForceBQJobConfig:
+        if self.UserConfig.GCP.API.ForceBQJobConfig and not query.Metadata:
             self.Logger.debug(f"BQ STORAGE API - FORCE JOB CONFIG...")
             dataset_id, table_id = self.__submit_bq_query_job(cfg["bigQueryJobLabel.msjobclient"], query)
 
-            del cfg["filter"]
+            if "filter" in cfg:
+                del cfg["filter"]
+
             cfg["dataset"] = dataset_id
 
             q = table_id
@@ -110,8 +112,18 @@ class BigQueryClient(ContextAwareBase):
         sql = self.__build_bq_query(query)
         bq_client = BigQueryStandardClient(query.ProjectId, self.GCPCredential)
 
+        destination_table = f"{self.UserConfig.GCP.API.MaterializationProjectID}.{self.UserConfig.GCP.API.MaterializationDataset}.{query.TempTableId}"
+
+        #Drop dest table if it exists
+        drop_table_sql = f"DROP TABLE IF EXISTS `{destination_table}`;"
+        query_job = bq_client.run_query(drop_table_sql)
+        query_job.result()
+
+        time.sleep(2)
+
         job_config = bigquery.QueryJobConfig(
             allow_large_results=True,
+            destination=destination_table,
             labels={
                 'msjobtype': 'fabricsync',
                 'msjobgroup': self.SafeID,
@@ -179,6 +191,18 @@ class BigQueryClient(ContextAwareBase):
             num_threads=self.UserConfig.Async.Parallelism, 
             num_partitions=self.UserConfig.Optimization.StandardAPIExport.ResultPartitions, 
             page_size=self.UserConfig.Optimization.StandardAPIExport.PageSize)
+
+    def drop_temp_table(self, project_id:str, temp_table:str) -> None:
+        bq_client = BigQueryStandardClient(project_id, self.GCPCredential)
+
+        temp_tbl = f"{self.UserConfig.GCP.API.MaterializationProjectID}.{self.UserConfig.GCP.API.MaterializationDataset}.{temp_table}"
+
+        query = f"DROP TABLE IF EXISTS `{temp_tbl}`;"
+        
+        self.Logger.debug(f"BQ DROP TEMP TABLE -> {temp_tbl}")
+
+        query_job = bq_client.run_query(query)
+        query_job.result()
 
     def __export_bq_table(self, query:BQQueryModel, gcs_path:str) -> str:
         """
