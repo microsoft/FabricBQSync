@@ -45,6 +45,8 @@ class SyncUtil(ContextAwareBase):
         Returns:
             None
         """
+        cls.Logger.debug("SYNCUTIL - Configuring Spark Session with user config")
+
         Session.set_spark_conf("spark.sql.parquet.vorder.enabled", "false")
         Session.set_spark_conf("spark.databricks.delta.optimizeWrite.enabled", "false")
         Session.set_spark_conf("spark.databricks.delta.collect.stats", "false")
@@ -92,6 +94,7 @@ class SyncUtil(ContextAwareBase):
         Returns:
             None
         """
+        cls.Logger.debug("SYNCUTIL - Ensuring Fabric Sync views are created")
         if not Session.SyncViewState:
             FabricMetastore.create_proxy_views()
             Session.SyncViewState = True
@@ -108,8 +111,8 @@ class SyncUtil(ContextAwareBase):
             "table_name LIKE ..." or "table_name NOT LIKE ..."), or None if the filter
             is not provided or incomplete.
         """
-
         if filter:
+            cls.Logger.debug(f"SYNCUTIL - Building filter predicate for filter: {filter.model_dump_json(indent=4)}")
             if filter.type and filter.pattern:
                 if filter.type == ObjectFilterType.INCLUDE.value:
                     return f"table_name LIKE '{filter.pattern}'"
@@ -137,8 +140,13 @@ class SyncUtil(ContextAwareBase):
                 A new DataFrame with the column mapped or renamed according to the defined rules.
         """
 
+        cls.Logger.debug(f"SYNCUTIL - Map column: {map.model_dump_json(indent=4)}")
+
+
         if map.IsTypeConversion:
             type_map = f"{map.Source.Type}_TO_{map.Destination.Type}"
+            cls.Logger.debug(f"SYNCUTIL - Map column type conversion: {type_map}")
+
 
             supported_conversion = False
 
@@ -166,8 +174,10 @@ class SyncUtil(ContextAwareBase):
                 if map.DropSource:
                     df = df.drop(map.Source.Name)
         elif map.IsRename:
+            cls.Logger.debug(f"SYNCUTIL - Map column rename: {map.Source.Name} to {map.Destination.Name}")
             df = df.withColumnRenamed(map.Source.Name, map.Destination.Name)
         elif map.DropSource:
+            cls.Logger.debug(f"SYNCUTIL - Map column drop: {map.Source.Name}")
             df = df.drop(map.Source.Name)
 
         return df
@@ -186,6 +196,8 @@ class SyncUtil(ContextAwareBase):
         """
         if not max_watermark:
             return None
+
+        cls.Logger.debug(f"SYNCUTIL - Formatting watermark: {max_watermark}")
 
         if type(max_watermark) is date:
             return max_watermark.strftime("%Y-%m-%d")
@@ -210,6 +222,8 @@ class SyncUtil(ContextAwareBase):
             None
         """
         
+        cls.Logger.debug(f"SYNCUTIL - Saving DataFrame to {table_name} with mode {mode} and format {format}")
+
         writer = df.write.mode(mode).format(format)
 
         if partition_by:
@@ -233,6 +247,8 @@ class SyncUtil(ContextAwareBase):
         Returns:
             List[str]: A list of partition columns for the Lakehouse dataset.
         """
+        cls.Logger.debug(f"SYNCUTIL - Getting Lakehouse partitions for {schedule.LakehouseTableName}")
+
         if schedule.LakehousePartition:
             return schedule.LakehousePartition.split(",")
         else:
@@ -249,6 +265,7 @@ class SyncUtil(ContextAwareBase):
         Returns:
             Tuple[SyncSchedule, DataFrame]: A tuple containing the updated SyncSchedule object and the transformed DataFrame.
         """
+        cls.Logger.debug(f"SYNCUTIL - Transforming DataFrame for {schedule.LakehouseTableName}")
         df = SyncUtil.map_columns(schedule, df)
 
         return (schedule, df)
@@ -264,6 +281,7 @@ class SyncUtil(ContextAwareBase):
         Returns:
             DataFrame: A new Spark DataFrame with the column mappings applied.
         """
+        cls.Logger.debug(f"SYNCUTIL - Mapping columns for {schedule.LakehouseTableName}")
         maps = schedule.get_column_map()
 
         if maps:
@@ -287,7 +305,8 @@ class SyncUtil(ContextAwareBase):
         """
         if schedule.Load_Type == SyncLoadType.MERGE and schedule.ExplodeArrays:
             raise SyncConfigurationError("Invalid load configuration: Merge is not supported when Explode Arrays is enabed")
-                
+
+        cls.Logger.debug(f"SYNCUTIL - Flattening DataFrame for {schedule.LakehouseTableName} with ExplodeArrays={schedule.ExplodeArrays} and FlattenInPlace={schedule.FlattenInPlace}")        
         if schedule.FlattenInPlace:
             df = SyncUtil.flatten_df(schedule.ExplodeArrays, df)
             flattened = None
@@ -319,6 +338,7 @@ class SyncUtil(ContextAwareBase):
             [ person_name, person_address_city, person_address_zip ]
         """
 
+        cls.Logger.debug("SYNCUTIL - Flattening nested DataFrame")
         stack = [((), nested_df)]
         columns = []
 
@@ -349,6 +369,7 @@ class SyncUtil(ContextAwareBase):
             DataFrame: A flattened DataFrame with nested fields and arrays resolved.
         """
         
+        cls.Logger.debug(f"SYNCUTIL - Flattening DataFrame with ExplodeArrays={explode_arrays}")
         array_cols = [c[0] for c in df.dtypes if c[1][:5] == "array"]
 
         if len(array_cols) > 0 and explode_arrays:
@@ -385,6 +406,7 @@ class SyncUtil(ContextAwareBase):
         :return: The partition predicate expression as a string, ready for use in SQL queries.
         """
 
+        cls.Logger.debug(f"SYNCUTIL - Resolving Fabric partition predicate for {partition_type} on column {partition_column} with grain {partition_grain} and id {partition_id}")
         if partition_type == BQPartitionType.TIME:
             partition_dt=SyncUtil.get_derived_date_from_part_id(partition_grain, partition_id)
             proxy_cols = SyncUtil.get_fabric_partition_proxy_cols(partition_grain)
@@ -414,6 +436,7 @@ class SyncUtil(ContextAwareBase):
                 partition grain.
         """
 
+        cls.Logger.debug(f"SYNCUTIL - Getting Fabric partition proxy columns for grain {partition_grain}")
         proxy_cols = list(CalendarInterval)
 
         match partition_grain:
@@ -430,6 +453,30 @@ class SyncUtil(ContextAwareBase):
         return [x for x in proxy_cols]
     
     @classmethod
+    def get_partition_id_df_format(cls, partition_grain:CalendarInterval) -> str:
+        """
+        Return the partition ID format string for a DataFrame based on the specified partition grain.
+        Parameters:
+            partition_grain (CalendarInterval): The interval for partitioning (e.g., DAY, MONTH, YEAR, HOUR).
+        Returns:
+            str: A date/time format string corresponding to the given partition grain.
+        """
+        cls.Logger.debug(f"SYNCUTIL - Getting partition ID dataframe format for grain {partition_grain}")
+        pattern = None
+
+        match partition_grain:
+            case CalendarInterval.DAY:
+                pattern = "yyyyMMdd"
+            case CalendarInterval.MONTH:
+                pattern = "yyyyMM"
+            case CalendarInterval.YEAR:
+                pattern = "yyyy"
+            case CalendarInterval.HOUR:
+                pattern = "yyyyMMddHH"
+        
+        return pattern
+
+    @classmethod
     def get_bq_partition_id_format(cls, partition_grain:CalendarInterval) -> str:
         """
         Return the BigQuery partition ID format string based on the specified partition grain.
@@ -438,7 +485,7 @@ class SyncUtil(ContextAwareBase):
         Returns:
             str: A date/time format string corresponding to the given partition grain.
         """
-
+        cls.Logger.debug(f"SYNCUTIL - Getting BQ partition ID format for grain {partition_grain}")
         pattern = None
 
         match partition_grain:
@@ -464,9 +511,11 @@ class SyncUtil(ContextAwareBase):
             datetime: A datetime object derived from the partition identifier.
         """
 
+        cls.Logger.debug(f"SYNCUTIL - Getting derived date from partition ID {partition_id} with grain {partition_grain}")
+
         dt_format = SyncUtil.get_bq_partition_id_format(partition_grain)
         return datetime.strptime(partition_id, dt_format)
-    
+
     @classmethod
     def create_fabric_partition_proxy_cols(cls, df:DataFrame, partition:str, proxy_cols:list[CalendarInterval]) -> DataFrame:  
         """
@@ -481,6 +530,7 @@ class SyncUtil(ContextAwareBase):
         Returns:
             DataFrame: A Spark DataFrame that includes newly added partition proxy columns.
         """
+        cls.Logger.debug(f"SYNCUTIL - Creating Fabric partition proxy columns for {partition} with intervals {proxy_cols}")
 
         for c in proxy_cols:
             match c:
@@ -510,6 +560,7 @@ class SyncUtil(ContextAwareBase):
         Returns:
             List[str]: A list of partition proxy column names based on the partition column and intervals.
         """
+        cls.Logger.debug(f"SYNCUTIL - Getting Fabric partition columns for {partition} with intervals {proxy_cols}")
         return [f"__{partition}_{c.value}" for c in proxy_cols]
 
     @classmethod
@@ -525,6 +576,7 @@ class SyncUtil(ContextAwareBase):
         Returns:
             str: The partition predicate expression as a string, ready for use in SQL queries.
         """
+        cls.Logger.debug(f"SYNCUTIL - Getting Fabric partition predicate for {partition} with date {partition_dt} and intervals {proxy_cols}")
         partition_predicate = []
 
         for c in proxy_cols:
@@ -559,6 +611,7 @@ class SyncUtil(ContextAwareBase):
                 DataFrame: A DataFrame containing the range partition map with columns for the range name,
                 range low, and range high values.
         """
+        cls.Logger.debug(f"SYNCUTIL - Getting BQ range map from string: {tbl_ranges}")
         bq_range = [int(r.strip()) for r in tbl_ranges.split(",")]
         partition_range = [(f"{r}-{r + bq_range[2]}", r, r + bq_range[2]) for r in range(bq_range[0], bq_range[1], bq_range[2])]
         return partition_range
@@ -574,6 +627,7 @@ class SyncUtil(ContextAwareBase):
             Returns:
             DataFrame: A new Spark DataFrame with the range partition column added.
         """
+        cls.Logger.debug(f"SYNCUTIL - Creating Fabric range partition for {schedule.LakehouseTableName} with partition column {schedule.PartitionColumn} and range {schedule.PartitionRange}")
         partition_range = SyncUtil.get_bq_range_map(schedule.PartitionRange)
         
         df = context.createDataFrame(partition_range, ["range_name", "range_low", "range_high"]) \
@@ -595,6 +649,7 @@ class SyncUtil(ContextAwareBase):
             Returns:
             str: The partition predicate expression as a string, ready for use in SQL queries.
         """
+        cls.Logger.debug(f"SYNCUTIL - Getting partition range predicate for {schedule.LakehouseTableName} with partition column {schedule.PartitionColumn} and id {schedule.PartitionId}")
         partition_range = SyncUtil.get_bq_range_map(schedule.PartitionRange)
         r = [x for x in partition_range if str(x[1]) == schedule.PartitionId]
         if not r:
@@ -616,6 +671,7 @@ class SyncUtil(ContextAwareBase):
         Returns:
             Tuple[int, Any]: A tuple containing the source row count and watermark value.
         """
+        cls.Logger.debug(f"SYNCUTIL - Getting source metrics for {schedule.LakehouseTableName}")
         row_count = 0
         watermark = None
 
@@ -649,6 +705,7 @@ class SyncUtil(ContextAwareBase):
         Returns:
             None
         """
+        cls.Logger.debug(f"SYNCUTIL - Saving schedule telemetry for {schedule.LakehouseTableName} with status {schedule.Status.value}")
         rdd = cls.Context.sparkContext.parallelize([Row( 
             schedule_id=schedule.ScheduleId, 
             sync_id=schedule.SyncId,

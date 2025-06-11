@@ -79,6 +79,7 @@ class BQQueryModel(SyncBaseModel):
     API:BigQueryAPI = Field(alias="API", default=BigQueryAPI.STORAGE)
     Cached:bool = Field(alias="Cached", default=True)
     Metadata:bool = Field(alias="Metadata", default=False)
+    UseForceBQJobConfig:bool = Field(alias="UseForceBQJobConfig", default=False)
 
     def add_predicate(self, predicate:str, type:PredicateType=PredicateType.AND) -> None:
         """

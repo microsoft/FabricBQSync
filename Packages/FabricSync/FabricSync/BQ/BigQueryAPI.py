@@ -4,7 +4,6 @@ from pyspark.sql.types import StructType # type: ignore
 import json
 import base64 as b64
 import uuid
-import time
 
 from threading import Lock
 
@@ -76,7 +75,7 @@ class BigQueryClient(ContextAwareBase):
         self.Logger.debug(f"BQ STORAGE API...")
         cfg = self.__get_bq_reader_config(query)
 
-        if self.UserConfig.GCP.API.ForceBQJobConfig and not query.Metadata:
+        if (self.UserConfig.GCP.API.ForceBQJobConfig or query.UseForceBQJobConfig) and not query.Metadata:
             self.Logger.debug(f"BQ STORAGE API - FORCE JOB CONFIG...")
             dataset_id, table_id = self.__submit_bq_query_job(cfg["bigQueryJobLabel.msjobclient"], query)
 
@@ -113,13 +112,6 @@ class BigQueryClient(ContextAwareBase):
         bq_client = BigQueryStandardClient(query.ProjectId, self.GCPCredential)
 
         destination_table = f"{self.UserConfig.GCP.API.MaterializationProjectID}.{self.UserConfig.GCP.API.MaterializationDataset}.{query.TempTableId}"
-
-        #Drop dest table if it exists
-        drop_table_sql = f"DROP TABLE IF EXISTS `{destination_table}`;"
-        query_job = bq_client.run_query(drop_table_sql)
-        query_job.result()
-
-        time.sleep(2)
 
         job_config = bigquery.QueryJobConfig(
             allow_large_results=True,
@@ -244,7 +236,11 @@ class BigQueryClient(ContextAwareBase):
         sql = query.Query if query.Query else query.TableName
 
         if not SqlValidator.is_valid(sql):
+            if query.Query:
+                self.Logger.debug(f"Invalid BQ Query: {query.Query}")
+            
             sql = f"SELECT * FROM `{query.TableName}`"
+        
 
         if query.PartitionFilter:
             query.add_predicate(query.PartitionFilter)
