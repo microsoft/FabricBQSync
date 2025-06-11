@@ -15,6 +15,7 @@ class SqlValidator():
         Returns:
             bool: True if the SQL query is valid, False otherwise.
         """
+        sql = re.sub(r'[\r\n]', '', sql)
         return (cls.__sql_pattern.match(sql) != None)
 
     @classmethod

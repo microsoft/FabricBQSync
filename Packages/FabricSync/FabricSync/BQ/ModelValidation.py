@@ -317,15 +317,17 @@ class UserConfigurationValidation:
         errors = []
 
         errors.append(cls.__required_field(partition, "enabled"))
-        errors.append(cls.__required_field(partition, "type"))
-        errors.append(cls.__required_field(partition, "column"))
-        errors.append(cls.__required_field(partition, "partition_data_type"))
-            
-        if cls.__is_in_list(partition, "type", [BQPartitionType.TIME, BQPartitionType.TIME_INGESTION]):
-            errors.append(cls.__required_field(partition, "partition_grain"))
+        
+        if partition.Enabled:
+            errors.append(cls.__required_field(partition, "type"))
+            errors.append(cls.__required_field(partition, "column"))
+            errors.append(cls.__required_field(partition, "partition_data_type"))
+                
+            if cls.__is_in_list(partition, "type", [BQPartitionType.TIME, BQPartitionType.TIME_INGESTION]):
+                errors.append(cls.__required_field(partition, "partition_grain"))
 
-        if cls.__is_equal(partition, "type", BQPartitionType.RANGE):
-            errors.append(cls.__required_field(partition, "partition_range"))
+            if cls.__is_equal(partition, "type", BQPartitionType.RANGE):
+                errors.append(cls.__required_field(partition, "partition_range"))
 
         return [f"bq_partition.{e}" for e in errors if e]
     

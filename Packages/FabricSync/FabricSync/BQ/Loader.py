@@ -2,7 +2,7 @@ from pyspark.sql import ( # type: ignore
     DataFrame, Observation
 )
 from pyspark.sql.functions import ( # type: ignore
-    col, lit, count, max
+    col, lit, count, max, date_format
 )
 from datetime import (
     datetime, timezone, timedelta
@@ -50,39 +50,6 @@ class BQDataProxy(ConfigBase):
             return proxy.get_bq_data()
         except Exception as e:
             raise SyncLoadError(msg=f"Failed to retrieve table from BQ: {e}", data=schedule)
-
-    def __get_cdc_merge_set(self, columns:str, alias:str) -> Dict[str, str]:
-        """
-        Builds a dictionary of column expressions for a CDC merge operation.
-        This function constructs a dictionary of column expressions for a CDC merge operation
-        based on the provided column names and alias. It returns the dictionary of column
-        expressions for the merge operation.
-        Args:
-            columns (str): A comma-separated string of column names to merge.
-            alias (str): The alias to use for the column names in the merge operation.
-        Returns:
-            Dict[str, str]: A dictionary of column expressions for the merge operation.
-        """
-        return {c: f"{alias}.{c}" for c in columns.split(",")}
-
-    def __get_cdc_latest_changes(self, df:DataFrame) -> DataFrame:
-        """
-        Retrieves the latest changes from a CDC DataFrame based on the provided SyncSchedule.
-        This function calculates the row number for each key group in the DataFrame, filters
-        the DataFrame to only include the latest changes, and returns the filtered DataFrame.
-        Args:
-            df (DataFrame): The DataFrame to filter for the latest changes.
-        Returns:
-            DataFrame: A filtered DataFrame containing only the latest changes for each key group.
-        """
-        keys = ",".join(self.schedule.Keys)
-
-        row_num_expr = f"row_number() over(partition by {keys} order by BQ_CDC_CHANGE_TIMESTAMP desc) as cdc_row_num"
-
-        df = df.selectExpr("*", row_num_expr).filter(col("cdc_row_num") == 1) \
-            .drop(col("cdc_row_num"), col("BQ_CDC_CHANGE_TIMESTAMP"))
-        
-        return df
     
     def __build_cdc_query(self) -> str:
         """
@@ -165,16 +132,24 @@ class BQDataProxy(ConfigBase):
         }
         query_model = BQQueryModel(**qm)
 
-        if self.schedule.IsTimePartitionedStrategy and self.schedule.PartitionId is not None:
-            self.Logger.debug(f"Loading {self.schedule.LakehouseTableName} with time ingestion...")
-            part_format = SyncUtil.get_bq_partition_id_format(self.schedule.PartitionGrain)
-            if self.schedule.PartitionDataType == BQDataType.TIMESTAMP:        
-                part_filter = f"timestamp_trunc({self.schedule.PartitionColumn}, {self.schedule.PartitionGrain}) = PARSE_TIMESTAMP('{part_format}', '{self.schedule.PartitionId}')"
+        if self.schedule.IsTimePartitionedStrategy:
+            if self.schedule.InitialLoad and not self.schedule.RequirePartitionFilter:
+                self.Logger.debug(f"Loading {self.schedule.LakehouseTableName} with initial time ingestion...")
+                query_model = self.__get_time_ingestion_query(self.schedule, query_model)                
             else:
-                part_filter = f"date_trunc({self.schedule.PartitionColumn}, {self.schedule.PartitionGrain}) = PARSE_DATETIME('{part_format}', '{self.schedule.PartitionId}')"
+                self.Logger.debug(f"Loading {self.schedule.LakehouseTableName} with time ingestion...")
+                part_format = SyncUtil.get_bq_partition_id_format(self.schedule.PartitionGrain)
+                if self.schedule.PartitionDataType == BQDataType.TIMESTAMP:        
+                    part_filter = f"timestamp_trunc({self.schedule.PartitionColumn}, {self.schedule.PartitionGrain}) = PARSE_TIMESTAMP('{part_format}', '{self.schedule.PartitionId}')"
+                else:
+                    part_filter = f"date_trunc({self.schedule.PartitionColumn}, {self.schedule.PartitionGrain}) = PARSE_DATETIME('{part_format}', '{self.schedule.PartitionId}')"
 
-            self.Logger.debug(f"Load from BQ by time partition: {part_filter}")
-            query_model.PartitionFilter = part_filter
+                if self.schedule.WatermarkColumn and not self.schedule.InitialLoad:
+                    predicate = self.__get_watermark_predicate(self.schedule)
+                    query_model.add_predicate(predicate)
+
+                self.Logger.debug(f"Load from BQ by time partition: {part_filter}")
+                query_model.PartitionFilter = part_filter
         elif self.schedule.IsRangePartitioned:
             self.Logger.debug(f"Loading {self.schedule.LakehouseTableName} with range partitioning...")
             part_filter = SyncUtil.get_partition_range_predicate(self.schedule)
@@ -183,12 +158,7 @@ class BQDataProxy(ConfigBase):
         elif not self.schedule.InitialLoad:
             if self.schedule.Load_Strategy == SyncLoadStrategy.WATERMARK:
                 self.Logger.debug(f"Loading {self.schedule.LakehouseTableName} with watermark...")
-                if self.schedule.MaxWatermark.isdigit():
-                    predicate = f"{self.schedule.WatermarkColumn} > {self.schedule.MaxWatermark}"
-                else:
-                    predicate = f"{self.schedule.WatermarkColumn} > '{self.schedule.MaxWatermark}'"
-
-                self.Logger.debug(f"Load from BQ with watermark: {predicate}")
+                predicate = self.__get_watermark_predicate(self.schedule)
                 query_model.add_predicate(predicate)
             elif self.schedule.IsCDCStrategy and self.schedule.MaxWatermark:
                 cdc_query = self.__build_cdc_query()
@@ -211,6 +181,7 @@ class BQDataProxy(ConfigBase):
             observation = None
 
         df_bq = self.read_bq_to_dataframe(query_model)
+        self.Logger.debug(f"{self.schedule.LakehouseTableName} - BASE Read from BQ")
 
         if df_bq:
             if observation:
@@ -219,7 +190,8 @@ class BQDataProxy(ConfigBase):
                     df_bq = df_bq.observe(observation, 
                         count(lit(1)).alias("row_count"),
                         max(col("BQ_CDC_CHANGE_TIMESTAMP")).alias("watermark"))
-                elif self.schedule.Load_Strategy == SyncLoadStrategy.WATERMARK and self.schedule.WatermarkColumn:
+                #elif self.schedule.Load_Strategy == SyncLoadStrategy.WATERMARK and self.schedule.WatermarkColumn:
+                elif self.schedule.WatermarkColumn:
                     self.Logger.debug(f"{self.schedule.LakehouseTableName} - Observation Watermark: {self.schedule.WatermarkColumn}")
                     df_bq = df_bq.observe(
                         observation, 
@@ -229,21 +201,19 @@ class BQDataProxy(ConfigBase):
                     self.Logger.debug(f"{self.schedule.LakehouseTableName} - Observation Count Only")
                     df_bq = df_bq.observe(observation, count(lit(1)).alias("row_count"))
 
-            if not self.schedule.IsMirrored:
-                #Ignore BQ partitioning, open-mirror does not support partitioning - 1/2025
-                if self.schedule.IsPartitioned and not self.schedule.LakehousePartition:
-                    if self.schedule.Partition_Type == BQPartitionType.TIME:
+            if self.schedule.IsPartitioned:
+                if self.schedule.Partition_Type == BQPartitionType.TIME:
+                    proxy_cols = SyncUtil.get_fabric_partition_proxy_cols(self.schedule.PartitionGrain)
+                    self.schedule.FabricPartitionColumns = SyncUtil.get_fabric_partition_cols(self.schedule.PartitionColumn, proxy_cols)
 
-                        proxy_cols = SyncUtil.get_fabric_partition_proxy_cols(self.schedule.PartitionGrain)
-                        self.schedule.FabricPartitionColumns = SyncUtil.get_fabric_partition_cols(self.schedule.PartitionColumn, proxy_cols)
+                    if self.schedule.IsTimeIngestionPartitioned:
+                        self.Logger.debug(f"{self.schedule.LakehouseTableName} - Time Ingestion Pseudo Col: {self.schedule.PartitionColumn}-{self.schedule.PartitionId}")
+                        df_bq = self.__resolve_time_ingestion_pseudo_columns(self.schedule, df_bq)          
 
-                        if self.schedule.IsTimeIngestionPartitioned:
-                            df_bq = df_bq.withColumn(self.schedule.PartitionColumn, lit(self.schedule.PartitionId))               
-
-                        df_bq = SyncUtil.create_fabric_partition_proxy_cols(df_bq, self.schedule.PartitionColumn, proxy_cols)
-                    else:
-                        self.schedule.FabricPartitionColumns = [f"__{self.schedule.PartitionColumn}_Range"]
-                        df_bq = SyncUtil.create_fabric_range_partition(self.Context, df_bq, self.schedule)
+                    df_bq = SyncUtil.create_fabric_partition_proxy_cols(df_bq, self.schedule.PartitionColumn, proxy_cols)
+                else:
+                    self.schedule.FabricPartitionColumns = [f"__{self.schedule.PartitionColumn}_Range"]
+                    df_bq = SyncUtil.create_fabric_range_partition(self.Context, df_bq, self.schedule)
             
             return (self.schedule, df_bq, observation)
         else:
@@ -251,6 +221,70 @@ class BQDataProxy(ConfigBase):
             self.schedule.Status = SyncStatus.NO_DATA
 
             return (self.schedule, None, None)
+
+    def __resolve_time_ingestion_pseudo_columns(self, schedule:SyncSchedule, df:DataFrame) -> DataFrame:
+        """
+        Resolves pseudo columns for time ingestion in a DataFrame.
+        This function checks if the DataFrame contains the partition column and, if not,
+        adds the partition column with the specified partition ID or formats it based on the
+        partition grain. It returns the updated DataFrame with the partition column added.
+        Args:
+            schedule (SyncSchedule): The synchronization schedule containing the partition details.
+            df (DataFrame): The DataFrame to resolve pseudo columns for.
+        Returns:
+            DataFrame: The updated DataFrame with the partition column added.
+        """
+        if schedule.PartitionColumn not in df.schema.fieldNames():
+            if schedule.PartitionId:
+                df = df.withColumn(schedule.PartitionColumn, lit(schedule.PartitionId))  
+            else:
+                dt_format = SyncUtil.get_partition_id_df_format(schedule.PartitionGrain)
+                df = df.withColumn(schedule.PartitionColumn, \
+                                date_format(col(f"__{schedule.PartitionColumn}__"), dt_format))
+        
+        return df
+
+    def __get_time_ingestion_query(self, schedule:SyncSchedule, query_model:BQQueryModel) -> BQQueryModel:
+        """
+        Constructs a query for time ingestion based on the provided SyncSchedule.
+        This function builds a query to retrieve data from a BigQuery table for time ingestion,
+        including the partition column and any necessary predicates. It sets the query string
+        in the BQQueryModel and returns the updated model.
+        Args:
+            schedule (SyncSchedule): The synchronization schedule containing the partition details.
+            query_model (BQQueryModel): The model to hold the query and other parameters.
+        Returns:
+            BQQueryModel: The updated BQQueryModel with the constructed query for time ingestion.
+        """
+        if not schedule.SourceQuery:
+            sql = f"SELECT *, {schedule.PartitionColumn} AS __{schedule.PartitionColumn}__ FROM `{query_model.TableName}`"
+
+            query_model.Query = sql
+            self.Logger.debug(f"{self.schedule.LakehouseTableName} - Time Ingestion Initial Load Query: {sql}")
+        
+        query_model.UseForceBQJobConfig = True
+
+        return query_model
+
+    def __get_watermark_predicate(self, schedule:SyncSchedule) -> str:
+        """
+        Constructs a predicate for filtering data based on the watermark column and its maximum value.
+        This function checks if the maximum watermark value is a digit or a string and constructs
+        the appropriate predicate for filtering the data. It returns the predicate string to be used
+        in the BigQuery query for loading data.
+        Args:
+            schedule (SyncSchedule): The synchronization schedule containing the watermark column and its maximum value.
+        Returns:
+            str: The predicate string for filtering data based on the watermark column and its maximum value.
+        """
+        if schedule.MaxWatermark.isdigit():
+            predicate = f"{schedule.WatermarkColumn} > {schedule.MaxWatermark}"
+        else:
+            predicate = f"{schedule.WatermarkColumn} > '{schedule.MaxWatermark}'"
+        
+        self.Logger.debug(f"Load from BQ with watermark: {predicate}")
+
+        return predicate
 
     def __use_dataframe_observation(self) -> bool:
         """
@@ -317,6 +351,39 @@ class BQFabricWriter(ConfigBase):
 
         return (inserts, updates, deletes)
 
+    def __get_cdc_merge_set(self, columns:str, alias:str) -> Dict[str, str]:
+        """
+        Builds a dictionary of column expressions for a CDC merge operation.
+        This function constructs a dictionary of column expressions for a CDC merge operation
+        based on the provided column names and alias. It returns the dictionary of column
+        expressions for the merge operation.
+        Args:
+            columns (str): A comma-separated string of column names to merge.
+            alias (str): The alias to use for the column names in the merge operation.
+        Returns:
+            Dict[str, str]: A dictionary of column expressions for the merge operation.
+        """
+        return {c: f"{alias}.{c}" for c in columns.split(",")}
+
+    def __get_cdc_latest_changes(self, df:DataFrame) -> DataFrame:
+        """
+        Retrieves the latest changes from a CDC DataFrame based on the provided SyncSchedule.
+        This function calculates the row number for each key group in the DataFrame, filters
+        the DataFrame to only include the latest changes, and returns the filtered DataFrame.
+        Args:
+            df (DataFrame): The DataFrame to filter for the latest changes.
+        Returns:
+            DataFrame: A filtered DataFrame containing only the latest changes for each key group.
+        """
+        keys = ",".join(self.schedule.Keys)
+
+        row_num_expr = f"row_number() over(partition by {keys} order by BQ_CDC_CHANGE_TIMESTAMP desc) as cdc_row_num"
+
+        df = df.selectExpr("*", row_num_expr).filter(col("cdc_row_num") == 1) \
+            .drop(col("cdc_row_num"), col("BQ_CDC_CHANGE_TIMESTAMP"))
+        
+        return df
+    
     def __merge_table(self, schedule:SyncSchedule, tableName:str, df:DataFrame) -> Tuple[SyncSchedule, DataFrame]:
         """
         Merges the given Spark DataFrame into a Delta table, optionally flattening the data if
@@ -439,11 +506,12 @@ class BQFabricWriter(ConfigBase):
                 if schedule.Load_Strategy == SyncLoadStrategy.CDC_APPEND:
                     df_bq = df_bq.drop("BQ_CDC_CHANGE_TYPE", "BQ_CDC_CHANGE_TIMESTAMP")
 
-                if not schedule.FabricPartitionColumns and not schedule.LakehousePartition:
-                    df_bq = self.__write_to_lakehouse(schedule, df=df_bq, options=write_config)
-                else:
+                partition_cols = None
+
+                if schedule.FabricPartitionColumns or schedule.LakehousePartition:
                     partition_cols = SyncUtil.get_lakehouse_partitions(schedule)
-                    df_bq = self.__write_to_lakehouse(schedule, df=df_bq, partition_by=partition_cols, options=write_config)
+
+                df_bq = self.__write_to_lakehouse(schedule, df=df_bq, partition_by=partition_cols, options=write_config)
                 
                 task_part, total_row_count = self.__increment_task_tracker(schedule.LakehouseTableName, observation)
             

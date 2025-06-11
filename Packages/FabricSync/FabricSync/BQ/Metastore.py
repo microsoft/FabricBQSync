@@ -214,9 +214,8 @@ class FabricMetastore(ContextAwareBase):
             AND 
                 (
                     COALESCE(o.option_value,FALSE)=TRUE OR
-                    (c.load_strategy='PARTITION' AND s.last_schedule_dt IS NOT NULL) OR
-                    (c.load_strategy='PARTITION' AND c.partition_type='RANGE') OR
-                    c.load_strategy='TIME_INGESTION'
+                    (c.load_strategy IN ('PARTITION', 'TIME_INGESTION') AND s.last_schedule_dt IS NOT NULL) OR
+                    (c.load_strategy='PARTITION' AND c.partition_type='RANGE') 
                 )
         ),
         sorted_columns AS (
