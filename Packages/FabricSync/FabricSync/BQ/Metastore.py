@@ -277,7 +277,7 @@ class FabricMetastore(ContextAwareBase):
             COALESCE(h.mirror_file_index,1) AS mirror_file_index,
             COALESCE(xt.has_complex_types, FALSE) AS has_complex_types,
             COUNT(*) OVER(PARTITION BY c.sync_id,c.table_id) AS total_table_tasks,
-            UUID() AS temp_table_id
+            CONCAT('BQ_SYNC_', UUID()) AS temp_table_id
         FROM sync_configuration c
         JOIN sync_schedule s ON c.sync_id=s.sync_id AND c.table_id=s.table_id
         LEFT JOIN last_completed_schedule h ON c.sync_id=h.sync_id AND c.table_id=h.table_id 

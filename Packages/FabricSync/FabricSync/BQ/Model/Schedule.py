@@ -98,7 +98,57 @@ class SyncSchedule(SyncBaseModel):
         - TotalTableTasks: The total number of tasks for the table.
         - IsEmpty: Indicates if the sync operation was skipped (no data to process).
         - HasComplexTypes: Indicates the source data contains complex data types
-        """
+        - TempTableId: The temporary table ID used during the sync operation.
+        - BQTableName: The name of the BigQuery table, typically in the format 'project.dataset.table'.
+    Methods:
+        - to_telemetry() -> dict:
+            Returns a dictionary representation of the model excluding sensitive information for telemetry purposes.    
+        - get_column_map() -> List[MappedColumn]:
+            Returns a list of mapped columns based on the ColumnMap JSON string.
+        - ID() -> str:
+            Returns a unique identifier for the sync schedule based on the SyncId and PartitionId.
+        - IsInitialLoad() -> bool:
+            Determines if the sync schedule is for an initial load.
+        - get_summary_load_type() -> str:
+            Returns a summary load type string based on the sync schedule's properties.
+        - Mode() -> str:
+            Returns the mode of the sync load based on whether it is an initial load or not.
+        - PrimaryKey() -> str:
+            Returns the first primary key from the Keys list if available, otherwise returns None.
+        - HasKeys() -> bool:
+            Checks if the sync schedule has any primary keys defined.
+        - IsMirrored() -> bool:
+            Checks if the sync schedule is for a mirrored database.
+        - LakehouseHttpUri() -> str:
+            Returns the HTTP URI for the lakehouse
+        - LakehouseAbfssUri() -> str:
+            Returns the ABFSS URI for the lakehouse
+        - LakehouseAbfssTablePath() -> str:
+            Returns the ABFSS path for the lakehouse table.
+            The path is constructed based on whether the lakehouse schema is used or not.
+        - LakehouseTableName() -> str:
+            Returns the full name of the lakehouse table, including the lakehouse and schema if applicable.
+        - IsCDCStrategy() -> bool:
+            Checks if the sync schedule uses a Change Data Capture (CDC) strategy.  
+        - IsTimeIngestionPartitioned() -> bool:
+            Checks if the sync schedule uses a time ingestion partitioning strategy.
+        - IsRangePartitioned() -> bool:
+            Checks if the sync schedule uses a range partitioning strategy.
+        - IsTimePartitionedStrategy() -> bool:
+            Checks if the sync schedule uses a time partitioning strategy.
+        - IsPartitionedSyncLoad() -> bool:
+            Checks if the sync schedule is partitioned.
+        - LoadPriority() -> int:
+            Calculates the load priority of the sync schedule based on its priority and size priority.
+        - SyncAPI() -> BigQueryAPI:
+            Determines the API to be used for the sync operation based on the configuration settings.
+        - UpdateRowCounts(src:int = 0, insert:int = 0, update:int = 0) -> None:
+            Updates the row counts for the sync schedule.
+        - __lt__(other) -> bool:
+            Compares the load priority of this sync schedule with another sync schedule.
+        - __gt__(other) -> bool:
+            Compares the load priority of this sync schedule with another sync schedule.
+    """
     EndTime:Optional[datetime] = Field(alias="completed", default=None)
     SourceRows:Optional[int] = Field(alias="source_rows", default=0)
     InsertedRows:Optional[int] = Field(alias="inserted_rows", default=0)
@@ -166,6 +216,7 @@ class SyncSchedule(SyncBaseModel):
     TotalTableTasks:Optional[int] = Field(alias="total_table_tasks", default=0) 
     HasComplexTypes:Optional[bool] = Field(alias="has_complex_types", default=False)
     TempTableId:Optional[str] = Field(alias="temp_table_id", default=None)
+    BQTableName:Optional[str] = Field(alias="bq_table_name", default=None)
 
     IsEmpty:bool = Field(alias="is_skipped", default=False) 
 
@@ -329,16 +380,6 @@ class SyncSchedule(SyncBaseModel):
             table_nm = f"{self.Lakehouse}.{self.LakehouseTable}"
 
         return table_nm
-
-    @property
-    def BQTableName(self) -> str:
-        """
-        Returns the full name of the BigQuery table in the format 'project.dataset.table'.
-        This is constructed from the ProjectId, Dataset, and TableName attributes.
-        Returns:
-            str: The full name of the BigQuery table.
-        """
-        return f"{self.ProjectId}.{self.Dataset}.{self.TableName}"
 
     @property
     def IsCDCStrategy(self) -> bool:

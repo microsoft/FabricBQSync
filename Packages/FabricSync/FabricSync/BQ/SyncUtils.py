@@ -30,6 +30,29 @@ from FabricSync.BQ.Metastore import FabricMetastore
 from FabricSync.BQ.Exceptions import SyncConfigurationError
 
 class SyncUtil(ContextAwareBase):
+    """
+    Utility class for synchronization operations in a Spark environment.
+    This class provides methods for configuring Spark sessions, building filter predicates,
+    mapping columns, flattening DataFrames, and handling partitioning logic.
+    It also includes methods for transforming DataFrames based on synchronization schedules,
+    ensuring the creation of Fabric Sync views, and managing column mappings.
+    Attributes:
+        Logger (Logger): The logger instance for logging debug messages.
+    Methods:
+        configure_context(user_config:ConfigDataset, gcp_credential:str=None, 
+                          config_path:str=None, token:str=None) -> None:
+            Initializes a Spark session and configures Spark settings based on the provided config.
+        ensure_sync_views() -> None:
+            Ensures that the Fabric Sync views are created in the metadata lakehouse.
+        build_filter_predicate(filter:ConfigObjectFilter) -> str:
+            Builds a SQL predicate string based on the specified object filter.
+        map_column(map:MappedColumn, df:DataFrame) -> DataFrame:
+            Maps or renames the source column in the given Spark DataFrame based on the provided mapping configuration.
+        format_watermark(max_watermark) -> str:
+            Formats a watermark value as a string.
+        save_dataframe(table_name:str, df:DataFrame, mode:str, format:str="delta", path=None, partition_by:list=None, options:dict=None) -> None:
+            Saves a Spark DataFrame to a specified path or as a table.
+    """
     @classmethod
     def configure_context(cls, user_config:ConfigDataset, gcp_credential:str=None, 
                                     config_path:str=None, token:str=None) -> None:

@@ -12,6 +12,102 @@ from FabricSync.BQ.Enum import (
 )
 
 class UserConfigurationValidation:
+    """
+    A class to validate user configuration settings for a BigQuery sync operation.
+    This class provides methods to validate the configuration dataset, ensuring that all required fields
+    are present and correctly configured. It checks for required fields, validates sub-configuration sections,
+    and ensures that dependencies between configuration fields are satisfied.
+    Attributes:
+        _config_context (ConfigDataset): The configuration dataset to be validated.
+    Methods:
+        validate(config: ConfigDataset) -> List[str]:
+            Validates the provided configuration dataset, checking for required fields and
+            verifying sub-configuration sections (AutoDiscover, Fabric, GCP, Logging, etc.).
+            Returns a list of error messages describing any validation failures.
+        _validate_logging(log: ConfigLogging) -> List[str]:
+            Validates the logging configuration by checking required fields.
+            Returns a list of error messages indicating any missing or invalid fields.
+        _validate_maintenance(maintenance: ConfigMaintenance) -> List[str]:
+            Validates the given maintenance configuration by checking required fields and optional
+            threshold fields if they are set. Returns a list of error messages describing any validation findings.
+        _validate_autodiscovery(auto_discover: ConfigAutodiscover) -> List[str]:
+            Validates the autodiscovery configuration, ensuring that required fields are present and
+            at least one of the following attributes is configured: 'tables', 'views', or 'materialized_views'.
+            Returns a list of error messages, each prefixed with "autodiscover." if any validation fails.
+        _validate_discovery_object(discovery_obj: ConfigDiscoverObject, prefix: str) -> List[str]:
+            Validates the provided discovery object, checking that required fields are set.
+            This function verifies if the fields "enabled" and "load_all" are specified.
+            If a filter is present, it additionally verifies "pattern" and "type".
+        _validate_table_configuration(tables: List[ConfigBQTable]) -> List[str]:
+            Validates the configuration of BigQuery tables, ensuring that required fields are provided
+            and checks whether certain integer fields (e.g., priority) fall within valid ranges.
+            Returns a list of error strings describing any validation issues found, each prefixed with its corresponding table identifier.
+        _validate_table_load_config(table: ConfigBQTable) -> List[str]:
+            Validates the table load configuration for a given ConfigBQTable, enforcing the correct SyncLoadStrategy,
+            ensuring required fields are present, and checking for minimum list lengths where applicable.
+            Returns a list of error messages describing any validation failures.
+        _validate_table_column(target: ConfigTableColumn, context: str) -> str:
+            Validates the specified table column within a given context, checking for required fields
+            and returning an error message if any are missing.
+        _validate_lakehouse_target(target: ConfigLakehouseTarget) -> List[str]:
+            Validates the given Lakehouse target configuration, checking for required fields.
+        _validate_bq_partition(partition: ConfigPartition) -> List[str]:
+            Validates the given BigQuery partition configuration, checking for required fields and ensuring that
+            dependent fields are set when necessary. Returns a list of error messages describing any validation issues found.
+        _validate_column_map(column_mapping: List[MappedColumn]) -> List[str]:
+            Validates the column mapping configuration for a given table, ensuring that required fields are provided
+            and validating the source and destination fields for each mapped column.
+            Returns a list of error messages describing any validation issues found.
+        _validate_table_maintenance(maintenance: ConfigTableMaintenance) -> List[str]:
+            Validates the table maintenance configuration for a given table, checking for required fields
+            and returning a list of error messages if any are missing.
+        _validate_gcp_config(gcp: ConfigGCP) -> List[str]:
+            Validates the GCP configuration by checking required fields and verifying sub-configuration
+            sections (GCPCredential, GCPAPI, GCPProjects, GCPDatasets). Returns a list of error messages indicating any missing or invalid fields.
+        _validate_gcp_credentials_config(credentials: ConfigGCPCredential) -> List[str]:
+            Validates the GCP credentials configuration by checking required fields and ensuring that at least one of the
+            following attributes is configured: 'credential', 'credential_path', or 'credential_secret_key'.
+        _validate_gcp_storage_config(gcp_storage: ConfigGCPStorage) -> List[str]:
+            Validates the GCP storage configuration, checking for required fields such as 'bucket_uri' and 'enable_cleanup'.
+        _validate_gcp_api_config(api: ConfigGCPAPI) -> List[str]:
+            Validates the GCP API configuration by checking required fields and verifying dependent fields.
+            Returns a list of error messages indicating any missing or invalid fields.
+        _validate_gcp_projects_config(projects: List[ConfigGCPProject]) -> List[str]:
+            Validates the GCP project configuration by checking required fields and verifying dependent fields.
+            Returns a list of error messages indicating any missing or invalid fields.
+        _validate_gcp_datasets_config(datasets: List[ConfigGCPDataset]) -> List[str]:
+            Validates the GCP dataset configuration by checking required fields.
+            Returns a list of error messages indicating any missing or invalid fields.
+        _validate_fabric_config(fabric: ConfigFabric) -> List[str]:
+            Validates the Fabric configuration by checking required fields and verifying dependent fields.
+            Returns a list of error messages indicating any missing or invalid fields.
+        __is_in_int_range(obj: Any, attr: str, min: int, max: int) -> str:
+            Validates that the given attribute is an integer within the specified range.
+        __check_min_list_length(obj: Any, attr: str, length: int) -> str:
+            Validates that the given attribute is a list with at least the specified number of elements.
+        __at_least_one_attr(obj: Any, attrs: List[str]) -> str:
+            Validates that at least one of the specified attributes is configured.
+        __is_in_list(obj: Any, attr: str, values: List[Any]) -> str:
+            Validates that the given attribute is one of the specified values.
+        __required_field(obj: Any, attr: str) -> str:
+            Validates that the given attribute is set in the provided object.
+            Returns an error message if the attribute is not set, otherwise returns None.
+        __equals_value(obj: Any, attr: str, value: Any, message: str) -> str:
+            Validates that the given attribute equals the specified value.
+            Returns an error message if the attribute does not equal the value, otherwise returns None.
+        __dependents(obj: Any, attrs: List[str], message: str, optional: bool = True) -> List[str]:
+            Validates that at least one of the specified attributes is set in the provided object.
+            If none are set, returns an error message indicating that at least one must be configured.
+        __is_null_or_empty(obj: Any, attr: str) -> bool:
+            Checks if the given attribute in the provided object is null or empty.
+        __get_value(obj: Any, attr: str) -> Any:
+            Retrieves the value of the specified attribute from the provided object.
+            If the attribute is not set, returns None.
+    Notes:
+        - The class is designed to be used as a utility for validating user configurations before performing
+          synchronization operations with BigQuery.
+        - It provides detailed error messages to help users identify and correct configuration issues.
+    """
     _config_context:ConfigDataset = None
 
     @classmethod
@@ -459,8 +555,8 @@ class UserConfigurationValidation:
         errors.append(cls.__required_field(api, "use_standard_api"))
         errors.append(cls.__required_field(api, "use_cdc"))
         errors.append(cls.__required_field(api, "enable_bigquery_export"))
-        errors.extend(cls.__dependents(api, ["materialization_project_id", "materialization_dataset"], 
-                "materialization_project_id or materialization_dataset"))
+        #errors.extend(cls.__dependents(api, ["materialization_project_id", "materialization_dataset"], 
+        #        "materialization_project_id or materialization_dataset"))
         
         return [f"api.{e}" for e in errors if e]
 
@@ -497,7 +593,7 @@ class UserConfigurationValidation:
         errors = []
 
         for d in datasets:
-            errors.append(cls.__required_field(d, "dataset"))
+            errors.append(cls.__required_field(d, "dataset_id"))
         
         return [f"datasets.{e}" for e in errors if e]
 

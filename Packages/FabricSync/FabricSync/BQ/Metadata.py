@@ -82,7 +82,8 @@ class BQMetadataLoader(ConfigBase):
             qm = {
                 "ProjectId": project,
                 "Dataset": dataset,
-                "Query": schema_model.get_base_sql(self.ID, project, dataset),
+                "Query": schema_model.get_base_sql(self.ID, 
+                            self.UserConfig.GCP.format_table_path(project, dataset, schema_model.View)),
                 "API": bq_api,
                 "Cached": False,
                 "Metadata": True
@@ -96,6 +97,7 @@ class BQMetadataLoader(ConfigBase):
                 case BigQueryObjectType.BASE_TABLE:
                     query_model.add_predicate("table_type='BASE TABLE'")
                     query_model.add_predicate("table_name NOT LIKE '_bqc_%'")
+                    query_model.add_predicate("table_name NOT LIKE 'BQ_SYNC_%'")
 
                     if not self.UserConfig.LoadAllTables:
                         load_all = False
@@ -165,9 +167,11 @@ class BQMetadataLoader(ConfigBase):
         """
         schema_model = self.schema_models[view]
 
-        bql = schema_model.get_base_sql(self.ID, project, dataset, alias="c")
+        bql = schema_model.get_base_sql(self.ID, 
+            self.UserConfig.GCP.format_table_path(project, dataset, schema_model.View), 
+            alias="c")
         bql = bql + \
-            f" JOIN `{project}.{dataset}.{SchemaView.INFORMATION_SCHEMA_TABLES}` t ON t.table_catalog=c.table_catalog AND t.table_schema=c.table_schema AND t.table_name=c.table_name"
+            f" JOIN `{self.UserConfig.GCP.format_table_path(project, dataset, SchemaView.INFORMATION_SCHEMA_TABLES)}` t ON t.table_catalog=c.table_catalog AND t.table_schema=c.table_schema AND t.table_name=c.table_name"
 
         if self.UserConfig.GCP.API.UseStandardAPI:
             bq_api = BigQueryAPI.STANDARD
@@ -187,6 +191,7 @@ class BQMetadataLoader(ConfigBase):
 
         query_model.add_predicate("t.table_type='BASE TABLE'")
         query_model.add_predicate("t.table_name NOT LIKE '_bqc_%'")
+        query_model.add_predicate("t.table_name NOT LIKE 'BQ_SYNC_%'")
 
         filter = self.UserConfig.autodiscover.tables.filter
         filter_pattern = SyncUtil.build_filter_predicate(filter)
@@ -266,8 +271,8 @@ class BQMetadataLoader(ConfigBase):
         Returns:
             None: The function logs the exception information.
         """
-        #self.Logger.error(msg=f"ERROR {value}: {traceback.format_exc()}")
-        self.Logger.error(msg=f"ERROR - {value[1]} FAILED: {value[2]}")
+        #self.Logger.error(msg=f"ERROR - {value[1]} FAILED: {value[2]}")
+        pass
 
     def __async_bq_metadata(self) -> None:
         """
@@ -317,8 +322,6 @@ class BQMetadataLoader(ConfigBase):
         mode = SyncLoadType.APPEND
 
         with SyncTimer() as t:
-            schema_model = self.schema_models[view]
-
             for p in self.UserConfig.GCP.Projects:
                 for d in p.Datasets:
                     match view:

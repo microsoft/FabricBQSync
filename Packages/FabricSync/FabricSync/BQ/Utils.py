@@ -28,15 +28,36 @@ from FabricSync.BQ.Exceptions import SyncTimerError
 
 @dataclass
 class SyncTimer(ContextDecorator):
+    """
+    A simple timer class to measure elapsed time.
+    It can be used as a context manager or as a regular class.
+    Example usage:
+        with SyncTimer() as timer:
+            # Your code here
+            time.sleep(2)
+        print(f"Elapsed time: {timer.elapsed_time} seconds")
+    """
     _start_time: Optional[float] = field(default=None, init=False, repr=False)
 
     def start(self) -> None:
+        """
+        Start the timer.
+        Raises:
+            SyncTimerError: If the timer is already running.
+        """
         if self._start_time is not None:
             raise SyncTimerError(f"Timer is already running.")
 
         self._start_time = time.perf_counter()
 
     def stop(self) -> float:
+        """
+        Stop the timer and return the elapsed time.
+        Returns:
+            float: The elapsed time in seconds.
+        Raises:
+            SyncTimerError: If the timer is not running.
+        """
         if self._start_time is None:
             raise SyncTimerError(f"Timer is not running.")
 
@@ -46,21 +67,64 @@ class SyncTimer(ContextDecorator):
         return self.elapsed_time
 
     def __enter__(self) -> None:
+        """
+        Start the timer when entering the context.
+        Returns:
+            SyncTimer: The instance of the timer.
+        """
         self.start()
         return self
 
     def __exit__(self, *exc_info: Any) -> None:
+        """
+        Stop the timer when exiting the context.
+        Args:
+            *exc_info: Exception information, if any.
+        """
         self.stop()
     
     def __str__(self) -> str:
+        """
+        Return a string representation of the elapsed time in minutes.
+        Returns:
+            str: The elapsed time in minutes, formatted to 4 decimal places.
+        """
         if self.elapsed_time:
             return f"{(self.elapsed_time/60):.4f} mins"
         else:
             return None
         
 class Util():
+    """
+    A utility class providing various helper methods for file operations, data processing, and configuration handling.
+    This class includes methods for reading files into buffers or strings, downloading files from URLs, ensuring directory paths exist,
+    handling complex data types in DataFrames, encoding strings to base64, checking if a string is base64 encoded, and retrieving values from JSON objects.
+    It also includes methods for assigning enum values and removing special characters from strings.
+    Methods:
+        read_file_to_buffer(path:str) -> BytesIO: Reads a file from the specified path and returns its content as a BytesIO buffer. 
+        read_file_to_string(path:str) -> str: Reads a file from the specified path and returns its content as a string.
+        download_file(url:str, path:str): Downloads a file from a URL and saves it to the specified path.
+        download_file_to_buffer(url:str) -> BytesIO: Downloads a file from a URL and returns its content as a BytesIO buffer.
+        download_file_to_string(url:str) -> str: Downloads a file from a URL and returns its content as a string.
+        ensure_paths(paths): Ensures that the given paths exist, creating them if they do not.
+        get_complex_types(df:DataFrame) -> Dict[str, str]: Gets the complex types in the DataFrame schema.
+        convert_complex_types_to_json_str(df:DataFrame) -> DataFrame: Converts complex types in the DataFrame schema to JSON strings.
+        encode_base64(val:str) -> str: Encodes a string to base64.
+        is_base64(val) -> bool: Checks if a string is base64 encoded.
+        get_config_value(json_data, json_path, default=None, raise_error=False): Gets a value from a JSON object using a path.
+        assign_enum_val(enum_class, value): Assigns an enum value from a string.
+        assign_enum_name(enum_class, name): Assigns an enum value from a string.
+        remove_special_characters(val) -> str: Removes special characters from a string.
+    """
     @staticmethod
     def read_file_to_buffer(path:str) -> BytesIO:
+        """
+        Read a file from the specified path and return its content as a BytesIO buffer.
+        Args:
+            path (str): The path to the file.
+        Returns:
+            BytesIO: A BytesIO buffer containing the content of the file.
+        """
         buffer = BytesIO()
 
         with open(path, 'rb') as f:
@@ -70,6 +134,13 @@ class Util():
     
     @staticmethod
     def read_file_to_string(path:str) -> str:
+        """
+        Read a file from the specified path and return its content as a string.
+        Args:
+            path (str): The path to the file.
+        Returns:
+            str: The content of the file as a string.
+        """
         buffer = StringIO()
 
         with buffer:
@@ -80,6 +151,12 @@ class Util():
 
     @staticmethod
     def download_file(url:str, path:str):
+        """
+        Download a file from a URL and save it to the specified path.
+        Args:
+            url (str): The URL of the file to download.
+            path (str): The local path where the file should be saved.
+        """
         response = requests.get(url, stream=True)
 
         if response.status_code == 200:
@@ -90,6 +167,13 @@ class Util():
 
     @staticmethod
     def download_file_to_buffer(url:str):
+        """
+        Download a file from a URL and return its content as a BytesIO buffer.
+        Args:
+            url (str): The URL of the file to download.
+        Returns:
+            BytesIO: A BytesIO buffer containing the content of the file.
+        """
         buffer = BytesIO()
         response = requests.get(url, stream=True)
 
@@ -104,6 +188,13 @@ class Util():
 
     @staticmethod
     def download_file_to_string(url:str) -> str:
+        """
+        Download a file from a URL and return its content as a string.
+        Args:
+            url (str): The URL of the file to download.
+        Returns:
+            str: The content of the file as a string.
+        """
         response = requests.get(url, stream=True)
         response.raise_for_status()
 
@@ -118,6 +209,11 @@ class Util():
     
     @staticmethod
     def ensure_paths(paths):
+        """
+        Ensure that the given paths exist, creating them if they do not.
+        Args:
+            paths (list): A list of paths to ensure.
+        """
         for p in paths:
             if not os.path.isdir(p):
                 os.mkdir(p)
@@ -248,4 +344,11 @@ class Util():
     
     @staticmethod
     def remove_special_characters(val) -> str:
+        """
+        Remove special characters from a string.
+        Args:
+            val (str): The string from which to remove special characters.
+        Returns:
+            str: The string with special characters removed.
+        """
         return re.sub(r'[^A-Za-z0-9]', '', val)
