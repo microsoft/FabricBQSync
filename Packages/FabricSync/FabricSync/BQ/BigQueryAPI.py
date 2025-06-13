@@ -18,9 +18,41 @@ from FabricSync.BQ.GoogleStorageAPI import BucketStorageClient
 from FabricSync.BQ.Threading import QueueProcessor
 
 class BigQueryClient(ContextAwareBase):
-    def __init__(self, config:ConfigDataset) -> None:
+    """
+    A class to interact with Google BigQuery.
+    This class provides methods to read data from BigQuery using different APIs,
+    such as the Storage API, Standard API, and Exported Bucket API.
+    It also provides methods to submit queries, read data into DataFrames, and manage temporary tables.
+    Attributes:
+        UserConfig (ConfigDataset): The user configuration settings loaded from a JSON file.
+    Methods:
+        __init__(config:ConfigDataset) -> None:
+            Initializes a new instance of the BigQueryClient class.
+        __get_bq_reader_config(query:BQQueryModel) -> dict:
+            Returns the configuration for reading from BigQuery.
+        read_from_storage_api(query:BQQueryModel) -> DataFrame:
+            Reads the data from the given BigQuery query into a DataFrame using the Storage API.
+        read_from_standard_api(query:BQQueryModel, schema:StructType = None) -> DataFrame:
+            Reads the data from the given BigQuery query into a DataFrame using the Standard API.
+        read_from_exported_bucket(query:BQQueryModel) -> DataFrame:
+            Reads the data from the given BigQuery query into a DataFrame using the Exported Bucket API.
+        read_from_standard_export(query:BQQueryModel) -> DataFrame:
+            Reads the data from the given BigQuery query into a DataFrame using the Standard API export.
+        drop_temp_table(project_id:str, temp_table:str) -> None:
+            Drops a temporary table in BigQuery.
+        __export_bq_table(query:BQQueryModel, gcs_path:str) -> str:
+            Exports the BigQuery table to a Google Cloud Storage bucket in Parquet format.
+    Raises:
+        SyncConfigurationError: If the GCP configuration is not set in the user configuration.
+        BQConnectorError: If there is an error reading data from BigQuery.
+    """
+    def __init__(self, config:ConfigDataset) -> None:   
         """
         Initializes a new instance of the BigQueryClient class.
+        Args:
+            config (ConfigDataset): The user configuration settings loaded from a JSON file.
+        Raises:
+            SyncConfigurationError: If the GCP configuration is not set in the user configuration.  
         """
         self.UserConfig = config
 
@@ -38,26 +70,26 @@ class BigQueryClient(ContextAwareBase):
             "credentials" : self.GCPCredential,
             "viewsEnabled" : "true",
             "traceJobId" : f"FABRIC_SYNC_JOB_{uuid.uuid4()}".lower(),
+            "parentProject" : query.ProjectId,
+            "materializationProject" : query.ProjectId,
+            "materializationDataset" : query.Dataset,
             "bigQueryJobLabel.msjobtype": "fabricsync",
             "bigQueryJobLabel.msjobgroup": self.SafeID,
             "bigQueryJobLabel.msclienttype": "spark",
             "bigQueryJobLabel.msjobclient": f"FABRIC_SYNC_CLIENT_{uuid.uuid4()}".lower()
         }
-    
-        if self.UserConfig.GCP.API.MaterializationProjectID:
-            cfg["materializationProject"] = self.UserConfig.GCP.API.MaterializationProjectID
-        else:
-            cfg["materializationProject"] = query.ProjectId
-        
-        if self.UserConfig.GCP.API.MaterializationDataset:
-            cfg["materializationDataset"] = self.UserConfig.GCP.API.MaterializationDataset
-        else:
-            cfg["materializationDataset"] = query.Dataset
+
+        default_materialization = self.UserConfig.GCP.API.DefaultMaterialization
+
+        if default_materialization:
+            if default_materialization.ProjectID:
+                cfg["materializationProject"] = default_materialization.ProjectID
+
+            if default_materialization.Dataset and default_materialization.Dataset.Dataset:
+                cfg["materializationDataset"] = default_materialization.Dataset.Dataset
 
         if self.UserConfig.GCP.API.BillingProjectID:
             cfg["parentProject"] = self.UserConfig.GCP.API.BillingProjectID
-        else:
-            cfg["parentProject"] = query.ProjectId
 
         if query.PartitionFilter:
             cfg["filter"] = query.PartitionFilter
@@ -77,7 +109,7 @@ class BigQueryClient(ContextAwareBase):
 
         if (self.UserConfig.GCP.API.ForceBQJobConfig or query.UseForceBQJobConfig) and not query.Metadata:
             self.Logger.debug(f"BQ STORAGE API - FORCE JOB CONFIG...")
-            dataset_id, table_id = self.__submit_bq_query_job(cfg["bigQueryJobLabel.msjobclient"], query)
+            dataset_id, table_id = self.__submit_bq_query_job(cfg, query)
 
             if "filter" in cfg:
                 del cfg["filter"]
@@ -98,7 +130,7 @@ class BigQueryClient(ContextAwareBase):
 
         return df 
 
-    def __submit_bq_query_job(self, client_id:str, query:BQQueryModel):
+    def __submit_bq_query_job(self, cfg:dict, query:BQQueryModel):
         """
         Submits a BigQuery query job using the provided query model and client ID.
         Parameters:
@@ -109,9 +141,15 @@ class BigQueryClient(ContextAwareBase):
         """
         self.Logger.debug(f"BQ SUBMIT QUERY JOB...")
         sql = self.__build_bq_query(query)
-        bq_client = BigQueryStandardClient(query.ProjectId, self.GCPCredential)
 
-        destination_table = f"{self.UserConfig.GCP.API.MaterializationProjectID}.{self.UserConfig.GCP.API.MaterializationDataset}.{query.TempTableId}"
+        location = self.UserConfig.GCP.get_dataset_location(query.ProjectId, query.Dataset)
+        
+        bq_client = BigQueryStandardClient(query.ProjectId, self.GCPCredential, location)
+
+        destination_table = self.UserConfig.GCP.format_table_path(cfg["materializationProject"],
+                                                                  cfg["materializationDataset"], 
+                                                                  query.TempTableId)
+        self.Logger.debug(f"BQ SUBMIT QUERY JOB - TEMP TABLE - {destination_table}...")
 
         job_config = bigquery.QueryJobConfig(
             allow_large_results=True,
@@ -120,7 +158,7 @@ class BigQueryClient(ContextAwareBase):
                 'msjobtype': 'fabricsync',
                 'msjobgroup': self.SafeID,
                 'msclienttype': 'standard',
-                'msjobclient': client_id
+                'msjobclient': cfg["bigQueryJobLabel.msjobclient"]
             }
         )
 
@@ -142,7 +180,9 @@ class BigQueryClient(ContextAwareBase):
         """
         self.Logger.debug(f"BQ STANDARD API...")
         sql_query = self.__build_bq_query(query)
-        bq_client = BigQueryStandardClient(query.ProjectId, self.GCPCredential)
+
+        location = self.UserConfig.GCP.get_dataset_location(query.ProjectId, query.Dataset)
+        bq_client = BigQueryStandardClient(query.ProjectId, self.GCPCredential, location)
 
         return bq_client.read_to_dataframe(sql_query, schema)
 
@@ -177,18 +217,28 @@ class BigQueryClient(ContextAwareBase):
         """
         self.Logger.debug(f"BQ STANDARD API EXPORT...")
         sql_query = self.__build_bq_query(query)
-        bq_client = BigQueryStandardExport(query.ProjectId, self.GCPCredential)
+        
+        location = self.UserConfig.GCP.get_dataset_location(query.ProjectId, query.Dataset)
+        bq_client = BigQueryStandardExport(query.ProjectId, self.GCPCredential, location)
 
         return bq_client.export(sql_query, 
             num_threads=self.UserConfig.Async.Parallelism, 
             num_partitions=self.UserConfig.Optimization.StandardAPIExport.ResultPartitions, 
             page_size=self.UserConfig.Optimization.StandardAPIExport.PageSize)
 
-    def drop_temp_table(self, project_id:str, temp_table:str) -> None:
-        bq_client = BigQueryStandardClient(project_id, self.GCPCredential)
+    def drop_temp_table(self, project_id:str, dataset:str, temp_table:str) -> None:
+        """
+        Drops a temporary table in BigQuery.
+        Parameters:
+            project_id (str): The project ID where the temporary table is located.
+            dataset (str): The dataset where the temporary table is located.
+            temp_table (str): The name of the temporary table to drop.
+        """
 
-        temp_tbl = f"{self.UserConfig.GCP.API.MaterializationProjectID}.{self.UserConfig.GCP.API.MaterializationDataset}.{temp_table}"
-
+        project,location,ds = self.UserConfig.GCP.resolve_dataset_path(project_id, dataset)
+        bq_client = BigQueryStandardClient(project_id, self.GCPCredential, location)
+        temp_tbl = self.UserConfig.GCP.format_table_path(project,ds,temp_table)
+        
         query = f"DROP TABLE IF EXISTS `{temp_tbl}`;"
         
         self.Logger.debug(f"BQ DROP TEMP TABLE -> {temp_tbl}")
@@ -204,7 +254,8 @@ class BigQueryClient(ContextAwareBase):
             gcs_path (str): The Google Cloud Storage path where the exported data will be stored.
         Returns:
             str: The Google Cloud Storage path where the exported data is stored."""
-        bq_client = BigQueryStandardClient(query.ProjectId, self.GCPCredential)
+        location = self.UserConfig.GCP.get_dataset_location(query.ProjectId, query.Dataset)
+        bq_client = BigQueryStandardClient(query.ProjectId, self.GCPCredential, location)
 
         export_query = f"""
         EXPORT DATA OPTIONS(
@@ -260,15 +311,42 @@ class BigQueryClient(ContextAwareBase):
         return sql
 
 class BigQueryStandardClient(ContextAwareBase):
-    def __init__(self, project_id:str, credentials:str) -> None:
+    """
+    A class to interact with Google BigQuery using the standard API.
+    This class provides methods to run queries, read data into DataFrames, and manage job configurations.
+    Attributes:
+        project_id (str): The project ID for the BigQuery client.
+        credentials (str): The credentials for the BigQuery client.
+        _client_id (str): A unique client ID for the BigQuery client.
+        __client (bigquery.Client): The BigQuery client instance.
+    Methods:
+        __init__(project_id:str, credentials:str, location:str=None) -> None:
+            Initializes a new instance of the BigQueryStandardClient class.
+        generate_job_id() -> str:
+            Generates a unique job ID for the BigQuery job.
+        _client() -> bigquery.Client:
+            Returns the BigQuery client instance.
+        _job_config() -> bigquery.QueryJobConfig:
+            Returns the job configuration for the BigQuery query.
+        run_query(sql:str, job_id:str = None, job_cfg:bigquery.QueryJobConfig = None):
+            Runs the given SQL query using the BigQuery client.
+        read_to_dataframe(sql:str, schema:StructType = None) -> DataFrame:
+            Reads the data from the given SQL query into a DataFrame.
+    """
+    def __init__(self, project_id:str, credentials:str, location:str=None) -> None:
         """
         Initializes a new instance of the BigQueryStandardClient class.
         Args:
             project_id (str): The project ID.
             credentials (str): The credentials.
+            location (str, optional): The location for the BigQuery client. Defaults to None.
+        Raises:
+            SyncConfigurationError: If the GCP configuration is not set in the user configuration.
+        This class provides methods to run queries, read data into DataFrames, and manage job configurations.
         """
         self.credentials = credentials
         self.project_id = project_id
+        self.location = location
         self.__client:bigquery.Client = None
 
         self._client_id = f"FABRIC_SYNC_CLIENT_{uuid.uuid4()}"
@@ -292,7 +370,10 @@ class BigQueryStandardClient(ContextAwareBase):
         if not self.__client:
             key = json.loads(b64.b64decode(self.credentials))
             gcp_credentials = gcpCredentials.from_service_account_info(key)        
-            self.__client = bigquery.Client(project=self.project_id, credentials=gcp_credentials)
+            self.__client = bigquery.Client(
+                project=self.project_id, 
+                credentials=gcp_credentials,
+                location=self.location)
 
         return self.__client
 
@@ -304,7 +385,7 @@ class BigQueryStandardClient(ContextAwareBase):
         Returns:
             bigquery.QueryJobConfig: The job configuration for the BigQuery query.
         """
-        return bigquery.QueryJobConfig(
+        job_config = bigquery.QueryJobConfig(
             allow_large_results=True,
             labels={
                 'msjobtype': 'fabricsync',
@@ -313,6 +394,8 @@ class BigQueryStandardClient(ContextAwareBase):
                 'msjobclient': self._client_id.lower()
             }
         )
+
+        return job_config
 
     def run_query(self, sql:str, job_id:str = None, job_cfg:bigquery.QueryJobConfig = None):
         """
@@ -353,7 +436,7 @@ class BigQueryStandardClient(ContextAwareBase):
         job_id = self.generate_job_id()
 
         self.Logger.debug(f"STANDARD API - TO_DATAFRAME - CLIENT ({self._client_id}) - JOB ({job_id})")
-        bq = self.run_query(sql, job_id).to_dataframe()
+        bq = self.run_query(sql, job_id=job_id).to_dataframe()
 
         if len(bq) > 0:
             return self.Context.createDataFrame(bq, schema=schema)
@@ -361,14 +444,22 @@ class BigQueryStandardClient(ContextAwareBase):
             return None
 
 class BigQueryStandardExport(BigQueryStandardClient):
-    def __init__(self, project_id:str, credentials:str) -> None:
+    def __init__(self, project_id:str, credentials:str, location:str=None) -> None:
         """
         Initializes a new instance of the BigQueryStandardExport class.
         Args:
             project_id (str): The project ID.
             credentials (str): The credentials.
+            location (str, optional): The location for the BigQuery client. Defaults to None.
+        Methods:
+            __process_page(page:int) -> None:
+                Processes a single page of results from the BigQuery query.
+            __thread_exception_handler(value:Exception) -> None:
+                Handles exceptions raised by the thread processor.
+            export(sql:str, num_threads:int = 10, num_partitions:int = 1, page_size:int = 100000) -> DataFrame:
+                Exports the data from the given SQL query using the standard BigQuery API.
         """
-        super().__init__(project_id, credentials)
+        super().__init__(project_id, credentials, location)
 
         self.__query_job = None
         self.__data_df:DataFrame = None
@@ -421,7 +512,7 @@ class BigQueryStandardExport(BigQueryStandardClient):
             DataFrame: The DataFrame containing the exported data.
         """
         self.page_size = page_size
-        self.__query_job = self.run_query(sql, self.__job_id)
+        self.__query_job = self.run_query(sql, job_id=self.__job_id)
         results = self.__query_job.result()
 
         total_rows = results.total_rows

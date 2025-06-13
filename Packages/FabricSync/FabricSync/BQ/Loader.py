@@ -39,12 +39,58 @@ from FabricSync.BQ.GoogleStorageAPI import BucketStorageClient
 from FabricSync.BQ.BigQueryAPI import BigQueryClient
 
 class BQDataProxy(ConfigBase):
+    """
+    A class to retrieve data from BigQuery based on a SyncSchedule.
+    This class handles the logic for building CDC queries, applying partition filters,
+    and loading data from BigQuery into a Spark DataFrame. It also manages the observation
+    of row counts and watermarks for synchronization tasks.
+    Attributes:
+        schedule (SyncSchedule): The synchronization schedule containing the BigQuery table details.
+    Methods:
+        __init__(schedule:SyncSchedule) -> None:
+            Initializes a new instance of the BQDataProxy class with the provided SyncSchedule.
+        get_schedule_data(schedule:SyncSchedule) -> Tuple[SyncSchedule, DataFrame, Observation]:
+            Retrieves data from BigQuery based on the provided SyncSchedule.
+        get_bq_data() -> Tuple[SyncSchedule, DataFrame, Observation]:
+            Retrieves data from a BigQuery table or query based on the provided SyncSchedule.
+        __build_cdc_query() -> str:
+            Builds a CDC (Change Data Capture) or full load query string for BigQuery based on the provided SyncSchedule.
+        is_timezone_aware(timestamp:datetime) -> bool:
+            Checks if the specified timestamp object is timezone-aware.
+        __get_watermark_predicate(schedule:SyncSchedule) -> str:
+            Constructs a predicate for filtering data based on the watermark column and its maximum value.
+        __use_dataframe_observation() -> bool:
+            Determines whether to use a DataFrame observation for monitoring row counts and watermarks.
+        __get_time_ingestion_query(schedule:SyncSchedule, query_model:BQQueryModel) -> BQQueryModel:
+            Constructs a query for time ingestion based on the provided SyncSchedule.
+        __resolve_time_ingestion_pseudo_columns(schedule:SyncSchedule, df:DataFrame) -> DataFrame:
+            Resolves pseudo columns for time ingestion in a DataFrame.
+    """
     def __init__(self, schedule:SyncSchedule) -> None:
+        """
+        Initializes a new instance of the BQDataProxy class with the provided SyncSchedule.
+        Args:
+            schedule (SyncSchedule): The synchronization schedule containing the BigQuery table details.
+        """
         super().__init__()
         self.schedule = schedule
 
     @staticmethod
     def get_schedule_data(schedule:SyncSchedule) -> Tuple[SyncSchedule, DataFrame, Observation]:
+        """
+        Retrieves data from BigQuery based on the provided SyncSchedule.
+        This method dynamically applies partition or watermark filters, constructs a query,
+        and loads data from BigQuery into a Spark DataFrame. It also optionally sets up
+        an Observation object for monitoring row counts and watermark values.
+        Args:
+            schedule (SyncSchedule): The synchronization schedule containing the BigQuery table details.
+        Returns:
+            Tuple[SyncSchedule, DataFrame, Observation]:
+                A tuple containing the updated SyncSchedule, the loaded Spark DataFrame,
+                and an optional Observation object (None if not used).
+        Raises:
+            SyncLoadError: If there is an error retrieving data from BigQuery.
+        """
         try:
             proxy = BQDataProxy(schedule)
             return proxy.get_bq_data()
@@ -306,7 +352,47 @@ class BQDataProxy(ConfigBase):
         return False
 
 class BQFabricWriter(ConfigBase):
+    """
+    A class to write data to a Fabric Lakehouse table based on a SyncSchedule.
+    This class handles the logic for merging data, applying CDC strategies, and managing
+    partitioned sync loads. It provides methods to merge data into Delta tables, apply CDC
+    strategies, and manage the partitioned sync loads with appropriate locking mechanisms.
+    Attributes:
+        MultiWrite (ThreadSafeDict): A thread-safe dictionary to manage multiple write operations.
+    Methods:
+        __init__() -> None:
+            Initializes a new instance of the BQFabricWriter class.
+        __get_delta_merge_row_counts(schedule:SyncSchedule, telemetry:DataFrame) -> Tuple[int, int, int]:
+            Retrieves the counts of inserted, updated, and deleted rows from the current day's MERGE operations.
+        __get_cdc_merge_set(columns:str, alias:str) -> Dict[str, str]:
+            Builds a dictionary of column expressions for a CDC merge operation.
+        __get_cdc_latest_changes(df:DataFrame) -> DataFrame:
+            Retrieves the latest changes from a CDC DataFrame based on the provided SyncSchedule.
+        __merge_table(schedule:SyncSchedule, tableName:str, df:DataFrame) -> Tuple[SyncSchedule, DataFrame]:
+            Merges the given Spark DataFrame into a Delta table, optionally flattening the data if indicated by the schedule.
+        __merge_dataframe(schedule:SyncSchedule, delta_dest:DeltaTable, df:DataFrame) -> None:
+            Merge into Lakehouse Table based on User Configuration. Only supports Insert/Update All.
+        __save_bq_to_lakehouse(schedule:SyncSchedule, df_bq:DataFrame, lock:Lock, write_config=None) -> Tuple[SyncSchedule, DataFrame]:
+            Saves a DataFrame to a Lakehouse table based on the provided SyncSchedule.
+        __apply_task_tracker_observation(schedule:SyncSchedule, df:DataFrame) -> Tuple[DataFrame, Observation]:
+            Applies an Observation object to a DataFrame for monitoring row counts.
+        __write_to_lakehouse(schedule:SyncSchedule, df:DataFrame, mode:str, partition_by:list=None, options:dict=None) -> DataFrame:
+            Writes a DataFrame to a Lakehouse table with the specified mode, partitioning, and options.
+        __write_to_mirror(schedule:SyncSchedule, df:DataFrame, mode:str, partition_by:list=None, options:dict=None) -> DataFrame:
+            Writes a DataFrame to a Fabric Mirror with the specified mode, partitioning, and options.
+        __increment_task_tracker(lakehouse_table_name:str, observation:Observation) -> Tuple[int, int]:
+            Increments the task tracker for the specified Lakehouse table and returns the task part and total row count.
+        initialize_first_load(schedule:SyncSchedule) -> None:
+            Initializes the first load for a SyncSchedule by creating a Fabric Lakehouse table and setting up the task tracker.
+        save_bq_to_lakehouse(schedule:SyncSchedule, df_bq:DataFrame, lock:Lock, write_config=None) -> Tuple[SyncSchedule, DataFrame]:
+            Saves a DataFrame to a Lakehouse table based on the provided SyncSchedule.
+    """
     def __init__(self) -> None:
+        """
+        Initializes a new instance of the BQFabricWriter class.
+        This class is responsible for writing data to a Fabric Lakehouse table based on a SyncSchedule.
+        It handles the logic for merging data, applying CDC strategies, and managing partitioned sync loads.
+        """
         super().__init__()
         self.MultiWrite:ThreadSafeDict = None
     
@@ -673,6 +759,22 @@ class BQFabricWriter(ConfigBase):
             return False    
     
     def save_bq_table(self, schedule:SyncSchedule, df_bq:DataFrame, observation:Observation, lock:Lock):
+        """
+        Saves a DataFrame to a Lakehouse table based on the provided SyncSchedule.
+        This method handles the logic for saving a DataFrame to a Lakehouse table, including
+        partitioning, schema evolution, and overwrite/append strategies. It also manages the
+        acquisition and release of a lock for partitioned sync loads and returns the updated
+        SyncSchedule and DataFrame.
+        Args:
+            schedule (SyncSchedule): The synchronization schedule containing the Lakehouse table details.
+            df_bq (DataFrame): The DataFrame to save to the Lakehouse table.
+            observation (Observation): The Observation object for monitoring row counts.
+            lock (Lock): A threading lock for partitioned sync loads.
+        Returns:
+            None
+        Raises:
+            FabricLakehouseError: If an error occurs during the Lakehouse write process.
+        """
         try:              
             if not schedule.IsMirrored:
                 write_config = { }
@@ -710,8 +812,47 @@ class BQFabricWriter(ConfigBase):
         except Exception as e:
             raise FabricLakehouseError(msg=f"Error writing BQ table to Lakehouse: {e}", data=schedule)
 
-class BQScheduleLoader(ConfigBase):    
+class BQScheduleLoader(ConfigBase):
+    """
+    A class to load and synchronize BigQuery tables with Fabric Lakehouse tables.
+    This class handles the logic for synchronizing BigQuery tables, transforming data,
+    saving data to Lakehouse tables, and updating synchronization schedules with row counts,
+    watermarks, and status information. It also manages the logic for schema evolution,
+    partitioning, and mirroring to a database landing zone.
+    Attributes:
+        TableLocks (ThreadSafeDict): A thread-safe dictionary to manage table locks for partitioned sync loads.
+        FabricWriter (BQFabricWriter): An instance of the BQFabricWriter class for writing data to Lakehouse tables.
+    Methods:
+        __init__() -> None:
+            Initializes a new instance of the BQScheduleLoader class.
+        __sync_bq_table(schedule:SyncSchedule, lock:Lock = None) -> SyncSchedule:
+            Synchronizes a BigQuery table with a Lakehouse table based on the provided SyncSchedule.
+        __sync_cleanup(schedule:SyncSchedule) -> None:
+            Cleans up temporary resources after synchronizing a BigQuery table.
+        __show_sync_status(schedule:SyncSchedule, status:str=None) -> None:
+            Displays the synchronization status for a given SyncSchedule.
+        __schedule_sync(schedule:SyncSchedule, lock=None) -> SyncSchedule:
+            Synchronizes a BigQuery table with a Lakehouse table based on the provided SyncSchedule.
+        __sync_wrapper(schedule:SyncSchedule, lock:Lock = None) -> SyncSchedule:
+            A wrapper method for synchronizing a BigQuery table with a Lakehouse table.
+        __threaded_sync_wrapper(schedule:SyncSchedule, lock:Lock = None) -> SyncSchedule:
+            A threaded wrapper method for synchronizing a BigQuery table with a Lakehouse table.
+        run_sync(schedule:SyncSchedule, lock:Lock = None) -> SyncSchedule:
+            Runs the synchronization process for a given SyncSchedule, handling both threaded and non-threaded syncs.
+        __run_async(schedule:SyncSchedule, lock:Lock = None) -> SyncSchedule:
+            Runs the synchronization process asynchronously for a given SyncSchedule.
+        """   
     def __init__(self) -> None:
+        """
+        Initializes a new instance of the BQScheduleLoader class.
+        This class is responsible for loading and synchronizing BigQuery tables with Fabric Lakehouse tables.
+        It handles the logic for synchronizing BigQuery tables, transforming data, saving data to Lakehouse tables,
+        and updating synchronization schedules with row counts, watermarks, and status information.
+        It also manages the logic for schema evolution, partitioning, and mirroring to a database landing zone.
+        Attributes:
+            TableLocks (ThreadSafeDict): A thread-safe dictionary to manage table locks for partitioned sync loads.
+            FabricWriter (BQFabricWriter): An instance of the BQFabricWriter class for writing data to Lakehouse tables.
+        """
         super().__init__()
 
         self.TableLocks:ThreadSafeDict = None
@@ -755,9 +896,6 @@ class BQScheduleLoader(ConfigBase):
 
                 #Save BQ table
                 self.FabricWriter.save_bq_table(schedule, df_bq, observation, lock)
-            
-            #Cleanup
-            self.__sync_cleanup(schedule)
 
             schedule.SparkAppId = self.Context.sparkContext.applicationId
             schedule.EndTime = datetime.now(timezone.utc)
@@ -767,6 +905,16 @@ class BQScheduleLoader(ConfigBase):
         return schedule
 
     def __sync_cleanup(self, schedule:SyncSchedule) -> None:
+        """
+        Cleans up temporary resources after synchronizing a BigQuery table.
+        This method cleans up temporary resources after synchronizing a BigQuery table, including
+        deleting temporary tables, cleaning up exported bucket data, and dropping temporary BigQuery tables
+        if necessary. It also handles the logic for cleaning up resources based on the user configuration.
+        Args:
+            schedule (SyncSchedule): The synchronization schedule containing the BigQuery and Lakehouse details.
+        Returns:
+            None
+        """
         if schedule.SyncAPI == BigQueryAPI.BUCKET and self.UserConfig.GCP.Storage.EnabledCleanUp:
             self.Logger.debug(f"Cleaning up exported bucket data for {schedule.LakehouseTableName}...")
             storage_client = BucketStorageClient(self.UserConfig, self.GCPCredential)
@@ -775,7 +923,7 @@ class BQScheduleLoader(ConfigBase):
         
         if self.UserConfig.GCP.API.ForceBQJobConfig:
             bq_client = BigQueryClient(self.UserConfig)
-            bq_client.drop_temp_table(schedule.ProjectId, schedule.TempTableId)
+            bq_client.drop_temp_table(schedule.ProjectId, schedule.Dataset, schedule.TempTableId)
         
     def __show_sync_status(self, schedule:SyncSchedule, status:str=None) -> None:
         """
@@ -815,6 +963,10 @@ class BQScheduleLoader(ConfigBase):
         """
         schedule.StartTime = datetime.now(timezone.utc)
         schedule = self.__sync_bq_table(schedule, lock)
+
+        #Cleanup
+        self.__sync_cleanup(schedule)
+
         SyncUtil.save_schedule_telemetry(schedule) 
 
         return schedule
@@ -847,7 +999,7 @@ class BQScheduleLoader(ConfigBase):
         schedule = value[2]
         err = value[3]
         
-        print(f"ERROR - {schedule.LakehouseTableName} FAILED: {err}")
+        #print(f"ERROR - {schedule.LakehouseTableName} FAILED: {err}")
 
         schedule.Status = SyncStatus.FAILED
         schedule.SummaryLoadType = f"ERROR"
@@ -913,6 +1065,7 @@ class BQScheduleLoader(ConfigBase):
 
                     for tbl in grp_df.collect():
                         s = SyncSchedule(**(tbl.asDict()))
+                        s.BQTableName = self.UserConfig.GCP.format_table_path(s.ProjectId, s.Dataset, s.TableName)
 
                         if not self.FabricWriter.MultiWrite.contains(s.LakehouseTableName):
                             sync_track = {

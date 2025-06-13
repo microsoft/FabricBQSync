@@ -59,6 +59,7 @@ class BQQueryModel(SyncBaseModel):
         ScheduleId (str): The ID of the schedule associated with the query.
         ProjectId (str): The ID of the BigQuery project.
         TaskId (str): The ID of the task associated with the query.
+        Location (str): The location of the BigQuery resources.
         Dataset (str): The name of the dataset in BigQuery.
         TableName (str): The name of the table in BigQuery.
         Query (Optional[str]): The SQL query to be executed. Defaults to None.
@@ -66,6 +67,11 @@ class BQQueryModel(SyncBaseModel):
         Predicate (Optional[List[BQQueryModelPredicate]]): A list of predicates to apply to the query. Defaults to None.
         API (BigQueryAPI): The API type to use for the query. Defaults to BigQueryAPI.STORAGE.
         Cached (bool): Indicates whether the query results should be cached. Defaults to True.
+        Metadata (bool): Indicates whether to include metadata in the query results. Defaults to False.
+        UseForceBQJobConfig (bool): Indicates whether to use a forced BigQuery job configuration. Defaults to False.
+    Methods:
+        add_predicate(predicate:str, type:PredicateType=PredicateType.AND) -> None:
+            Adds a predicate to the BQQueryModel.
     """
     ScheduleId:str = Field(alias="ScheduleId", default=None)
     ProjectId:str = Field(alias="ProjectId", default=None)
@@ -131,11 +137,12 @@ class InformationSchemaModel(SyncBaseModel):
         }
         return InformationSchemaModel(**d)
     
-    def get_base_sql(self, sync_id:str, project:str, dataset:str, alias:str = None) -> str:
+    def get_base_sql(self, sync_id:str, path:str, alias:str = None) -> str:
         """
         Generates a base SQL query string for the schema view.
         Args:
             sync_id (str): The synchronization ID to be included in the query.
+            location (str): The BigQuery location.
             project (str): The BigQuery project ID.
             dataset (str): The BigQuery dataset name.
             alias (str, optional): An alias for the schema view. Defaults to None.
@@ -145,9 +152,9 @@ class InformationSchemaModel(SyncBaseModel):
         if alias:
             cols = [f"{alias}.{c}" for c in self.Columns.split(",")]
 
-            return f"SELECT '{sync_id}' AS sync_id, {','.join(cols)} FROM `{project}.{dataset}.{self.View}` AS {alias} "
+            return f"SELECT '{sync_id}' AS sync_id, {','.join(cols)} FROM `{path}` AS {alias} "
         else:
-            return f"SELECT '{sync_id}' AS sync_id, {self.Columns} FROM `{project}.{dataset}.{self.View}` "
+            return f"SELECT '{sync_id}' AS sync_id, {self.Columns} FROM `{path}` "
 
     def get_df_schema(self) -> StructType:
         """

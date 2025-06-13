@@ -17,15 +17,34 @@ from FabricSync.BQ.Enum import (
 
 class SyncBaseModel(BaseModel):
     """
-    SyncBaseModel is a specialized Pydantic model providing enhanced functionality such as:
-    - model_config: Defines custom configuration for field population, enum usage, arbitrary types, and excluding unset fields.
-    - model_dump(**kwargs): Dumps the model’s data as a dictionary using field aliases.
-    - model_dump_json(**kwargs): Dumps the model’s data as a JSON string using field aliases.
-    - is_field_set(item): Checks if a particular field has been set on the model.
-    - get_field_default(item): Returns the default value for a specified field, if one exists.
-    - _get_field_meta(item): Internal method for retrieving field metadata using an alias.
-    - __getattr__(item): Magic method allowing access to fields by their alias names.
-    - _get_alias(item_name): Internal method to retrieve the alias for a given field name.
+    SyncBaseModel is a base class for synchronization configuration models.
+    It extends the BaseModel from Pydantic and provides additional functionality
+    for handling model fields, aliases, and serialization.
+    This class is designed to be used as a base for other configuration models 
+    that require consistent handling of field names and serialization behavior.
+    Attributes:
+        model_config (ConfigDict): Configuration for the Pydantic model, including options for field population,
+            enum value usage, and allowing arbitrary types.
+        model_fields_set (set): A set of fields that have been explicitly set in the model instance.
+    Methods:
+        model_dump(**kwargs) -> dict[str, Any]:
+            Generates a dictionary representation of the model, using aliases for field names.  
+        model_dump_json(**kwargs) -> dict[str, Any]:
+            Serializes the current model instance to a JSON-compatible dictionary.
+        is_field_set(item) -> bool:
+            Checks if the specified item is among the fields that have been set.
+        get_field_default(item) -> Any:
+            Retrieve the default value defined for a given field.
+        _get_field_meta(item):
+            Retrieves the metadata object for a given item by matching its alias in the model_fields dictionary.
+        __getattr__(item):
+            Retrieves an attribute by its alias from the model_fields dictionary, returning
+            the corresponding attribute if found. If no matching alias exists, defers to the superclass __getattr__.
+        _get_alias(item_name):
+            Retrieves the alias associated with a given field name in the model.
+    This class provides a foundation for building configuration models with consistent
+    serialization and field management capabilities, making it easier to work with
+    synchronization configurations in a structured manner.
     """
 
     model_config = ConfigDict(
@@ -382,16 +401,41 @@ class ConfigFabric(SyncBaseModel):
         else:
             return table
 
-class ConfigGCPDataset(SyncBaseModel):
+class ConfigDataset(SyncBaseModel):
+    """
+    ConfigDataset is a configuration model for datasets in BigQuery.
+    It includes fields for specifying the dataset name and location.
+    Attributes:
+        Dataset (Optional[str]): The name of the dataset in BigQuery.
+        Location (Optional[str]): The location of the dataset in BigQuery.
+    """
+    Dataset:Optional[str] = Field(alias="dataset_id", default=None)
+    Location:Optional[str] = Field(alias="location", default=None)
+
+class ConfigGCPDataset(ConfigDataset):
     """
     ConfigGCPDataset is a configuration model for Google Cloud Platform (GCP) datasets.
-    It contains fields for specifying the project ID and dataset name, which are essential
-    for identifying and managing datasets within GCP BigQuery.
+    It extends the ConfigDataset model to include additional fields specific to GCP datasets.
     Attributes:
-        Dataset (Optional[str]): The name of the dataset within the GCP project.
+        Dataset (Optional[str]): The name of the dataset in GCP.
+        Location (Optional[str]): The location of the dataset in GCP.
+        MaterializationDataset (Optional[ConfigDataset]):
+            The dataset used for materialization in GCP, if applicable.
     """
-    Dataset:Optional[str] = Field(alias="dataset", default=None)
-    
+    MaterializationDataset:Optional[ConfigDataset] = Field(alias="materialization_dataset", default=ConfigDataset())
+
+class ConfigDefaultMaterialization(SyncBaseModel):
+    """
+    ConfigDefaultMaterialization is a configuration model for default materialization settings in BigQuery.
+    It includes fields for specifying the dataset, location, and other materialization options.
+    Attributes:
+        ProjectID (Optional[str]): The GCP Project ID for the materialization.
+        Dataset (Optional[ConfigDataset]):
+            The dataset configuration for materialization, including dataset name and location.
+    """
+    ProjectID:Optional[str] = Field(alias="project_id", default=None)
+    Dataset:Optional[ConfigDataset] = Field(alias="dataset", default=ConfigDataset())
+
 class ConfigGCPProject(SyncBaseModel):
     """
     ConfigGCPProject is a configuration model for Google Cloud Platform (GCP) projects.
@@ -430,8 +474,7 @@ class ConfigGCPAPI(SyncBaseModel):
         ForceBQJobConfig (Optional[bool]): Flag indicating whether to force BigQuery job configuration (default: False).
         AutoSelect (Optional[bool]): Flag indicating whether to automatically select the API (default: False).
         UseCDC (Optional[bool]): Flag indicating whether to use Change Data Capture (CDC) (default: True).
-        MaterializationProjectID (Optional[str]): The project ID for materialization, if applicable.
-        MaterializationDataset (Optional[str]): The dataset for materialization, if applicable.
+        DefaultMaterialization (Optional[ConfigDefaultMaterialization]): The default materialization configuration for datasets.
         BillingProjectID (Optional[str]): The project ID for billing purposes, if applicable.
     """
     UseStandardAPI:Optional[bool] = Field(alias="use_standard_api", default=True)
@@ -439,8 +482,7 @@ class ConfigGCPAPI(SyncBaseModel):
     ForceBQJobConfig:Optional[bool] = Field(alias="force_bq_job_config", default=False)
     AutoSelect:Optional[bool] = Field(alias="auto_select", default=False)
     UseCDC:Optional[bool] = Field(alias="use_cdc", default=True)
-    MaterializationProjectID:Optional[str] = Field(alias="materialization_project_id", default=None)
-    MaterializationDataset:Optional[str] = Field(alias="materialization_dataset", default=None)
+    DefaultMaterialization:Optional[ConfigDefaultMaterialization] = Field(alias="materialization_default", default=ConfigDefaultMaterialization())
     BillingProjectID:Optional[str] = Field(alias="billing_project_id", default=None)
 
 class ConfigGCPStorage(SyncBaseModel):
@@ -467,6 +509,13 @@ class ConfigGCP(SyncBaseModel):
         Projects (List[ConfigGCPProject]): A list of GCP projects, each with its own ID and datasets.
         GCPCredential (ConfigGCPCredential): The GCP credential configuration for authentication.
         GCPStorage (ConfigGCPStorage): The GCP storage configuration for managing data storage.
+    Methods:
+        DefaultProjectID (str): Returns the project ID of the first project in the Projects list.
+        DefaultDataset (str): Returns the dataset name of the first dataset in the first project.
+        get_project_config(project_id:str) -> ConfigGCPProject: Retrieves the configuration for a specific GCP project by its project ID.
+        get_dataset_config(project_id:str, dataset:str) -> ConfigGCPDataset: Retrieves the configuration for a specific dataset within a GCP project.
+        format_table_path(project_id:str, dataset:str, table_name:str) -> str: Formats the table path for a given project, dataset, and table name.
+        resolve_dataset_path(project_id:str, dataset:str) -> tuple[str,str,str]: Resolves the dataset path for a given project and dataset.
     """
     API:Optional[ConfigGCPAPI] = Field(alias="api", default=ConfigGCPAPI())
     Projects:List[ConfigGCPProject] = Field(alias="projects", default=[ConfigGCPProject()])
@@ -499,6 +548,77 @@ class ConfigGCP(SyncBaseModel):
                 return self.Projects[0].Datasets[0].Dataset
         
         return None
+    
+    def get_project_config(self, project_id:str) -> ConfigGCPProject:
+        """
+        Retrieves the configuration for a specific GCP project by its project ID.
+        Args:
+            project_id (str): The ID of the GCP project to retrieve.
+        Returns:
+            ConfigGCPProject: The configuration object for the specified project, or None if not found.
+        """
+        return next((p for p in self.Projects if p.ProjectID == project_id), None)
+
+    def get_dataset_config(self, project_id:str, dataset:str) -> ConfigGCPDataset:
+        """
+        Retrieves the configuration for a specific dataset within a GCP project.
+        Args:
+            project_id (str): The ID of the GCP project containing the dataset.
+            dataset (str): The name of the dataset to retrieve.
+        Returns:
+            ConfigGCPDataset: The configuration object for the specified dataset, or None if not found.
+        """
+        project = self.get_project_config(project_id)
+        if project:
+            return next((d for d in project.Datasets if d.Dataset == dataset), None)
+        
+        return None
+    
+    def format_table_path(self, project_id:str, dataset:str, table_name:str) -> str:
+        """
+        Formats the table path for a given project, dataset, and table name.
+        Args:
+            project_id (str): The ID of the GCP project.
+            dataset (str): The name of the dataset containing the table.
+            table_name (str): The name of the table to format.
+        Returns:
+            str: The formatted table path, including the project ID, dataset, and table name.
+        """
+        return f"{project_id}.{dataset}.{table_name}"
+
+    def get_dataset_location(self, project_id:str, dataset:str) -> str:
+        """
+        Retrieves the location of a dataset within a GCP project.
+        Args:
+            project_id (str): The ID of the GCP project.
+            dataset (str): The name of the dataset for which to retrieve the location.
+        Returns:
+            str: The location of the dataset, or None if no location is specified.
+        """
+        p, l, d = self.resolve_dataset_path(project_id, dataset)
+        return l
+
+    def resolve_dataset_path(self, project_id:str, dataset:str) -> tuple[str,str,str]:
+        """
+        Resolves the dataset path for a given project and dataset.
+        Args:
+            project_id (str): The ID of the GCP project.
+            dataset (str): The name of the dataset for which to resolve the path.
+        Returns:
+            tuple[str, str, str]: A tuple containing the project ID, region (if applicable), and dataset name.
+        """
+        default_materialization = self.API.DefaultMaterialization
+        config_datatset = self.get_dataset_config(project_id, dataset)
+
+        if config_datatset:
+            return (project_id, config_datatset.Location, config_datatset.Dataset)
+        else:
+            default_materialization = self.API.DefaultMaterialization
+
+            if default_materialization.Dataset != dataset:
+                raise ValueError(f"Dataset {dataset} not found in Fabric Sync configuration.")
+            
+            return (project_id, default_materialization.Location, default_materialization.Dataset)
 
 class ConfigTableColumn(SyncBaseModel):
     """
@@ -529,6 +649,9 @@ class MappedColumn(SyncBaseModel):
         Destination (Optional[TypedColumn]): The destination column where the source column is mapped, including its name and type.
         Format (Optional[str]): The format string used for the mapping, if applicable.
         DropSource (Optional[bool]): A flag indicating whether to drop the source column after mapping (default: None).
+    Properties:
+        IsTypeConversion (bool): Indicates if the source and destination columns have different types.
+        IsRename (bool): Indicates if the source and destination columns have different names.
     """
     Source:Optional[TypedColumn] = Field(alias="source", default=None)
     Destination:Optional[TypedColumn] = Field(alias="destination", default=None)
@@ -596,7 +719,7 @@ class ConfigBQTableDefault (SyncBaseModel):
 class ConfigBQTable (SyncBaseModel):
     """
     ConfigBQTable is a configuration model for BigQuery tables used in synchronization processes.
-    Arguments:
+    Attributes:
         ProjectID (Optional[str]): The ID of the GCP project where the table resides.
         Dataset (Optional[str]): The name of the dataset containing the table.
         ObjectType (Optional[BigQueryObjectType]): The type of object in BigQuery (e.g., TABLE, VIEW).
@@ -620,7 +743,10 @@ class ConfigBQTable (SyncBaseModel):
         LakehouseTarget (Optional[ConfigLakehouseTarget]): Configuration for the lakehouse target.
         BQPartition (Optional[ConfigPartition]): Configuration for BigQuery partitioning.
         Keys (Optional[List[ConfigTableColumn]]): A list of keys for the table, used for identifying unique records.
-        Watermark (Optional[ConfigTableColumn]): A column used for watermarking, typically for incremental loads.   
+        Watermark (Optional[ConfigTableColumn]): A column used for watermarking, typically for incremental loads. 
+    Methods:
+        BQ_FQName (str): Returns the fully qualified name of the BigQuery table in the format "ProjectID.Dataset.TableName".
+        get_table_keys() -> list[str]: Returns a list of column names that are defined as keys for the table.  
     """
     ProjectID:Optional[str] = Field(alias="project_id", default=None)
     Dataset:Optional[str] = Field(alias="dataset", default=None)
@@ -689,7 +815,6 @@ class ConfigOptimization(SyncBaseModel):
     Attributes:
         UseApproximateRowCounts (Optional[bool]): Flag indicating whether to use approximate row counts for optimization (default: True).
         DisableDataframeCache (Optional[bool]): Flag indicating whether to disable the dataframe cache (default: False).
-        StandardAPIExport (Optional[ConfigStandardAPIExportConfig]): Configuration for standard API export settings.
     """
     UseApproximateRowCounts:Optional[bool] = Field(alias="use_approximate_row_counts", default=True)
     DisableDataframeCache:Optional[bool] = Field(alias="disable_dataframe_cache", default=False)
@@ -752,6 +877,17 @@ class ConfigDataset(SyncBaseModel):
         Async (Optional[ConfigAsync]): Configuration for asynchronous operations.
         TableDefaults (Optional[ConfigBQTableDefault]): Default settings applied to BigQuery tables.
         Tables (Optional[List[ConfigBQTable]]): A list of configurations for individual BigQuery tables.
+    Methods:
+        Autodetect (bool): Returns whether automatic detection of objects is enabled in the autodiscovery configuration.
+        LoadAllTables (bool): Returns whether all tables should be loaded based on the autodiscovery configuration.
+        EnableTables (bool): Returns whether table discovery is enabled based on the autodiscovery configuration.
+        LoadAllViews (bool): Returns whether all views should be loaded based on the autodiscovery configuration.
+        EnableViews (bool): Returns whether view discovery is enabled based on the autodiscovery configuration.
+        LoadAllMaterializedViews (bool): Returns whether all materialized views should be loaded based on the autodiscovery configuration.
+        EnableMaterializedViews (bool): Returns whether materialized view discovery is enabled based on the autodiscovery configuration.
+        get_table_config(bq_table:str) -> ConfigBQTable: Returns the configuration for a specific BigQuery table based on its fully qualified name.
+        get_table_name_list(project:str, dataset:str, obj_type:BigQueryObjectType, only_enabled:bool = False) -> list[str]:
+            Returns a list of table names based on the specified project, dataset, and object type.
     """
     ApplicationID:Optional[str] = Field(alias="correlation_id", default=None)
     ID:Optional[str] = Field(alias='id', default="FABRIC_SYNC_LOADER")    

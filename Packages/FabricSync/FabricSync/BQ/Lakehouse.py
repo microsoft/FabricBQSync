@@ -5,6 +5,7 @@ from pyspark.sql.functions import col
 from pyspark.sql.types import (
     StructType, StructField
 )
+import pyspark.sql.utils
 import time
 
 from FabricSync.BQ.Threading import SparkProcessor
@@ -16,6 +17,49 @@ from FabricSync.BQ.Enum import FabricDestinationType
 from FabricSync.BQ.SessionManager import Session
 
 class LakehouseCatalog(ContextAwareBase):
+    """
+    A class to manage the Lakehouse catalog in a Spark environment.
+    This class provides methods to interact with the Spark metastore, including retrieving
+    catalog tables, optimizing the metastore, resetting the workspace, and creating/upgrading
+    metadata tables.
+    Attributes:
+        Context (pyspark.sql.SparkSession): The Spark session context.
+        Logger (Logger): The logger instance for logging messages.
+    Methods:
+        get_catalog_tables(catalog: str) -> List[str]:
+            Retrieves the list of tables in the specified catalog from the Spark metastore.
+        optimize_sync_metastore(enable_schemas: bool = False) -> None:
+            Optimize and vacuum metadata and information schema tables for the synchronization process.
+        use_schema(schema_name: str) -> bool:
+            Checks if the specified schema exists in the current Spark session.
+        reset_workspace(userConfig: ConfigDataset, optimize=False) -> None:
+            Resets the Fabric Sync environment by deleting all metadata tables and dropping all target tables.
+        create_metastore_tables(table_path: str) -> None:
+            Creates the metadata tables in the specified table path using the defined schemas.
+        upgrade_metastore(metadata_lakehouse: str, enable_schemas: bool = False) -> None:
+            Upgrades the specified metadata lakehouse by ensuring each required metadata table exists and has the latest schema.
+        resolve_table_name(table_schema: str, table_name: str) -> str:
+            Resolves the full table name by combining the schema and table name.
+        __sync_schema(table_schema: str, table_name: str, source_schema: StructType, target_schema: StructType) -> List[str]:
+            Generates SQL commands to synchronize a table's schema between a source and target definition.
+        __rewrite_metastore_tables(tables: List) -> None:
+            Rewrites the specified metadata tables to ensure they are compatible with the latest version.
+        __rename_metastore_tables(metadata_lakehouse: str) -> List[str]:
+            Renames the metadata tables in the specified lakehouse to remove the 'bq_' prefix.
+        __create_schema_field_sql(table_schema: str, table_name: str, field: StructField, schema: StructType) -> str:
+            Generates an SQL statement that adds a column to a specified table based on the provided field and schema.
+                Raises:
+                    pyspark.sql.utils.AnalysisException: If the specified schema does not exist in the Spark session.   
+        __sync_schema(table_schema: str, table_name: str, source_schema: StructType, target_schema: StructType) -> List[str]:
+            Generates SQL commands to synchronize a table's schema between a source and target definition.
+                Raises:
+                    pyspark.sql.utils.AnalysisException: If the specified schema does not exist in the Spark session.
+        __create_schema_field_sql(table_schema: str, table_name: str, field: StructField, schema: StructType) -> str:
+            Generates an SQL statement that adds a column to a specified table based on the provided field and schema.
+                Raises:
+                    pyspark.sql.utils.AnalysisException: If the specified schema does not exist in the Spark session.
+
+    """
     @classmethod
     def get_catalog_tables(cls, catalog:str) -> List[str]:
         """
@@ -37,12 +81,35 @@ class LakehouseCatalog(ContextAwareBase):
         Optimize and vacuum metadata and information schema tables for the synchronization process.
         This function retrieves the required metadata and information schema tables, then
         triggers an optimization and vacuum operation to improve storage and query performance.
+        Args:
+            enable_schemas (bool): A flag indicating whether to use schemas in the table names.
+                If True, the schema "dbo" will be used; otherwise, no schema will be applied.
         Returns:
             None
         """
         table_schema = "dbo" if enable_schemas else None
         metadata_tbls = SyncConstants.get_metadata_tables() + SyncConstants.get_information_schema_tables()
         SparkProcessor.optimize_vacuum([cls.resolve_table_name(table_schema, t) for t in metadata_tbls])
+    
+    @classmethod
+    def use_schema(cls, schema_name:str) -> bool:
+        """
+        Checks if the specified schema exists in the current Spark session.
+        Args:
+            schema_name (str): The name of the schema to check.
+        Returns:
+            bool: True if the schema exists, False otherwise.
+        """
+        try:
+            schema_sql = f"USE {schema_name}"
+            cls.Logger.debug(f"LAKEHOUSE CATALOG - {schema_sql}")
+            cls.Context.sql(schema_sql)
+            schema_exists = True
+        except pyspark.sql.utils.AnalysisException:
+            cls.Logger.debug(f"LAKEHOUSE CATALOG - {schema_sql} DOES NOT EXISTS")
+            schema_exists = False
+        
+        return schema_exists
     
     @classmethod
     def reset_workspace(cls, userConfig:ConfigDataset, optimize=False) -> None:
@@ -54,19 +121,27 @@ class LakehouseCatalog(ContextAwareBase):
         Returns:
             None
         """
+        cls.Logger.sync_status("Resetting Fabric Sync Environment")
         sql_commands = []
         table_schema = "dbo" if userConfig.Fabric.EnableSchemas else None
 
         for t in cls.get_catalog_tables(userConfig.Fabric.get_metadata_lakehouse()):
             if t != "data_type_map":
+                cls.Logger.debug(f"LAKEHOUSE CATALOG - RESETTING {t} for Config: {userConfig.ID}")
                 sql_commands.append(f"DELETE FROM {userConfig.Fabric.MetadataLakehouse}." +
                                     f"{cls.resolve_table_name(table_schema, t)} WHERE sync_id='{userConfig.ID}';")
         
         if userConfig.Fabric.TargetType == FabricDestinationType.LAKEHOUSE:
-            for t in cls.get_catalog_tables(userConfig.Fabric.get_target_lakehouse()):
-                sql_commands.append(f"DROP TABLE IF EXISTS {userConfig.Fabric.TargetLakehouse}.{t};")
+            schema_exists = cls.use_schema(userConfig.Fabric.get_target_namespace())
 
-        cls.Logger.sync_status("Resetting Fabric Sync Environment")
+            if schema_exists:
+                for t in cls.get_catalog_tables(userConfig.Fabric.get_target_lakehouse()):
+                    drop_sql = f"DROP TABLE IF EXISTS {userConfig.Fabric.TargetLakehouse}.{cls.resolve_table_name(userConfig.Fabric.TargetLakehouseSchema,t)};"
+                    cls.Logger.debug(f"LAKEHOUSE CATALOG - {drop_sql}")
+                    sql_commands.append(drop_sql)
+
+            cls.use_schema(userConfig.Fabric.get_metadata_namespace())
+        
         SparkProcessor.process_command_list(sql_commands)
 
         if optimize:
@@ -75,11 +150,19 @@ class LakehouseCatalog(ContextAwareBase):
     
     @classmethod
     def create_metastore_tables(cls, table_path:str) -> None:
+        """
+        Creates the metadata tables in the specified table path using the defined schemas.
+        This function initializes the metadata tables by creating empty DataFrames with the
+        appropriate schemas and saving them in the specified path.
+        Args:
+            table_path (str): The path where the metadata tables should be created.
+        Returns:
+            None
+        """
         for tbl in SyncConstants.get_metadata_tables():
             schema = getattr(FabricMetastoreSchema(), tbl)
             df = cls.Context.createDataFrame(data=cls.Context.sparkContext.emptyRDD(),schema=schema)
             df.write.mode("OVERWRITE").format("delta").save(f"{table_path}/{tbl}")
-        
 
     @classmethod
     def upgrade_metastore(cls, metadata_lakehouse:str, enable_schemas:bool = False) -> None:
@@ -94,8 +177,12 @@ class LakehouseCatalog(ContextAwareBase):
              - If it exists, synchronizes its schema with the defined schema.
              - If it does not exist, creates the table using the defined schema.
           5. Executes any necessary SQL commands to finalize the schema upgrade.
-        :param metadata_lakehouse: The name of the lakehouse where metadata tables should be upgraded.
-        :type metadata_lakehouse: str
+        Args:
+            metadata_lakehouse (str): The name of the lakehouse containing the metadata tables.
+            enable_schemas (bool): A flag indicating whether to use schemas in the table names.
+                If True, the schema "dbo" will be used; otherwise, no schema will be applied.
+        Returns:
+            None
         """
         rewrite_tables = []
         cmds = []
@@ -118,12 +205,13 @@ class LakehouseCatalog(ContextAwareBase):
                     if result:
                         rewrite_tables.append(tbl)
             else:
+                cls.Logger.debug(f"LAKEHOUSE CATALOG - CREATING {tbl}")
                 df = cls.Context.createDataFrame(data=cls.Context.sparkContext.emptyRDD(),schema=schema)
                 df.write.mode("OVERWRITE").saveAsTable(cls.resolve_table_name(table_schema, tbl))
 
         if cmds:
             for cmd in cmds:
-                cls.Logger.sync_status(f"Metastore Upgrade: {cmd}", verbose=True)
+                cls.Logger.debug(f"LAKEHOUSE CATALOG - METASTORE UPGRADE: {cmd}", verbose=True)
                 cls.Context.sql(cmd)
         
         if rewrite_tables:
@@ -131,10 +219,20 @@ class LakehouseCatalog(ContextAwareBase):
 
     @classmethod
     def __rewrite_metastore_tables(cls, tables:List) -> None:
+        """
+        Rewrites the specified metadata tables to ensure they are compatible with the latest version.
+        This function sets the Spark configuration to allow static partition overwriting,
+        then iterates through the provided tables, rewriting each one to ensure it is compatible
+        with the latest version of the metadata schema.
+        Args:
+            tables (List): A list of table names to be rewritten.
+        Returns:
+            None
+        """
         Session.set_spark_conf("spark.sql.sources.partitionOverwriteMode", "static")
 
         for tbl in tables:
-            cls.Logger.sync_status(f"Metastore Upgrade - Rewriting table for version capability: {tbl}", verbose=True)
+            cls.Logger.debug(f"LAKEHOUSE CATALOG - REWRITE FOR VERSION CAPITABILITY: {tbl}", verbose=True)
             df = cls.Context.table(tbl)
             df.write.partitionBy("sync_id").mode("OVERWRITE").saveAsTable(f"{tbl}_tmp")
             cls.Context.sql(f"DROP TABLE IF EXISTS {tbl};")
@@ -155,8 +253,8 @@ class LakehouseCatalog(ContextAwareBase):
         current_tables = cls.get_catalog_tables(metadata_lakehouse)  
 
         renamed_tables = [
-            f"ALTER TABLE {metadata_lakehouse}.{t} RENAME TO " +
-                f"{metadata_lakehouse}.{t.replace('bq_', '')}"                
+            f"ALTER TABLE {metadata_lakehouse}.`{t}` RENAME TO " +
+                f"`{metadata_lakehouse}`.`{t.replace('bq_', '')}`"                
                     for t in current_tables if "bq_" in t]
 
         if renamed_tables:   
@@ -167,7 +265,15 @@ class LakehouseCatalog(ContextAwareBase):
 
     @classmethod
     def resolve_table_name(cls, table_schema:str, table_name:str) -> str:
-        return f"{table_name}" if not table_schema else f"{table_schema}.{table_name}"
+        """
+        Resolves the full table name by combining the schema and table name.
+        Args:
+            table_schema (str): The schema of the table.
+            table_name (str): The name of the table.
+        Returns:
+            str: The fully qualified table name in the format "schema.table" or just "table" if no schema is provided.
+        """ 
+        return f"`{table_name}`" if not table_schema else f"`{table_schema}`.`{table_name}`"
                                                                  
     @classmethod
     def __sync_schema(cls, table_schema:str, table_name:str, source_schema:StructType, target_schema:StructType) -> List[str]:
@@ -178,9 +284,10 @@ class LakehouseCatalog(ContextAwareBase):
         • Removes columns present in the source_schema but not in the target_schema.
         • Adds new columns that exist in the target_schema but not in the source_schema.
         Args:
-            table_name (str): The name of the table to update.
-            source_schema (Iterable): The current schema of the table.
-            target_schema (Iterable): The desired schema for the table.
+            table_schema (str): The schema of the table to be altered.
+            table_name (str): The name of the table to be altered.
+            source_schema (StructType): The current schema of the table.
+            target_schema (StructType): The desired schema of the table.    
         Returns:
             List[str]: A list of SQL commands needed to perform the schema synchronization.
         """
@@ -212,9 +319,10 @@ class LakehouseCatalog(ContextAwareBase):
         """
         Generates an SQL statement that adds a column to a specified table based on the provided field and schema.
         Args:
+            table_schema (str): The schema of the table to be altered.
             table_name (str): The name of the table to be altered.
-            field: An object representing the column to add, containing 'name' and 'dataType'.
-            schema (list): A list of field objects representing the existing table schema.
+            field (StructField): The field definition for the new column to be added.
+            schema (StructType): The schema of the table, used to determine the position of the new column. 
         Returns:
             str: The SQL statement to add the new column to the table. If the column is not the first one to add,
                 the statement will include the 'AFTER <existing column>' clause based on the schema.

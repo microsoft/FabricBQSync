@@ -8,6 +8,31 @@ from FabricSync.BQ.Constants import SyncConstants
 from FabricSync.Meta import Version
 
 class StaticSessionMeta(type):
+    """
+    A metaclass to define static properties for the Session class.
+    This metaclass provides static properties for the current version, Spark context, application ID, and other session settings.
+    Attributes:
+        CurrentVersion (Version): The current version of the package.
+        Context (SparkSession): The Spark context.
+        ApplicationID (str): The application ID.
+        ID (str): The session ID.
+        Version (Version): The current runtime version.
+        TelemetryEndpoint (str): The telemetry endpoint.
+        LogLevel (str): The log level.
+        LogPath (str): The log path.
+        Telemetry (bool): Flag for logging telemetry.
+        WorkspaceID (str): The workspace ID.
+        MetadataLakehouse (str): The metadata lakehouse name.
+        MetadataLakehouseID (str): The metadata lakehouse ID.
+        MetadataLakehouseSchema (str): The metadata lakehouse schema.
+        TargetLakehouse (str): The target lakehouse name.
+        TargetLakehouseID (str): The target lakehouse ID.
+        TargetLakehouseSchema (str): The target lakehouse schema.
+        FabricAPIToken (str): The Fabric API token.
+        UserConfigPath (str): The user config path.
+        EnableSchemas (bool): Flag for enabling schemas.
+        SyncViewState (bool): Flag to indicate whether temporary views have already been created.
+    """
     @property
     def CurrentVersion(cls) -> pv.Version:
         """
@@ -362,6 +387,24 @@ class StaticSessionMeta(type):
         cls.set_setting(SparkSessionConfig.SYNC_VIEW_STATE, value)
 
 class Session(metaclass=StaticSessionMeta):
+    """
+    A class to manage the Spark session settings.
+    This class provides methods to get and set Spark session settings, as well as to print the current session settings.
+    It uses a metaclass to define static properties for the session settings.
+    Attributes:
+        Context (SparkSession): The Spark session context.
+    Methods:
+        get_setting(key: SparkSessionConfig, default: Any = None) -> str:
+            Gets the setting for the specified key.
+        set_setting(key: SparkSessionConfig, value: Any) -> None:
+            Sets the setting for the specified key.
+        set_spark_conf(key: str, value: str) -> None:
+            Sets the Spark configuration for the specified key and value.
+        _get_setting_key(key: SparkSessionConfig) -> str:
+            Gets the setting key for the specified SparkSessionConfig.
+        _print_session_settings() -> None:
+            Prints the current session settings.
+    """
     _context:SparkSession = None
     
     @classmethod
@@ -423,5 +466,9 @@ class Session(metaclass=StaticSessionMeta):
     
     @classmethod
     def reset(cls):
+        """
+        Reset the session settings.
+        This method will unset all the settings defined in SparkSessionConfig.
+        """
         for k in list(SparkSessionConfig):
             cls.Context.conf.unset(cls._get_setting_key(k))

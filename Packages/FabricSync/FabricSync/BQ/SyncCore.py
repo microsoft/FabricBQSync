@@ -15,6 +15,19 @@ from FabricSync.BQ.Exceptions import (
 )
  
 class ConfigBase(ContextAwareBase):
+    """
+    Base class for configuration operations, providing methods to read BigQuery data into a DataFrame.
+    This class handles the initialization of user configurations and provides a method to read data from BigQuery.
+    Attributes:
+        UserConfig (ConfigDataset): The user configuration settings loaded from a JSON file.
+    Methods:
+        __init__() -> None:
+            Initializes a new instance of the ConfigBase class and loads user configuration.
+        read_bq_to_dataframe(query: BQQueryModel, schema: StructType = None) -> DataFrame:
+            Reads the data from the given BigQuery query into a DataFrame.
+    Raises:
+        BQConnectorError: If there is an error reading data from BigQuery.
+    """
     def __init__(self) -> None:
         """
         Initializes a new instance of the ConfigBase class.
@@ -49,6 +62,27 @@ class ConfigBase(ContextAwareBase):
         return df
 
 class SyncBase(ContextAwareBase):
+    """
+    Base class for synchronization operations, providing methods to initialize and manage the sync session.
+    This class handles the loading of user configurations, setting up the session context, and managing credentials.
+    Attributes:
+        UserConfig (ConfigDataset): The user configuration settings loaded from a JSON file.
+        TokenProvider (TokenProvider): The token provider for managing authentication tokens.
+    Methods:
+        __init__(config_path: str, credentials: Credentials) -> None:
+            Initializes a new instance of the SyncBase class with the specified configuration path and credentials.
+        init_sync_session(config_path: str) -> None:
+            Initializes the session context for the synchronization process using the provided configuration path.
+        load_user_config(config_path: str) -> None:
+            Loads the user's configuration from a specified JSON file and sets up the session context.
+        __load_user_config_from_json(config_path: str) -> ConfigDataset:
+            Loads user configuration from a specified JSON file and creates a ConfigDataset instance.
+        __load_credentials_from_key_vault(key_vault: str, key: str) -> str:
+            Loads credentials from the specified key vault using the provided key.
+    Raises:
+        SyncConfigurationError: If the configuration path is missing or invalid.
+        SyncKeyVaultError: If there is an error retrieving credentials from the key vault.
+    """
     def __init__(self, config_path:str, credentials:Credentials) -> None:
         """
         Initializes a new instance of the SyncBase class.
@@ -99,6 +133,16 @@ class SyncBase(ContextAwareBase):
                                     self.TokenProvider.get_token(TokenProvider.FABRIC_TOKEN_SCOPE))
 
     def __load_credentials_from_key_vault(self, key_vault:str, key:str) -> str:
+        """
+        Loads credentials from the specified key vault using the provided key.
+        Args:
+            key_vault (str): The name of the key vault.
+            key (str): The key to retrieve the credentials.
+        Returns:
+            str: The credentials retrieved from the key vault.
+        Raises:
+            SyncKeyVaultError: If there is an error retrieving the credentials from the key vault.
+        """
         try:
             return self.TokenProvider.get_secret(key_vault, key)
         except Exception as e:

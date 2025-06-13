@@ -29,8 +29,25 @@ from FabricSync.BQ.Auth import (
 from FabricSync.BQ.SyncUtils import SyncUtil
 
 class SetUpUtils(ContextAwareBase):
+    """
+    A utility class for setting up the BigQuery Spark connector.
+    This class provides methods to download the latest BigQuery Spark connector jar file.
+    It is designed to be used in the context of a Fabric Sync installation.
+    Attributes:
+        Context: The context of the Fabric Sync installation.
+    Methods:
+        get_bq_spark_connector(path: str) -> str:
+            Downloads the latest BigQuery Spark connector jar file and saves it to the specified path.
+    """
     @classmethod
     def get_bq_spark_connector(cls, path:str) -> str:
+        """
+        Downloads the latest BigQuery Spark connector jar file.
+        Args:
+            path: The path to save the jar file.
+        Returns:
+            The name of the jar file.
+        """
         g = Github() # type: ignore
         repo = g.get_repo("GoogleCloudDataproc/spark-bigquery-connector")
         latest_release = cls.__get_latest_bq_spark_connector(repo.get_releases())
@@ -75,6 +92,33 @@ class SetUpUtils(ContextAwareBase):
         return lr
 
 class Installer(ContextAwareBase):
+    """
+    A class to install the Fabric Sync for BigQuery.
+    This class provides methods to initialize the installer, create the metastore,
+    build a new configuration, download notebooks, validate lakehouse schemas,
+    create or update the environment, and install the Fabric Sync.
+    Attributes:
+        GIT_URL: The URL of the Git repository containing the Fabric Sync files.
+    Methods:
+        __init__(credential_provider):
+            Initializes a new instance of the Installer class.
+        _initialize_installer(data):
+            Initializes the installer with the provided data.
+        _create_metastore():
+            Creates the metastore for the Fabric Sync.
+        _build_new_config():
+            Builds a new configuration for the Fabric Sync.
+        _download_notebooks():
+            Downloads the notebooks from the Git repository and customizes them.
+        _validate_lakehouse_schemas(lakehouse_id, lakehouse_name):
+            Validates the lakehouse schemas based on the user configuration.
+        _get_environment_yaml():
+            Gets the environment YAML for the Fabric Sync.
+        _create_or_update_environment(name):
+            Creates or updates the Fabric Spark environment with the specified name.
+        install(data):
+            Installs the Fabric Sync with the provided data.
+    """
     GIT_URL = "https://raw.githubusercontent.com/microsoft/FabricBQSync/main"
 
     def __init__(self, credential_provider): 
@@ -157,6 +201,10 @@ class Installer(ContextAwareBase):
                 "tables": {
                     "enabled": True,
                     "load_all": True
+                },
+                "views": {
+                    "enabled": True,
+                    "load_all": True
                 }
             },
             "optimization": {
@@ -174,8 +222,12 @@ class Installer(ContextAwareBase):
                     "credential": "NOT_SET"
                 },
                 "api":{
-                    "materialization_project_id": self._data["gcp_project_id"],
-                    "materialization_dataset": self._data["gcp_dataset_id"],
+                    "materialization_default": {
+                        "project_id": self._data["gcp_project_id"],
+                        "dataset": {
+                            "dataset_id": self._data["gcp_dataset_id"],
+                        }
+                    },
                     "billing_project_id": self._data["gcp_project_id"],
                     "use_standard_api": True
                 },
@@ -183,9 +235,9 @@ class Installer(ContextAwareBase):
                 {
                     "project_id": self._data["gcp_project_id"],
                     "datasets": [
-                    {
-                        "dataset": self._data["gcp_dataset_id"]
-                    }
+                        {
+                            "dataset_id": self._data["gcp_dataset_id"]
+                        }
                     ]
                 }
                 ]

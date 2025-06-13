@@ -1,5 +1,8 @@
 from packaging import version as pv
 
+import os
+import json
+
 from FabricSync.BQ.SyncCore import SyncBase
 from FabricSync.BQ.Auth import (
     Credentials, TokenProvider
@@ -18,7 +21,9 @@ from FabricSync.BQ.Lakehouse import LakehouseCatalog
 from FabricSync.BQ.Metastore import FabricMetastore
 from FabricSync.BQ.APIClient import FabricAPI
 from FabricSync.BQ.ModelValidation import UserConfigurationValidation
-from FabricSync.BQ.Model.Config import ConfigDataset
+from FabricSync.BQ.Model.Config import (
+    ConfigDataset, ConfigGCPDataset
+)
 from FabricSync.BQ.SessionManager import Session
 
 class BQSync(SyncBase):
@@ -108,6 +113,8 @@ class BQSync(SyncBase):
             else:
                 config.Fabric.TargetLakehouseID = fabric_api.OpenMirroredDatabase.get_id(self.UserConfig.Fabric.TargetLakehouse)
 
+        config = self.__apply_config_updates(config_path, config)
+
         config.to_json(config_path)
         self.init_sync_session(config_path)
 
@@ -125,6 +132,47 @@ class BQSync(SyncBase):
         LakehouseCatalog.upgrade_metastore(self.UserConfig.Fabric.get_metadata_lakehouse())
         self.__apply_manual_updates()
         self.__validate_user_config(config_path)
+
+    def __apply_config_updates(self, config_path:str, config:ConfigDataset) -> ConfigDataset:
+        """
+        Applies updates to the user configuration based on the current runtime version.
+        This method checks the current runtime version against the version stored in the
+        user configuration. If the runtime version is lower than the stored version,
+        it applies necessary updates to the configuration settings. This includes updating
+        GCP API settings, project IDs, and dataset configurations.
+        Args:
+            config_path (str): The path to the user configuration file.
+            config (ConfigDataset): The current user configuration.
+        Returns:
+            ConfigDataset: The updated user configuration.
+        """
+        if self.Version < pv.parse("2.2.3"):
+            if os.path.exists(config_path):
+                with open(config_path, 'r', encoding="utf-8") as f:
+                    data = json.load(f)
+
+                if "gcp" in data:
+                    if "api" in data["gcp"]:
+                        if "materialization_project_id" in data["gcp"]["api"]:
+                            config.GCP.API.DefaultMaterialization.ProjectID = data["gcp"]["api"]["materialization_project_id"]
+                        
+                        if "materialization_dataset" in data["gcp"]["api"]:
+                            config.GCP.API.DefaultMaterialization.ProjectID = data["gcp"]["api"]["materialization_dataset"]
+                    
+
+                    if "projects" in data["gcp"]:
+                        for p in data["gcp"]["projects"]:
+                            if "datasets" in p:
+                                for d in p["datasets"]:
+                                    for project in config.GCP.Projects:
+                                        project.Datasets.clear()
+
+                                        if project.ProjectID == p["project_id"]:
+                                            project.Datasets.append(ConfigGCPDataset(
+                                                Dataset = d["dataset"]
+                                            ))
+
+        return config
 
     def __apply_manual_updates(self) -> None:
         if self.Version < pv.parse("2.1.15"):
