@@ -337,8 +337,10 @@ class BQMetadataLoader(ConfigBase):
         self.Logger.sync_status(f"Syncing metadata for {view} completed in {str(t)}...")
 
     def cleanup_information_schema(self) -> None:
+        tables = LakehouseCatalog.get_catalog_tables(self.UserConfig.Fabric.get_metadata_lakehouse())
         table_schema = "dbo" if self.EnableSchemas else None
-        cmds = [f"DELETE FROM {LakehouseCatalog.resolve_table_name(table_schema, t)} WHERE sync_id='{self.ID}';" for t in SyncConstants.get_information_schema_tables()]
+        cmds = [f"DELETE FROM {LakehouseCatalog.resolve_table_name(table_schema, t)} WHERE sync_id='{self.ID}';" for t in SyncConstants.get_information_schema_tables() if t in tables]
+
         SparkProcessor.process_command_list(cmds)
 
     @Telemetry.Metadata_Sync

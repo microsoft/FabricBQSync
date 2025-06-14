@@ -288,11 +288,9 @@ class BQPartitionType(str, BaseEnum):
     Attributes:
         TIME (str): Represents a time-based partition.
         RANGE (str): Represents a range-based partition.
-        TIME_INGESTION (str): Represents a time ingestion partition.
     """
     TIME = "TIME"
     RANGE = "RANGE"
-    TIME_INGESTION = "TIME_INGESTION"
 
 class BQDataType(str, BaseEnum):
     """

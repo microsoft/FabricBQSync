@@ -1,6 +1,6 @@
 from FabricSync.BQ.Enum import (
     BigQueryObjectType, SyncLoadStrategy, SyncLoadType,
-    CalendarInterval, BQDataType
+    CalendarInterval, BQDataType, BQPartitionType
 )
 from FabricSync.BQ.Model.Config import (
     ConfigBQTableDefault, ConfigBQTable, ConfigTableColumn,
@@ -25,7 +25,7 @@ class Configurator:
 
         print("Creating Fabric Sync -> GCP Billing Export Configuration..")
         user_config = cls.__installer._user_config
-
+        
         user_config.AutoDiscover.Tables.Enabled = True
         user_config.AutoDiscover.Tables.LoadAll = False
 
@@ -56,18 +56,19 @@ class Configurator:
                 gcp_billing_tables.append(f"gcp_billing_export_v1_{billing_account_id}")
             
             if use_detailed_export:
-                gcp_billing_tables.append(f"gcp_billing_export_resource_v1__{billing_account_id}")
+                gcp_billing_tables.append(f"gcp_billing_export_resource_v1_{billing_account_id}")
 
             for tbl in gcp_billing_tables:
                 print(f"Adding {tbl} to User Configuration...")
                 user_config.Tables.append(
                     ConfigBQTable(
                         TableName = tbl,
-                        LoadStrategy = SyncLoadStrategy.WATERMARK,
+                        LoadStrategy = SyncLoadStrategy.TIME_INGESTION,
                         LoadType = SyncLoadType.APPEND,
                         Watermark = ConfigTableColumn(Column="export_time"),
                         BQPartition = ConfigPartition(
                             Enabled = True,
+                            PartitionType = BQPartitionType.TIME,
                             PartitionColumn = "_PARTITIONTIME",
                             Granularity = CalendarInterval.DAY,
                             PartitionDataType = BQDataType.TIMESTAMP
@@ -80,7 +81,7 @@ class Configurator:
             user_config.Tables.append(
                 ConfigBQTable(
                     TableName = focus_view_name,
-                    ObjectType = BigQueryObjectType.BASE_TABLE,
+                    ObjectType = BigQueryObjectType.VIEW,
                     LoadStrategy = SyncLoadStrategy.WATERMARK,
                     LoadType = SyncLoadType.APPEND,
                     Watermark = ConfigTableColumn(Column="x_ExportTime")

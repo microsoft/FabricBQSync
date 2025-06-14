@@ -50,9 +50,7 @@ class SyncLogger:
         and adds handlers for file and console output. It also sets up a custom log record factory
         to include a correlation ID in each log record.
         """
-        self.__logger = logging.getLogger(SyncConstants.FABRIC_LOG_NAME)        
-        
-        LOG_LEVEL = (SyncLogLevel[Session.LogLevel]).value
+        self.__logger = logging.getLogger(SyncConstants.FABRIC_LOG_NAME)
 
         logging.addLevelName(SyncLogLevel.SYNC_STATUS.value, "SYNC_STATUS")
         logging.addLevelName(SyncLogLevel.TELEMETRY.value, "TELEMETRY")
@@ -63,22 +61,22 @@ class SyncLogger:
         logging.Logger.telemetry = self.telemetry
         logging.Logger.sync_status = self.sync_status
 
-        SYNC_LOG_HANDLER_NAME = "SYNC_LOG_HANDLER"
-
         os.makedirs(os.path.dirname(Session.LogPath), exist_ok=True)   
+
+        log_level = (SyncLogLevel[Session.LogLevel]).value
 
         handler = logging.handlers.TimedRotatingFileHandler(Session.LogPath, when="d", interval=1)
         handler.setFormatter(CustomJsonFormatter())
-        handler.name = "SYNC_FILE_LOG_HANDLER"
-        handler.setLevel(LOG_LEVEL)
+        handler.name = f"{SyncConstants.FABRIC_LOG_NAME}_HANDLER"
+        handler.setLevel(log_level)
 
-        self.__logger.addHandler(SyncLogHandler(SYNC_LOG_HANDLER_NAME, handler))
+        self.__logger.addHandler(SyncLogHandler(f"{SyncConstants.FABRIC_LOG_NAME}_HANDLER", handler))
 
         stdout_handler = logging.StreamHandler(sys.stdout)
-        stdout_handler.setLevel(LOG_LEVEL)
+        stdout_handler.setLevel(log_level)
         self.__logger.addHandler(stdout_handler)
 
-        self.__logger.setLevel(LOG_LEVEL)        
+        self.__logger.setLevel(log_level)       
 
     def sync_status(self, message, verbose:bool=False, *args, **kwargs) -> None:
         """
@@ -185,7 +183,12 @@ class SyncLogger:
 
         return self.__logger
 
-    def reset_logging() -> None:
+    @classmethod
+    def set_level(cls, log_level:SyncLogLevel) -> None:
+        cls.getLogger().setLevel(log_level.value)
+
+    @classmethod
+    def reset_logging(cls) -> None:
         """
         Resets the logging configuration for the Fabric Sync Accelerator.
         This method removes all handlers from the logger associated with the Fabric Sync Accelerator,
@@ -201,6 +204,8 @@ class SyncLogger:
                 handler.close()
             logger.setLevel(logging.NOTSET)
             logger.propagate = True
+        
+        cls.__logger = None
     
     @property
     def Context(self) -> SparkSession:
