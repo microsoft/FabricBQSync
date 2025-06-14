@@ -234,7 +234,7 @@ class BQSync(SyncBase):
         else:
             return True
 
-    def sync_metadata(self):
+    def sync_metadata(self) -> bool:
         """
         Synchronizes metadata in the BQ environment.
         This method triggers the metadata synchronization using the MetadataLoader instance.
@@ -244,15 +244,17 @@ class BQSync(SyncBase):
             SyncBaseError: If a metadata update operation fails.
         """
         if not self._is_runtime_ready():
-            return
+            return False
 
         try:
             self.MetadataLoader.sync_metadata()
             self.sync_autodetect()
+            return True
         except SyncBaseError as e:
             self.Logger.error(f"BQ Metadata Update Failed: {e}")
+            return False
     
-    def sync_autodetect(self):
+    def sync_autodetect(self) -> bool:
         """
         Automatically updates BigQuery metadata if autodetection is enabled.
         This method checks if autodetection is enabled in the user configuration.
@@ -263,7 +265,7 @@ class BQSync(SyncBase):
             SyncBaseError: If any errors occur during metadata autodetection.
         """
         if not self._is_runtime_ready():
-            return
+            return False
 
         try:
             if self.UserConfig.Autodetect:
@@ -271,7 +273,7 @@ class BQSync(SyncBase):
         except SyncBaseError as e:
             self.Logger.error(f"BQ Metadata Autodetect Failed: {e}")
 
-    def build_schedule(self, schedule_type:SyncScheduleType = SyncScheduleType.AUTO, sync_metadata:bool = True):
+    def build_schedule(self, schedule_type:SyncScheduleType = SyncScheduleType.AUTO, sync_metadata:bool = True) -> bool:
         """
         Builds or updates the synchronization schedule in BigQuery.
         This method triggers metadata synchronization if requested, or creates
@@ -284,15 +286,18 @@ class BQSync(SyncBase):
             SyncBaseError: If there is a failure during metadata synchronization or schedule creation.
         """
         if not self._is_runtime_ready():
-            return
+            return False
 
         try:
             if sync_metadata:
                 self.sync_metadata()
 
             self.Scheduler.build_schedule(schedule_type)
+
+            return True
         except SyncBaseError as e:
             self.Logger.error(f"BQ Scheduler Failed: {e}")
+            return False
 
     @Telemetry.Delta_Maintenance(maintainence_type="SYNC_METADATA")
     def optimize_metadata_tbls(self):
@@ -308,7 +313,7 @@ class BQSync(SyncBase):
         self.Logger.sync_status("Optimizing Sync Metadata Metastore...", verbose=True)
         LakehouseCatalog.optimize_sync_metastore()
 
-    def run_schedule(self, schedule_type:SyncScheduleType, build_schedule:bool=True, sync_metadata:bool=False, optimize_metadata:bool=True):
+    def run_schedule(self, schedule_type:SyncScheduleType, build_schedule:bool=True, sync_metadata:bool=False, optimize_metadata:bool=True) -> bool:
         """
         Runs the data synchronization schedule, optionally building and synchronizing metadata.
         Args:
@@ -320,7 +325,7 @@ class BQSync(SyncBase):
             SyncBaseError: If a synchronization-related error is encountered.
         """
         if not self._is_runtime_ready():
-            return
+            return False
 
         try:
             if build_schedule:
@@ -359,5 +364,8 @@ class BQSync(SyncBase):
                 self.Logger.sync_status(f"Metastore Metadata Optimization completed in {str(t)}...")
             
             self.Logger.sync_status("Run Schedule Done!!")
+
+            return True
         except SyncBaseError as e:
             self.Logger.error(f"Run Schedule Failed: {e}")
+            return False

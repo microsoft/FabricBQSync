@@ -179,23 +179,25 @@ class BQDataProxy(ConfigBase):
         query_model = BQQueryModel(**qm)
 
         if self.schedule.IsTimePartitionedStrategy:
-            if self.schedule.InitialLoad and not self.schedule.RequirePartitionFilter:
-                self.Logger.debug(f"Loading {self.schedule.LakehouseTableName} with initial time ingestion...")
-                query_model = self.__get_time_ingestion_query(self.schedule, query_model)                
-            else:
-                self.Logger.debug(f"Loading {self.schedule.LakehouseTableName} with time ingestion...")
+            self.Logger.debug(f"Loading {self.schedule.LakehouseTableName} with time ingestion...")
+
+            query_model = self.__get_time_ingestion_query(self.schedule, query_model)  
+
+            if not self.schedule.InitialLoad or self.schedule.RequirePartitionFilter:
+                self.Logger.debug(f"Loading {self.schedule.LakehouseTableName} by time ingestion partition...")
+
                 part_format = SyncUtil.get_bq_partition_id_format(self.schedule.PartitionGrain)
                 if self.schedule.PartitionDataType == BQDataType.TIMESTAMP:        
                     part_filter = f"timestamp_trunc({self.schedule.PartitionColumn}, {self.schedule.PartitionGrain}) = PARSE_TIMESTAMP('{part_format}', '{self.schedule.PartitionId}')"
                 else:
                     part_filter = f"date_trunc({self.schedule.PartitionColumn}, {self.schedule.PartitionGrain}) = PARSE_DATETIME('{part_format}', '{self.schedule.PartitionId}')"
 
-                if self.schedule.WatermarkColumn and not self.schedule.InitialLoad:
+                self.Logger.debug(f"{self.schedule.LakehouseTableName} time partition: {part_filter}")
+                query_model.add_predicate(part_filter)
+
+                if self.schedule.WatermarkColumn:
                     predicate = self.__get_watermark_predicate(self.schedule)
                     query_model.add_predicate(predicate)
-
-                self.Logger.debug(f"Load from BQ by time partition: {part_filter}")
-                query_model.PartitionFilter = part_filter
         elif self.schedule.IsRangePartitioned:
             self.Logger.debug(f"Loading {self.schedule.LakehouseTableName} with range partitioning...")
             part_filter = SyncUtil.get_partition_range_predicate(self.schedule)
@@ -236,7 +238,6 @@ class BQDataProxy(ConfigBase):
                     df_bq = df_bq.observe(observation, 
                         count(lit(1)).alias("row_count"),
                         max(col("BQ_CDC_CHANGE_TIMESTAMP")).alias("watermark"))
-                #elif self.schedule.Load_Strategy == SyncLoadStrategy.WATERMARK and self.schedule.WatermarkColumn:
                 elif self.schedule.WatermarkColumn:
                     self.Logger.debug(f"{self.schedule.LakehouseTableName} - Observation Watermark: {self.schedule.WatermarkColumn}")
                     df_bq = df_bq.observe(
@@ -280,14 +281,20 @@ class BQDataProxy(ConfigBase):
         Returns:
             DataFrame: The updated DataFrame with the partition column added.
         """
-        if schedule.PartitionColumn not in df.schema.fieldNames():
-            if schedule.PartitionId:
-                df = df.withColumn(schedule.PartitionColumn, lit(schedule.PartitionId))  
-            else:
-                dt_format = SyncUtil.get_partition_id_df_format(schedule.PartitionGrain)
-                df = df.withColumn(schedule.PartitionColumn, \
-                                date_format(col(f"__{schedule.PartitionColumn}__"), dt_format))
-        
+        if schedule.PartitionColumn:
+            proxy = f"__{schedule.PartitionColumn}__"
+
+            if schedule.PartitionColumn not in df.schema.fieldNames():
+                if schedule.PartitionId:
+                    df = df.withColumn(schedule.PartitionColumn, lit(schedule.PartitionId))  
+                else:
+                    if proxy in df.schema.fieldNames():
+                        dt_format = SyncUtil.get_partition_id_df_format(schedule.PartitionGrain)
+                        df = df.withColumn(schedule.PartitionColumn, \
+                                        date_format(col(proxy), dt_format))
+            
+            if proxy in df.schema.fieldNames():
+                df = df.drop(proxy)
         return df
 
     def __get_time_ingestion_query(self, schedule:SyncSchedule, query_model:BQQueryModel) -> BQQueryModel:

@@ -1,13 +1,13 @@
-from pyspark.sql import ( # type: ignore
+from pyspark.sql import ( 
     SparkSession, DataFrame, Row
 )
-from pyspark.sql.functions import ( # type: ignore
+from pyspark.sql.functions import ( 
     max, col
 )
 from logging import Logger
 from packaging import version as pv
-from delta.tables import DeltaTable # type: ignore
-from pyspark.sql.functions import col # type: ignore
+from delta.tables import DeltaTable 
+from pyspark.sql.functions import col
 
 from FabricSync.BQ.Logging import SyncLogger
 from FabricSync.BQ.SessionManager import Session
@@ -54,7 +54,6 @@ class ContextAwareBase:
         GCPCredential (str): The GCP credentials.
     """ 
     __context:SparkSession = None
-    __logger:Logger = None
 
     @classproperty
     def Context(cls) -> SparkSession:
@@ -75,10 +74,7 @@ class ContextAwareBase:
         Returns:
             Logger: The logger.
         """
-        if cls.__logger is None:
-            cls.__logger = SyncLogger.getLogger()
-        
-        return cls.__logger
+        return SyncLogger.getLogger()
     
     @classproperty
     def ApplicationID(cls) -> str:

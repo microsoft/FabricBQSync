@@ -419,7 +419,7 @@ class UserConfigurationValidation:
             errors.append(cls.__required_field(partition, "column"))
             errors.append(cls.__required_field(partition, "partition_data_type"))
                 
-            if cls.__is_in_list(partition, "type", [BQPartitionType.TIME, BQPartitionType.TIME_INGESTION]):
+            if cls.__is_in_list(partition, "type", [BQPartitionType.TIME]):
                 errors.append(cls.__required_field(partition, "partition_grain"))
 
             if cls.__is_equal(partition, "type", BQPartitionType.RANGE):
