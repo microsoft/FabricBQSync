@@ -68,15 +68,13 @@ class SyncLogger:
         handler = logging.handlers.TimedRotatingFileHandler(Session.LogPath, when="d", interval=1)
         handler.setFormatter(CustomJsonFormatter())
         handler.name = f"{SyncConstants.FABRIC_LOG_NAME}_HANDLER"
-        handler.setLevel(log_level)
 
         self.__logger.addHandler(SyncLogHandler(f"{SyncConstants.FABRIC_LOG_NAME}_HANDLER", handler))
 
         stdout_handler = logging.StreamHandler(sys.stdout)
-        stdout_handler.setLevel(log_level)
         self.__logger.addHandler(stdout_handler)
 
-        self.__logger.setLevel(log_level)       
+        SyncLogger.set_level(log_level)
 
     def sync_status(self, message, verbose:bool=False, *args, **kwargs) -> None:
         """
@@ -185,27 +183,33 @@ class SyncLogger:
 
     @classmethod
     def set_level(cls, log_level:SyncLogLevel) -> None:
-        cls.getLogger().setLevel(log_level.value)
+        """
+        Sets the logging level for the Fabric Sync Accelerator logger and its handlers.
+        Args:
+            log_level (SyncLogLevel): The logging level to set for the logger and its handlers.
+        Returns:
+            None
+        """
+        cls.getLogger().setLevel(log_level)
+
+        for handler in cls.getLogger().handlers[:]:
+            handler.setLevel(log_level)        
 
     @classmethod
     def reset_logging(cls) -> None:
         """
-        Resets the logging configuration for the Fabric Sync Accelerator.
-        This method removes all handlers from the logger associated with the Fabric Sync Accelerator,
-        closes the handlers, sets the logger level to NOTSET, and allows propagation of log messages.
-        It is typically used to clear the logging configuration before re-initializing the logger.
+        Resets the logger for the Fabric Sync Accelerator.
+        This method removes all handlers from the logger, closes them, and sets the logger to None. 
+        It is used to clean up the logger when it is no longer needed or before re-initializing it
         """
-        loggers = [logging.getLogger(name) for name in logging.root.manager.loggerDict if name == SyncConstants.FABRIC_LOG_NAME]
-
-        for logger in loggers:
-            handlers = logger.handlers[:]
-            for handler in handlers:
-                logger.removeHandler(handler)
+        if cls.__logger:
+            for handler in cls.__logger.handlers[:]:
+                cls.__logger.removeHandler(handler)
                 handler.close()
-            logger.setLevel(logging.NOTSET)
-            logger.propagate = True
+            cls.__logger.setLevel(logging.NOTSET)
+            cls.__logger.propagate = True
         
-        cls.__logger = None
+            cls.__logger = None
     
     @property
     def Context(self) -> SparkSession:

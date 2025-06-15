@@ -27,7 +27,7 @@ from FabricSync.BQ.Exceptions import (
     SyncConfigurationError, SyncLoadError, FabricLakehouseError
 )
 from FabricSync.BQ.Threading import (
-    QueueProcessor, ThreadSafeDict, SparkProcessor
+    QueueProcessor, ThreadSafeList, ThreadSafeDict, SparkProcessor
 )
 from FabricSync.BQ.SyncCore import ConfigBase
 from FabricSync.BQ.Enum import (
@@ -73,7 +73,7 @@ class BQDataProxy(ConfigBase):
             schedule (SyncSchedule): The synchronization schedule containing the BigQuery table details.
         """
         super().__init__()
-        self.schedule = schedule
+        self.__schedule = schedule
 
     @staticmethod
     def get_schedule_data(schedule:SyncSchedule) -> Tuple[SyncSchedule, DataFrame, Observation]:
@@ -113,8 +113,8 @@ class BQDataProxy(ConfigBase):
         twenty_four_hours_seconds = 24*60*60
         ten_minutes_seconds = 10*60
 
-        cdc = (self.schedule.Load_Strategy == SyncLoadStrategy.CDC)
-        watermark_ts = datetime.fromisoformat(self.schedule.MaxWatermark)
+        cdc = (self.__schedule.Load_Strategy == SyncLoadStrategy.CDC)
+        watermark_ts = datetime.fromisoformat(self.__schedule.MaxWatermark)
 
         if not self.is_timezone_aware(watermark_ts):
             watermark_ts = watermark_ts.replace(tzinfo=timezone.utc)
@@ -132,9 +132,9 @@ class BQDataProxy(ConfigBase):
                 window_end = watermark_ts + timedelta(seconds=window_seconds - 1)
 
         sql_string = "SELECT _CHANGE_TYPE AS BQ_CDC_CHANGE_TYPE, _CHANGE_TIMESTAMP AS BQ_CDC_CHANGE_TIMESTAMP, "
-        sql_string += f"{self.schedule.TableColumns} FROM "
-        sql_string += f"CHANGES(TABLE `{self.schedule.BQTableName}`,TIMESTAMP_ADD(TIMESTAMP'{self.schedule.MaxWatermark}',INTERVAL 1 SECOND)," \
-            if cdc else f"APPENDS(TABLE `{self.schedule.BQTableName}`,TIMESTAMP_ADD(TIMESTAMP'{self.schedule.MaxWatermark}',INTERVAL 1 SECOND),"
+        sql_string += f"{self.__schedule.TableColumns} FROM "
+        sql_string += f"CHANGES(TABLE `{self.__schedule.BQTableName}`,TIMESTAMP_ADD(TIMESTAMP'{self.__schedule.MaxWatermark}',INTERVAL 1 SECOND)," \
+            if cdc else f"APPENDS(TABLE `{self.__schedule.BQTableName}`,TIMESTAMP_ADD(TIMESTAMP'{self.__schedule.MaxWatermark}',INTERVAL 1 SECOND),"
         
         if window_end:
             sql_string += f"TIMESTAMP'{window_end.isoformat()}')" 
@@ -167,107 +167,107 @@ class BQDataProxy(ConfigBase):
         """
 
         qm = {
-            "ScheduleId": self.schedule.ScheduleId,
-            "TaskId": self.schedule.ID,
-            "ProjectId": self.schedule.ProjectId,
-            "Dataset": self.schedule.Dataset,
-            "TableName": self.schedule.BQTableName,
-            "TempTableId": self.schedule.TempTableId,
-            "API": self.schedule.SyncAPI,
+            "ScheduleId": self.__schedule.ScheduleId,
+            "TaskId": self.__schedule.ID,
+            "ProjectId": self.__schedule.ProjectId,
+            "Dataset": self.__schedule.Dataset,
+            "TableName": self.__schedule.BQTableName,
+            "TempTableId": self.__schedule.TempTableId,
+            "API": self.__schedule.SyncAPI,
             "Predicate": []
         }
         query_model = BQQueryModel(**qm)
 
-        if self.schedule.IsTimePartitionedStrategy:
-            self.Logger.debug(f"Loading {self.schedule.LakehouseTableName} with time ingestion...")
+        if self.__schedule.IsTimePartitionedStrategy:
+            self.Logger.debug(f"Loading {self.__schedule.LakehouseTableName} with time ingestion...")
 
-            query_model = self.__get_time_ingestion_query(self.schedule, query_model)  
+            query_model = self.__get_time_ingestion_query(self.__schedule, query_model)  
 
-            if not self.schedule.InitialLoad or self.schedule.RequirePartitionFilter:
-                self.Logger.debug(f"Loading {self.schedule.LakehouseTableName} by time ingestion partition...")
+            if not self.__schedule.InitialLoad or self.__schedule.RequirePartitionFilter:
+                self.Logger.debug(f"Loading {self.__schedule.LakehouseTableName} by time ingestion partition...")
 
-                part_format = SyncUtil.get_bq_partition_id_format(self.schedule.PartitionGrain)
-                if self.schedule.PartitionDataType == BQDataType.TIMESTAMP:        
-                    part_filter = f"timestamp_trunc({self.schedule.PartitionColumn}, {self.schedule.PartitionGrain}) = PARSE_TIMESTAMP('{part_format}', '{self.schedule.PartitionId}')"
+                part_format = SyncUtil.get_bq_partition_id_format(self.__schedule.PartitionGrain)
+                if self.__schedule.PartitionDataType == BQDataType.TIMESTAMP:        
+                    part_filter = f"timestamp_trunc({self.__schedule.PartitionColumn}, {self.__schedule.PartitionGrain}) = PARSE_TIMESTAMP('{part_format}', '{self.__schedule.PartitionId}')"
                 else:
-                    part_filter = f"date_trunc({self.schedule.PartitionColumn}, {self.schedule.PartitionGrain}) = PARSE_DATETIME('{part_format}', '{self.schedule.PartitionId}')"
+                    part_filter = f"date_trunc({self.__schedule.PartitionColumn}, {self.__schedule.PartitionGrain}) = PARSE_DATETIME('{part_format}', '{self.__schedule.PartitionId}')"
 
-                self.Logger.debug(f"{self.schedule.LakehouseTableName} time partition: {part_filter}")
+                self.Logger.debug(f"{self.__schedule.LakehouseTableName} time partition: {part_filter}")
                 query_model.add_predicate(part_filter)
 
-                if self.schedule.WatermarkColumn:
-                    predicate = self.__get_watermark_predicate(self.schedule)
+                if self.__schedule.WatermarkColumn:
+                    predicate = self.__get_watermark_predicate(self.__schedule)
                     query_model.add_predicate(predicate)
-        elif self.schedule.IsRangePartitioned:
-            self.Logger.debug(f"Loading {self.schedule.LakehouseTableName} with range partitioning...")
-            part_filter = SyncUtil.get_partition_range_predicate(self.schedule)
+        elif self.__schedule.IsRangePartitioned:
+            self.Logger.debug(f"Loading {self.__schedule.LakehouseTableName} with range partitioning...")
+            part_filter = SyncUtil.get_partition_range_predicate(self.__schedule)
             self.Logger.debug(f"Load from BQ by range partition: {part_filter}")
             query_model.PartitionFilter = part_filter
-        elif not self.schedule.InitialLoad:
-            if self.schedule.Load_Strategy == SyncLoadStrategy.WATERMARK:
-                self.Logger.debug(f"Loading {self.schedule.LakehouseTableName} with watermark...")
-                predicate = self.__get_watermark_predicate(self.schedule)
+        elif not self.__schedule.InitialLoad:
+            if self.__schedule.Load_Strategy == SyncLoadStrategy.WATERMARK:
+                self.Logger.debug(f"Loading {self.__schedule.LakehouseTableName} with watermark...")
+                predicate = self.__get_watermark_predicate(self.__schedule)
                 query_model.add_predicate(predicate)
-            elif self.schedule.IsCDCStrategy and self.schedule.MaxWatermark:
+            elif self.__schedule.IsCDCStrategy and self.__schedule.MaxWatermark:
                 cdc_query = self.__build_cdc_query()
-                self.Logger.debug(f"Load {self.schedule.LakehouseTableName} with CDC: {cdc_query}")
+                self.Logger.debug(f"Load {self.__schedule.LakehouseTableName} with CDC: {cdc_query}")
                 query_model.Query = cdc_query
         
-        if self.schedule.SourceQuery and not query_model.Query:
-            self.Logger.debug(f"Overriding table. Load from BQ with source query: {self.schedule.SourceQuery}")
-            query_model.Query = self.schedule.SourceQuery
+        if self.__schedule.SourceQuery and not query_model.Query:
+            self.Logger.debug(f"Overriding table. Load from BQ with source query: {self.__schedule.SourceQuery}")
+            query_model.Query = self.__schedule.SourceQuery
                 
-        if self.schedule.SourcePredicate:
-            self.Logger.debug(f"Applying table predicate: {self.schedule.SourcePredicate}")
-            query_model.add_predicate(self.schedule.SourcePredicate)
+        if self.__schedule.SourcePredicate:
+            self.Logger.debug(f"Applying table predicate: {self.__schedule.SourcePredicate}")
+            query_model.add_predicate(self.__schedule.SourcePredicate)
 
         if self.__use_dataframe_observation():
             query_model.Cached = False
-            observation = Observation(name=f"OB_{self.schedule.TableId}_{self.schedule.PartitionId}")
+            observation = Observation(name=f"OB_{self.__schedule.TableId}_{self.__schedule.PartitionId}")
         else:
             query_model.Cached = (self.UserConfig.Optimization.DisableDataframeCache == False)
             observation = None
 
         df_bq = self.read_bq_to_dataframe(query_model)
-        self.Logger.debug(f"{self.schedule.LakehouseTableName} - BASE Read from BQ")
+        self.Logger.debug(f"{self.__schedule.LakehouseTableName} - BASE Read from BQ")
 
         if df_bq:
             if observation:
-                if self.schedule.IsCDCStrategy and not self.schedule.InitialLoad:
-                    self.Logger.debug(f"{self.schedule.LakehouseTableName} - CDC Observation")
+                if self.__schedule.IsCDCStrategy and not self.__schedule.InitialLoad:
+                    self.Logger.debug(f"{self.__schedule.LakehouseTableName} - CDC Observation")
                     df_bq = df_bq.observe(observation, 
                         count(lit(1)).alias("row_count"),
                         max(col("BQ_CDC_CHANGE_TIMESTAMP")).alias("watermark"))
-                elif self.schedule.WatermarkColumn:
-                    self.Logger.debug(f"{self.schedule.LakehouseTableName} - Observation Watermark: {self.schedule.WatermarkColumn}")
+                elif self.__schedule.WatermarkColumn:
+                    self.Logger.debug(f"{self.__schedule.LakehouseTableName} - Observation Watermark: {self.__schedule.WatermarkColumn}")
                     df_bq = df_bq.observe(
                         observation, 
                         count(lit(1)).alias("row_count"),
-                        max(col(self.schedule.WatermarkColumn)).alias("watermark"))
+                        max(col(self.__schedule.WatermarkColumn)).alias("watermark"))
                 else:
-                    self.Logger.debug(f"{self.schedule.LakehouseTableName} - Observation Count Only")
+                    self.Logger.debug(f"{self.__schedule.LakehouseTableName} - Observation Count Only")
                     df_bq = df_bq.observe(observation, count(lit(1)).alias("row_count"))
 
-            if self.schedule.IsPartitioned:
-                if self.schedule.Partition_Type == BQPartitionType.TIME:
-                    proxy_cols = SyncUtil.get_fabric_partition_proxy_cols(self.schedule.PartitionGrain)
-                    self.schedule.FabricPartitionColumns = SyncUtil.get_fabric_partition_cols(self.schedule.PartitionColumn, proxy_cols)
+            if self.__schedule.IsPartitioned:
+                if self.__schedule.Partition_Type == BQPartitionType.TIME:
+                    proxy_cols = SyncUtil.get_fabric_partition_proxy_cols(self.__schedule.PartitionGrain)
+                    self.__schedule.FabricPartitionColumns = SyncUtil.get_fabric_partition_cols(self.__schedule.PartitionColumn, proxy_cols)
 
-                    if self.schedule.IsTimeIngestionPartitioned:
-                        self.Logger.debug(f"{self.schedule.LakehouseTableName} - Time Ingestion Pseudo Col: {self.schedule.PartitionColumn}-{self.schedule.PartitionId}")
-                        df_bq = self.__resolve_time_ingestion_pseudo_columns(self.schedule, df_bq)          
+                    if self.__schedule.IsTimeIngestionPartitioned:
+                        self.Logger.debug(f"{self.__schedule.LakehouseTableName} - Time Ingestion Pseudo Col: {self.__schedule.PartitionColumn}-{self.__schedule.PartitionId}")
+                        df_bq = self.__resolve_time_ingestion_pseudo_columns(self.__schedule, df_bq)          
 
-                    df_bq = SyncUtil.create_fabric_partition_proxy_cols(df_bq, self.schedule.PartitionColumn, proxy_cols)
+                    df_bq = SyncUtil.create_fabric_partition_proxy_cols(df_bq, self.__schedule.PartitionColumn, proxy_cols)
                 else:
-                    self.schedule.FabricPartitionColumns = [f"__{self.schedule.PartitionColumn}_Range"]
-                    df_bq = SyncUtil.create_fabric_range_partition(self.Context, df_bq, self.schedule)
+                    self.__schedule.FabricPartitionColumns = [f"__{self.__schedule.PartitionColumn}_Range"]
+                    df_bq = SyncUtil.create_fabric_range_partition(self.Context, df_bq, self.__schedule)
             
-            return (self.schedule, df_bq, observation)
+            return (self.__schedule, df_bq, observation)
         else:
-            self.Logger.debug(f"{self.schedule.LakehouseTableName} - No Data Returned...")
-            self.schedule.Status = SyncStatus.NO_DATA
+            self.Logger.debug(f"{self.__schedule.LakehouseTableName} - No Data Returned...")
+            self.__schedule.Status = SyncStatus.NO_DATA
 
-            return (self.schedule, None, None)
+            return (self.__schedule, None, None)
 
     def __resolve_time_ingestion_pseudo_columns(self, schedule:SyncSchedule, df:DataFrame) -> DataFrame:
         """
@@ -313,7 +313,7 @@ class BQDataProxy(ConfigBase):
             sql = f"SELECT *, {schedule.PartitionColumn} AS __{schedule.PartitionColumn}__ FROM `{query_model.TableName}`"
 
             query_model.Query = sql
-            self.Logger.debug(f"{self.schedule.LakehouseTableName} - Time Ingestion Initial Load Query: {sql}")
+            self.Logger.debug(f"{self.__schedule.LakehouseTableName} - Time Ingestion Initial Load Query: {sql}")
         
         query_model.UseForceBQJobConfig = True
 
@@ -353,7 +353,7 @@ class BQDataProxy(ConfigBase):
         disallowed_types = [SyncLoadType.MERGE]
 
         if self.UserConfig.Optimization.UseApproximateRowCounts:
-            if self.schedule.Load_Strategy not in disallowed_strategies and self.schedule.Load_Type not in disallowed_types:
+            if self.__schedule.Load_Strategy not in disallowed_strategies and self.__schedule.Load_Type not in disallowed_types:
                 return True
         
         return False
@@ -468,7 +468,7 @@ class BQFabricWriter(ConfigBase):
         Returns:
             DataFrame: A filtered DataFrame containing only the latest changes for each key group.
         """
-        keys = ",".join(self.schedule.Keys)
+        keys = ",".join(self.__schedule.Keys)
 
         row_num_expr = f"row_number() over(partition by {keys} order by BQ_CDC_CHANGE_TIMESTAMP desc) as cdc_row_num"
 
@@ -827,8 +827,8 @@ class BQScheduleLoader(ConfigBase):
     watermarks, and status information. It also manages the logic for schema evolution,
     partitioning, and mirroring to a database landing zone.
     Attributes:
-        TableLocks (ThreadSafeDict): A thread-safe dictionary to manage table locks for partitioned sync loads.
-        FabricWriter (BQFabricWriter): An instance of the BQFabricWriter class for writing data to Lakehouse tables.
+        __TableLocks (ThreadSafeDict): A thread-safe dictionary to manage table locks for partitioned sync loads.
+        __FabricWriter (BQFabricWriter): An instance of the BQFabricWriter class for writing data to Lakehouse tables.
     Methods:
         __init__() -> None:
             Initializes a new instance of the BQScheduleLoader class.
@@ -836,6 +836,8 @@ class BQScheduleLoader(ConfigBase):
             Synchronizes a BigQuery table with a Lakehouse table based on the provided SyncSchedule.
         __sync_cleanup(schedule:SyncSchedule) -> None:
             Cleans up temporary resources after synchronizing a BigQuery table.
+        __cleanup_temp_tables() -> None:
+            Cleans up temporary BigQuery tables created during the synchronization process.
         __show_sync_status(schedule:SyncSchedule, status:str=None) -> None:
             Displays the synchronization status for a given SyncSchedule.
         __schedule_sync(schedule:SyncSchedule, lock=None) -> SyncSchedule:
@@ -857,13 +859,15 @@ class BQScheduleLoader(ConfigBase):
         and updating synchronization schedules with row counts, watermarks, and status information.
         It also manages the logic for schema evolution, partitioning, and mirroring to a database landing zone.
         Attributes:
-            TableLocks (ThreadSafeDict): A thread-safe dictionary to manage table locks for partitioned sync loads.
-            FabricWriter (BQFabricWriter): An instance of the BQFabricWriter class for writing data to Lakehouse tables.
+            __BQTempTables (ThreadSafeList): A thread-safe list to manage temporary BigQuery tables created during the sync process.
+            __TableLocks (ThreadSafeDict): A thread-safe dictionary to manage table locks for partitioned sync loads.
+            __FabricWriter (BQFabricWriter): An instance of the BQFabricWriter class for writing data to Lakehouse tables.
         """
         super().__init__()
 
-        self.TableLocks:ThreadSafeDict = None
-        self.FabricWriter = BQFabricWriter()
+        self.__BQTempTables:ThreadSafeList = None
+        self.__TableLocks:ThreadSafeDict = None
+        self.__FabricWriter = BQFabricWriter()
 
     def __sync_bq_table(self, schedule:SyncSchedule, lock:Lock = None) -> SyncSchedule:
         """
@@ -902,7 +906,7 @@ class BQScheduleLoader(ConfigBase):
                     raise SyncLoadError(msg=f"Transformation failed during sync: {e}", data=schedule)
 
                 #Save BQ table
-                self.FabricWriter.save_bq_table(schedule, df_bq, observation, lock)
+                self.__FabricWriter.save_bq_table(schedule, df_bq, observation, lock)
 
             schedule.SparkAppId = self.Context.sparkContext.applicationId
             schedule.EndTime = datetime.now(timezone.utc)
@@ -913,10 +917,9 @@ class BQScheduleLoader(ConfigBase):
 
     def __sync_cleanup(self, schedule:SyncSchedule) -> None:
         """
-        Cleans up temporary resources after synchronizing a BigQuery table.
         This method cleans up temporary resources after synchronizing a BigQuery table, including
         deleting temporary tables, cleaning up exported bucket data, and dropping temporary BigQuery tables
-        if necessary. It also handles the logic for cleaning up resources based on the user configuration.
+        if necessary.
         Args:
             schedule (SyncSchedule): The synchronization schedule containing the BigQuery and Lakehouse details.
         Returns:
@@ -928,10 +931,25 @@ class BQScheduleLoader(ConfigBase):
             storage_client.delete_folder(self.UserConfig.GCP.Storage.BucketUri,
                 storage_client.get_storage_prefix(schedule.ScheduleId, schedule.ID))
         
-        if self.UserConfig.GCP.API.ForceBQJobConfig:
+        self.__BQTempTables.append((schedule.ProjectId, schedule.Dataset, schedule.TempTableId))
+
+    def __cleanup_temp_tables(self) -> None:
+        """
+        This method cleans up temporary BigQuery tables created during the synchronization process,
+        ensuring that temporary tables are deleted after they are no longer needed.
+        Returns:
+            None
+        """
+        if self.__BQTempTables:
+            self.Logger.debug(f"Cleaning up temporary BigQuery tables: {self.__BQTempTables}")
+            
+            datasets = list(set([(i[0], i[1]) for i in self.__BQTempTables.unsafe_list]))
+            
             bq_client = BigQueryClient(self.UserConfig)
-            bq_client.drop_temp_table(schedule.ProjectId, schedule.Dataset, schedule.TempTableId)
-        
+            bq_client.drop_temp_tables(datasets)
+
+            self.__BQTempTables.clear()
+
     def __show_sync_status(self, schedule:SyncSchedule, status:str=None) -> None:
         """
         Displays the synchronization status for a given SyncSchedule.
@@ -990,7 +1008,7 @@ class BQScheduleLoader(ConfigBase):
             SyncSchedule: The updated SyncSchedule after the synchronization process is complete.
         """
         schedule = value[2]
-        lock = self.TableLocks.get_or_set(schedule.LakehouseTableName, Lock())
+        lock = self.__TableLocks.get_or_set(schedule.LakehouseTableName, Lock())
         return self.__schedule_sync(schedule, lock)
 
     def __thread_exception_handler(self, value) -> None:
@@ -1054,16 +1072,17 @@ class BQScheduleLoader(ConfigBase):
         processor = QueueProcessor(num_threads=num_threads)
 
         with SyncTimer() as t:
+            self.__BQTempTables = ThreadSafeList()
             schedule = FabricMetastore.get_schedule(schedule_type)
-            initial_loads = self.FabricWriter.initialize_first_loads(schedule)
+            initial_loads = self.__FabricWriter.initialize_first_loads(schedule)
 
             load_grps = [i["priority"] for i in schedule.select("priority").distinct().orderBy("priority").collect()]
 
             if load_grps:
-                self.TableLocks = ThreadSafeDict()
+                self.__TableLocks = ThreadSafeDict()
 
                 for grp in load_grps:
-                    self.FabricWriter.MultiWrite = ThreadSafeDict()
+                    self.__FabricWriter.MultiWrite = ThreadSafeDict()
 
                     grp_nm = "LOAD GROUP {0}".format(grp)
                     grp_df = schedule.where(f"priority = '{grp}'")
@@ -1074,12 +1093,12 @@ class BQScheduleLoader(ConfigBase):
                         s = SyncSchedule(**(tbl.asDict()))
                         s.BQTableName = self.UserConfig.GCP.format_table_path(s.ProjectId, s.Dataset, s.TableName)
 
-                        if not self.FabricWriter.MultiWrite.contains(s.LakehouseTableName):
+                        if not self.__FabricWriter.MultiWrite.contains(s.LakehouseTableName):
                             sync_track = {
                                 "tasks": 0,
                                 "observations": 0
                             }
-                            self.FabricWriter.MultiWrite.set(s.LakehouseTableName, sync_track)
+                            self.__FabricWriter.MultiWrite.set(s.LakehouseTableName, sync_track)
 
                         group_schedule.append(s)
 
@@ -1105,6 +1124,8 @@ class BQScheduleLoader(ConfigBase):
 
                 self.Logger.sync_status("Processing Sync Telemetry...")
                 FabricMetastore.process_load_group_telemetry(schedule_type)
+
+        self.__cleanup_temp_tables()
 
         self.Logger.sync_status(f"Async schedule sync finished in {str(t)}...")
 

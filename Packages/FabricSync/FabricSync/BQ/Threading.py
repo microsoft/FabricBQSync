@@ -78,6 +78,15 @@ class ThreadSafeList():
         with self._lock:
             return len(self._list)
 
+    def clear(self) -> None:
+        """
+        Clears the list - This method empties the list and releases any resources associated with it.
+        Returns:
+            None
+        """
+        with self._lock:
+            return self._list.clear()
+        
     @property
     def unsafe_list(self) -> list:
         """
