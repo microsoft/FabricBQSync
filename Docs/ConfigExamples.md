@@ -27,7 +27,7 @@ After initial set-up and testing, the autodiscover process can be disabled when 
 </code>
 
 #### Multiple GCP Projects/Multiple GCP Datasets
-The Fabric Sync accelerator can mirror data from multiple GCP projects and multiple BigQuery datasets within a single configuration instance. In cases where multiple projects/datasets are configured, the first project and first dataset are treated as the default.
+The Fabric Sync accelerator can mirror data from multiple GCP projects and multiple BigQuery datasets within a single configuration instance. In cases where multiple projects/datasets are configured, the first project and first dataset are treated as the default. If required, the dataset location can be provided for scenarios where data is mirrored from multiple regions.
 
 In the example below, two projects and three datasets are configured for discover. If the configuration is set to <code>load_all</code> all three datasets across both projects would be in scope. In this example, one table from each dataset is defined in the table configuration.
 
@@ -39,13 +39,16 @@ In the example below, two projects and three datasets are configured for discove
         {
             "project_id": "Project1",
                 "datasets": [
-                    { "dataset": "DatasetA" },
-		            { "dataset": "DatasetB" }
+                    { "dataset_id": "DatasetA" },
+		            { 
+                        "dataset_id": "DatasetB",
+                        "location": "US" 
+                    }
                 ]
             },
             "project_id": "Project2",
                 "datasets": [
-                    { "dataset": "DatasetC" }
+                    { "dataset_id": "DatasetC" }
                 ]
             }
         ],
@@ -81,8 +84,13 @@ When mirroring Views or Materialized Views through the BigQuery Storage API, the
     "gcp": {
         ...
 	    "api": {
-		    "materialization_project_id": "ALTERNATE_PROJECT_ID",
-		    "materialization_dataset": "ALTERNATE_DATASET_ID",
+            "materialization_default": {
+		        "project_id": "ALTERNATE_PROJECT_ID",
+                "dataset": {
+		            "dataset_id": "ALTERNATE_DATASET_ID",
+                    "location": "US"
+                }
+            }
             ...
 	    },
         ...
