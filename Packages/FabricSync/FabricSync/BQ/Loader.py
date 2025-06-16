@@ -181,7 +181,8 @@ class BQDataProxy(ConfigBase):
         if self.__schedule.IsTimePartitionedStrategy:
             self.Logger.debug(f"Loading {self.__schedule.LakehouseTableName} with time ingestion...")
 
-            query_model = self.__get_time_ingestion_query(self.__schedule, query_model)  
+            if self.__schedule.IsTimeIngestionPartitioned:
+                query_model = self.__get_time_ingestion_query(self.__schedule, query_model)
 
             if not self.__schedule.InitialLoad or self.__schedule.RequirePartitionFilter:
                 self.Logger.debug(f"Loading {self.__schedule.LakehouseTableName} by time ingestion partition...")
@@ -458,7 +459,7 @@ class BQFabricWriter(ConfigBase):
         """
         return {c: f"{alias}.{c}" for c in columns.split(",")}
 
-    def __get_cdc_latest_changes(self, df:DataFrame) -> DataFrame:
+    def __get_cdc_latest_changes(self, schedule:SyncSchedule, df:DataFrame) -> DataFrame:
         """
         Retrieves the latest changes from a CDC DataFrame based on the provided SyncSchedule.
         This function calculates the row number for each key group in the DataFrame, filters
@@ -468,7 +469,7 @@ class BQFabricWriter(ConfigBase):
         Returns:
             DataFrame: A filtered DataFrame containing only the latest changes for each key group.
         """
-        keys = ",".join(self.__schedule.Keys)
+        keys = ",".join(schedule.Keys)
 
         row_num_expr = f"row_number() over(partition by {keys} order by BQ_CDC_CHANGE_TIMESTAMP desc) as cdc_row_num"
 
@@ -579,6 +580,7 @@ class BQFabricWriter(ConfigBase):
             df_bq, observation = self.__apply_task_tracker_observation(schedule, df_bq)
 
             if schedule.IsPartitionedSyncLoad:
+                self.Logger.debug(f"LAKEHOUSE - {schedule.LakehouseTableName} - Partitioned Sync Load...")
                 has_lock = False
                 
                 if schedule.TotalTableTasks > 1:
@@ -587,6 +589,9 @@ class BQFabricWriter(ConfigBase):
 
                 if not schedule.InitialLoad and not schedule.LakehousePartition:
                     write_config["partitionOverwriteMode"] = "dynamic"
+
+                    if "overwriteSchema" in write_config:
+                        del write_config["overwriteSchema"]
                 
                 try:
                     partition_cols = SyncUtil.get_lakehouse_partitions(schedule)
@@ -596,6 +601,8 @@ class BQFabricWriter(ConfigBase):
                     if has_lock:
                         lock.release()
             else:
+                self.Logger.debug(f"LAKEHOUSE - {schedule.LakehouseTableName} - Non-Partitioned Sync Load...")
+
                 if schedule.Load_Strategy == SyncLoadStrategy.CDC_APPEND:
                     df_bq = df_bq.drop("BQ_CDC_CHANGE_TYPE", "BQ_CDC_CHANGE_TIMESTAMP")
 
@@ -675,6 +682,8 @@ class BQFabricWriter(ConfigBase):
         if not mode:
             mode = schedule.Mode
 
+        self.Logger.debug(f"LAKEHOUSE - Writing {schedule.LakehouseTableName} to {schedule.LakehouseAbfssTablePath} with mode: {mode} - {options}") 
+        
         if schedule.FlattenTable:
             df, flattened = SyncUtil.flatten(schedule=schedule, df=df)
 
@@ -792,6 +801,8 @@ class BQFabricWriter(ConfigBase):
                         write_config["overwriteSchema"] = True
                     else:
                         write_config["mergeSchema"] = True
+                elif not schedule.IsPartitionedSyncLoad and schedule.InitialLoad:
+                    write_config["overwriteSchema"] = True
 
                 schedule,df_bq = self.__save_bq_to_lakehouse(schedule, df_bq, lock, write_config)
                     
@@ -827,8 +838,7 @@ class BQScheduleLoader(ConfigBase):
     watermarks, and status information. It also manages the logic for schema evolution,
     partitioning, and mirroring to a database landing zone.
     Attributes:
-        __TableLocks (ThreadSafeDict): A thread-safe dictionary to manage table locks for partitioned sync loads.
-        __FabricWriter (BQFabricWriter): An instance of the BQFabricWriter class for writing data to Lakehouse tables.
+        HasScheduleErrors (bool): A flag to indicate if any synchronization schedules encountered errors.
     Methods:
         __init__() -> None:
             Initializes a new instance of the BQScheduleLoader class.
@@ -862,12 +872,14 @@ class BQScheduleLoader(ConfigBase):
             __BQTempTables (ThreadSafeList): A thread-safe list to manage temporary BigQuery tables created during the sync process.
             __TableLocks (ThreadSafeDict): A thread-safe dictionary to manage table locks for partitioned sync loads.
             __FabricWriter (BQFabricWriter): An instance of the BQFabricWriter class for writing data to Lakehouse tables.
+            __HasScheduleErrors (bool): A flag to indicate if any synchronization schedules encountered errors.
         """
         super().__init__()
 
         self.__BQTempTables:ThreadSafeList = None
         self.__TableLocks:ThreadSafeDict = None
         self.__FabricWriter = BQFabricWriter()
+        self.__HasScheduleErrors = False
 
     def __sync_bq_table(self, schedule:SyncSchedule, lock:Lock = None) -> SyncSchedule:
         """
@@ -941,7 +953,7 @@ class BQScheduleLoader(ConfigBase):
             None
         """
         if self.__BQTempTables:
-            self.Logger.debug(f"Cleaning up temporary BigQuery tables: {self.__BQTempTables}")
+            self.Logger.debug(f"Cleaning up temporary BigQuery tables: {self.__BQTempTables.unsafe_list}")
             
             datasets = list(set([(i[0], i[1]) for i in self.__BQTempTables.unsafe_list]))
             
@@ -1032,6 +1044,17 @@ class BQScheduleLoader(ConfigBase):
 
         self.Logger.error(msg=f"ERROR - {schedule.LakehouseTableName} FAILED: {err}")
 
+    @property
+    def HasScheduleErrors(self) -> bool:
+        """
+        Returns whether any synchronization schedules encountered errors.
+        This property checks if any synchronization schedules encountered errors during the
+        synchronization process and returns a boolean value indicating the presence of errors.
+        Returns:
+            bool: True if any synchronization schedules encountered errors; False otherwise.
+        """
+        return self.__HasScheduleErrors
+    
     def run_schedule(self, schedule_type:str) -> bool:
         """
         Runs a synchronization schedule based on the provided schedule type.
@@ -1116,9 +1139,11 @@ class BQScheduleLoader(ConfigBase):
                         with SyncTimer() as t:                        
                             processor.process(self.__schedule_sync_wrapper, self.__thread_exception_handler)
 
-                        if not processor.has_exceptions:                            
+                        if not processor.has_exceptions:   
+                            self.__HasScheduleErrors = False
                             self.Logger.sync_status(f"### {grp_nm} completed in {str(t)}...")
                         else:
+                            self.__HasScheduleErrors = True
                             self.Logger.sync_status(f"### {grp_nm} FAILED...")
                             break
 

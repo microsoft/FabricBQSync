@@ -247,11 +247,15 @@ class BQSync(SyncBase):
             return False
 
         try:
-            self.MetadataLoader.sync_metadata()
-            self.sync_autodetect()
-            return True
+            result = self.MetadataLoader.sync_metadata()
+
+            if result:
+                self.sync_autodetect()
+                return True
+            else:
+                return False
         except SyncBaseError as e:
-            self.Logger.error(f"BQ Metadata Update Failed: {e}")
+            self.Logger.error(f"BQ Metadata Update Failed with unhandled exception: {e}")
             return False
     
     def sync_autodetect(self) -> bool:
@@ -363,9 +367,12 @@ class BQSync(SyncBase):
                     self.optimize_metadata_tbls()
                 self.Logger.sync_status(f"Metastore Metadata Optimization completed in {str(t)}...")
             
-            self.Logger.sync_status("Run Schedule Done!!")
-
-            return True
+            if not self.Loader.HasScheduleErrors:
+                self.Logger.sync_status("Run Schedule Done!!")
+                return True
+            else:
+                self.Logger.sync_status("Run Schedule Failed (please check the logs)!!")
+                return False
         except SyncBaseError as e:
-            self.Logger.error(f"Run Schedule Failed: {e}")
+            self.Logger.error(f"Run Schedule Failed with unhandled exception: {e}")
             return False

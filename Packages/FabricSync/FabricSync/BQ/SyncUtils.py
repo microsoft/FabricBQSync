@@ -304,10 +304,10 @@ class SyncUtil(ContextAwareBase):
         Returns:
             DataFrame: A new Spark DataFrame with the column mappings applied.
         """
-        cls.Logger.debug(f"SYNCUTIL - Mapping columns for {schedule.LakehouseTableName}")
         maps = schedule.get_column_map()
 
         if maps:
+            cls.Logger.debug(f"SYNCUTIL - Mapping columns for {schedule.LakehouseTableName}")
             for m in maps:
                 df = SyncUtil.map_column(m, df)
         
