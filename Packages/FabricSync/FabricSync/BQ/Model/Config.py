@@ -477,7 +477,7 @@ class ConfigGCPAPI(SyncBaseModel):
         DefaultMaterialization (Optional[ConfigDefaultMaterialization]): The default materialization configuration for datasets.
         BillingProjectID (Optional[str]): The project ID for billing purposes, if applicable.
     """
-    UseStandardAPI:Optional[bool] = Field(alias="use_standard_api", default=True)
+    UseStandardAPI:Optional[bool] = Field(alias="use_standard_api", default=False)
     EnableBigQueryExport:Optional[bool] = Field(alias="enable_bigquery_export", default=False)
     ForceBQJobConfig:Optional[bool] = Field(alias="force_bq_job_config", default=False)
     AutoSelect:Optional[bool] = Field(alias="auto_select", default=False)
@@ -598,27 +598,23 @@ class ConfigGCP(SyncBaseModel):
         p, l, d = self.resolve_dataset_path(project_id, dataset)
         return l
 
-    def resolve_dataset_path(self, project_id:str, dataset:str) -> tuple[str,str,str]:
-        """
-        Resolves the dataset path for a given project and dataset.
-        Args:
-            project_id (str): The ID of the GCP project.
-            dataset (str): The name of the dataset for which to resolve the path.
-        Returns:
-            tuple[str, str, str]: A tuple containing the project ID, region (if applicable), and dataset name.
-        """
-        default_materialization = self.API.DefaultMaterialization
+    def resolve_materialization_path(self, project_id:str, dataset:str) -> tuple[str,str, str]:
         config_datatset = self.get_dataset_config(project_id, dataset)
 
-        if config_datatset:
-            return (project_id, config_datatset.Location, config_datatset.Dataset)
-        else:
-            default_materialization = self.API.DefaultMaterialization
+        if config_datatset.MaterializationDataset:
+            return (project_id, config_datatset.MaterializationDataset.Location, config_datatset.MaterializationDataset.Dataset)
+        
+        default_materialization = self.API.DefaultMaterialization
+        
+        if default_materialization and default_materialization.Dataset:
+            return (default_materialization.ProjectID, default_materialization.Dataset.Location, default_materialization.Dataset.Dataset)
 
-            if default_materialization.Dataset != dataset:
-                raise ValueError(f"Dataset {dataset} not found in Fabric Sync configuration.")
-            
-            return (project_id, default_materialization.Location, default_materialization.Dataset)
+        return (None, None, None)
+
+    def resolve_dataset_path(self, project_id:str, dataset:str) -> tuple[str,str,str]:
+        config_datatset = self.get_dataset_config(project_id, dataset)
+        
+        return (project_id, config_datatset.Location, config_datatset.Dataset)
 
 class ConfigTableColumn(SyncBaseModel):
     """

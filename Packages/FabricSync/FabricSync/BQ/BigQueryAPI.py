@@ -80,14 +80,10 @@ class BigQueryClient(ContextAwareBase):
             "bigQueryJobLabel.msjobclient": f"FABRIC_SYNC_CLIENT_{uuid.uuid4()}".lower()
         }
 
-        default_materialization = self.UserConfig.GCP.API.DefaultMaterialization
+        p, l, d = self.UserConfig.GCP.resolve_materialization_path(query.ProjectId, query.Dataset)
 
-        if default_materialization:
-            if default_materialization.ProjectID:
-                cfg["materializationProject"] = default_materialization.ProjectID
-
-            if default_materialization.Dataset and default_materialization.Dataset.Dataset:
-                cfg["materializationDataset"] = default_materialization.Dataset.Dataset
+        cfg["materializationProject"] = p if p else cfg["materializationProject"]        
+        cfg["materializationDataset"] = d if d else cfg["materializationDataset"]
 
         if self.UserConfig.GCP.API.BillingProjectID:
             cfg["parentProject"] = self.UserConfig.GCP.API.BillingProjectID
@@ -143,7 +139,8 @@ class BigQueryClient(ContextAwareBase):
         self.Logger.debug(f"BQ SUBMIT QUERY JOB...")
         sql = self.__build_bq_query(query)
 
-        location = self.UserConfig.GCP.get_dataset_location(query.ProjectId, query.Dataset)
+        location = self.UserConfig.GCP.get_dataset_location(query.ProjectId, cfg["materializationDataset"])
+        self.Logger.debug(f"BQ SUBMIT QUERY JOB - {query.ProjectId}, {cfg['materializationDataset']} - LOCATION - {location}...")
         
         bq_client = BigQueryStandardClient(query.ProjectId, self.GCPCredential, location)
 
@@ -183,6 +180,8 @@ class BigQueryClient(ContextAwareBase):
         sql_query = self.__build_bq_query(query)
 
         location = self.UserConfig.GCP.get_dataset_location(query.ProjectId, query.Dataset)
+        self.Logger.debug(f"BQ STANDARD API - {query.ProjectId}, {query.Dataset} - LOCATION - {location}...")
+
         bq_client = BigQueryStandardClient(query.ProjectId, self.GCPCredential, location)
 
         df = bq_client.read_to_dataframe(sql_query, schema)
