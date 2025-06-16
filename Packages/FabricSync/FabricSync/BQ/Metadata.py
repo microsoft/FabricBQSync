@@ -67,7 +67,6 @@ class BQMetadataLoader(ConfigBase):
             - Automatically builds and applies predicates to the query model to limit synchronized objects.
             - Logs status messages if metadata synchronization is skipped.
         """
-
         is_enabled = False
 
         match type:
