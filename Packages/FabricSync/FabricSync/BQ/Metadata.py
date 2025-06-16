@@ -20,11 +20,23 @@ from FabricSync.BQ.Utils import SyncTimer
 
 class BQMetadataLoader(ConfigBase):
     """
-    Class handles:
-     
-    1. Loads the table metadata from the BigQuery information schema tables to 
-        the Lakehouse Delta tables
-    2. Autodetect table sync configuration based on defined metadata & heuristics
+    BQMetadataLoader is a class that handles the synchronization of BigQuery metadata for information schema views.
+    It extends the ConfigBase class and provides methods to load, synchronize, and auto-detect BigQuery metadata.
+    Attributes:
+        __HasSyncErrors (bool): Flag to indicate if there are any synchronization errors.
+        schema_models (dict): Dictionary to hold the schema models for the BigQuery information schema views.
+    Methods:
+        __init__(): Initializes the BQMetadataLoader instance and loads the schema models.
+        __sync_bq_information_schema_core(project, dataset, type, mode): Synchronizes BigQuery information schema objects (tables, views, or materialized views).
+        __sync_bq_information_schema_table_dependent(project, dataset, view, mode): Synchronizes BigQuery information schema objects (columns, key column usage, partitions, table constraints, table options).
+        __load_bq_information_schema_models(): Loads the schema models for the BigQuery information schema views.
+        __thread_exception_handler(value): Handles exceptions in the thread during metadata synchronization.
+        __async_bq_metadata(): Asynchronously updates the BigQuery metadata for the information schema views.
+        __metadata_sync(value): Synchronizes the BigQuery metadata for the specified information schema view.
+        cleanup_information_schema(): Cleans up the information schema tables in the Lakehouse Delta tables.
+        HasSyncErrors: Property to check if there are any synchronization errors.
+        sync_metadata(): Synchronizes the BigQuery metadata for the information schema views.
+        auto_detect_config(): Auto-detects the schema and configuration for the BigQuery tables based on the defined metadata and heuristics.
     """
     def __init__(self) -> None:
         """
@@ -35,6 +47,7 @@ class BQMetadataLoader(ConfigBase):
             None
         """
         super().__init__()
+        self.__HasSyncErrors = False
         self.__load_bq_information_schema_models()
 
     def __sync_bq_information_schema_core(self, project:str, dataset:str, type:BigQueryObjectType, mode:SyncLoadType)-> None:
@@ -301,10 +314,8 @@ class BQMetadataLoader(ConfigBase):
         processor.process(self.__metadata_sync, self.__thread_exception_handler)
 
         if processor.has_exceptions:
-            self.has_exception = True            
+            self.__HasSyncErrors = True            
             self.Logger.error("ERROR: Async metadata failed....please resolve errors and try again...")
-        else:
-            self.has_exception = False
 
     def __metadata_sync(self, value:Tuple) -> None:
         """
@@ -337,12 +348,26 @@ class BQMetadataLoader(ConfigBase):
         self.Logger.sync_status(f"Syncing metadata for {view} completed in {str(t)}...")
 
     def cleanup_information_schema(self) -> None:
+        """
+        Cleanup the information schema tables in the Lakehouse Delta tables.
+        Returns:
+            None
+        """
         tables = LakehouseCatalog.get_catalog_tables(self.UserConfig.Fabric.get_metadata_lakehouse())
         table_schema = "dbo" if self.EnableSchemas else None
         cmds = [f"DELETE FROM {LakehouseCatalog.resolve_table_name(table_schema, t)} WHERE sync_id='{self.ID}';" for t in SyncConstants.get_information_schema_tables() if t in tables]
 
         SparkProcessor.process_command_list(cmds)
 
+    @property
+    def HasSyncErrors(self) -> bool:
+        """
+        Property to check if there are any schedule errors during the metadata synchronization process.
+        Returns:
+            bool: True if there are schedule errors, False otherwise.
+        """
+        return self.__HasSyncErrors
+    
     @Telemetry.Metadata_Sync
     def sync_metadata(self) -> None:   
         """
@@ -362,10 +387,11 @@ class BQMetadataLoader(ConfigBase):
             self.__async_bq_metadata()
             self.Context.conf.set("spark.sql.sources.partitionOverwriteMode", "static")
 
-        if not self.has_exception:
+        if not self.HasSyncErrors:
             self.Logger.sync_status(f"BQ Metadata Update completed in {str(t)}...")
+            return True
         else:
-            raise MetadataSyncError(msg="BQ Metadata sync failed. Please check the logs.")  
+            return False 
 
     @Telemetry.Auto_Discover
     def auto_detect_config(self) -> None:

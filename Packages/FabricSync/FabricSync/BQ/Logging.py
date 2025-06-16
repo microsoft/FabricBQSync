@@ -72,6 +72,8 @@ class SyncLogger:
         self.__logger.addHandler(SyncLogHandler(f"{SyncConstants.FABRIC_LOG_NAME}_HANDLER", handler))
 
         stdout_handler = logging.StreamHandler(sys.stdout)
+        stdout_handler.setFormatter(ThreadingLogFormatter())
+        
         self.__logger.addHandler(stdout_handler)
 
         SyncLogger.set_level(log_level)
@@ -202,14 +204,17 @@ class SyncLogger:
         This method removes all handlers from the logger, closes them, and sets the logger to None. 
         It is used to clean up the logger when it is no longer needed or before re-initializing it
         """
-        if cls.__logger:
-            for handler in cls.__logger.handlers[:]:
-                cls.__logger.removeHandler(handler)
-                handler.close()
-            cls.__logger.setLevel(logging.NOTSET)
-            cls.__logger.propagate = True
-        
-            cls.__logger = None
+        if SyncConstants.FABRIC_LOG_NAME in logging.Logger.manager.loggerDict:
+            loggers = [logging.getLogger(name) for name in logging.root.manager.loggerDict if name == SyncConstants.FABRIC_LOG_NAME]
+
+            for logger in loggers:
+                for handler in logger.handlers[:]:
+                    logger.removeHandler(handler)
+                    handler.close()
+                logger.setLevel(logging.NOTSET)
+                logger.propagate = True
+
+            del logging.Logger.manager.loggerDict[SyncConstants.FABRIC_LOG_NAME]
     
     @property
     def Context(self) -> SparkSession:
@@ -224,6 +229,15 @@ class SyncLogger:
 
         return self.__context
 
+class ThreadingLogFormatter(logging.Formatter):
+    def format(self, record):
+        if record.levelno == logging.DEBUG:
+            format = f"%(threadName)s - {self._fmt}"
+            formatter = logging.Formatter(format)
+            return formatter.format(record)
+        
+        return super().format(record)
+    
 class SyncLogHandler(logging.Handler):
     """
     SyncLogHandler is a custom logging handler that passes log records to a target handler.

@@ -1,6 +1,7 @@
-from pyspark.sql import DataFrame # type: ignore
-from pyspark.sql.types import StructType # type: ignore
-
+from pyspark.sql import DataFrame
+from pyspark.sql.types import (
+    StructType, DecimalType
+)
 import json
 import base64 as b64
 import uuid
@@ -125,10 +126,10 @@ class BigQueryClient(ContextAwareBase):
 
         df = self.Context.read.format("bigquery").options(**cfg).load(q)
 
-        if df.isEmpty():
-            return None
+        if not df.isEmpty():
+            return df
 
-        return df 
+        return None
 
     def __submit_bq_query_job(self, cfg:dict, query:BQQueryModel):
         """
@@ -184,7 +185,12 @@ class BigQueryClient(ContextAwareBase):
         location = self.UserConfig.GCP.get_dataset_location(query.ProjectId, query.Dataset)
         bq_client = BigQueryStandardClient(query.ProjectId, self.GCPCredential, location)
 
-        return bq_client.read_to_dataframe(sql_query, schema)
+        df = bq_client.read_to_dataframe(sql_query, schema)
+
+        if df and not query.Metadata and query.TableName:
+            df = bq_client.convert_bq_data_types(df, bq_client.get_bq_schema(query.TableName))
+
+        return df
 
     def read_from_exported_bucket(self, query:BQQueryModel) -> DataFrame:
         """
@@ -202,10 +208,10 @@ class BigQueryClient(ContextAwareBase):
 
         df = self.Context.read.format("parquet").load(gcs_path)
 
-        if df.isEmpty():
-            return None
+        if not df.isEmpty():
+            return df
 
-        return df 
+        return None
 
     def read_from_standard_export(self, query:BQQueryModel) -> DataFrame:
         """
@@ -361,6 +367,9 @@ class BigQueryStandardClient(ContextAwareBase):
         self.credentials = credentials
         self.project_id = project_id
         self.location = location
+        self.__numeric_type = DecimalType(38,9)
+        self.__big_numeric_type = DecimalType(76,38)
+
         self.__client:bigquery.Client = None
 
         self._client_id = f"FABRIC_SYNC_CLIENT_{uuid.uuid4()}"
@@ -411,6 +420,39 @@ class BigQueryStandardClient(ContextAwareBase):
 
         return job_config
 
+    def get_bq_schema(self, table:str) -> dict[str, str]:
+        """
+        Retrieves the schema of a BigQuery table.
+        Args:
+            table (str): The fully qualified table name in the format "project.dataset.table".
+        Returns:
+            dict[str, str]: A dictionary mapping field names to their BigQuery data types.
+        """
+        tbl = self._client.get_table(table)
+        return {f.name: f.field_type for f in tbl.schema}
+
+    def convert_bq_data_types(self, df:DataFrame, table_schema:dict[str, str]) -> DataFrame:
+        """
+        Converts specific BigQuery data types in a DataFrame to their corresponding Spark data types.
+        Args:
+            df (DataFrame): The DataFrame containing the data to convert.
+            table_schema (dict[str, str]): A dictionary mapping field names to their BigQuery data types.
+        Returns:
+            DataFrame: The DataFrame with the converted data types.
+        """
+        self.Logger.debug(f"STANDARD API - CONVERT BQ DATA TYPES ...")
+
+        for f in df.schema.fields:
+            if f.name in table_schema:
+                bq_type = table_schema[f.name]
+
+                if bq_type == "NUMERIC":
+                    df = df.withColumn(f.name, df[f.name].cast(self.__numeric_type))     
+                elif bq_type == "BIGNUMERIC":
+                    df = df.withColumn(f.name, df[f.name].cast(self.__big_numeric_type))
+        
+        return df
+
     def run_query(self, sql:str, job_id:str = None, job_cfg:bigquery.QueryJobConfig = None):
         """
         Runs the given SQL query using the BigQuery client.
@@ -458,7 +500,7 @@ class BigQueryStandardClient(ContextAwareBase):
             return None
 
 class BigQueryStandardExport(BigQueryStandardClient):
-    def __init__(self, project_id:str, credentials:str, location:str=None) -> None:
+    def __init__(self, project_id:str, table:str, credentials:str, location:str=None) -> None:
         """
         Initializes a new instance of the BigQueryStandardExport class.
         Args:
@@ -475,6 +517,7 @@ class BigQueryStandardExport(BigQueryStandardClient):
         """
         super().__init__(project_id, credentials, location)
 
+        self.__bq_schema = self.get_bq_schema(table)
         self.__query_job = None
         self.__data_df:DataFrame = None
         self.__export_row_count = 0
@@ -498,6 +541,7 @@ class BigQueryStandardExport(BigQueryStandardClient):
         if len(df) > 0:
             row_count = len(df)
             sdf = self.Context.createDataFrame(df)
+            sdf = self.convert_bq_data_types(sdf, self.__bq_schema)
 
             with self.__lock:
                 self.__export_row_count += row_count
@@ -546,10 +590,10 @@ class BigQueryStandardExport(BigQueryStandardClient):
             if not processor.has_exceptions:
                 self.Logger.debug(f"STANDARD API EXPORT - SUCCESS - CLIENT ({self._client_id}) - JOB ({self.__job_id}) - EXPORTED {self.__export_row_count} ROWS...")
 
-                if self.__data_df.isEmpty():
-                    return None
+                if len(self.__data_df) > 0:
+                    return self.__data_df.repartition(num_partitions)
 
-                return self.__data_df.repartition(num_partitions)
+                return None
             else:
                 self.Logger.debug(f"STANDARD API EXPORT - CLIENT ({self._client_id}) - JOB ({self.__job_id}) - FAILED...")
                 return None
