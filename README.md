@@ -10,11 +10,16 @@ For many of our customers, the native mirroring capabilities in Fabric are one o
 
 The goal of this accelerator is to simplify the process of synchronizing data from Google BigQuery to Microsoft Fabric with an emphasis on reliability, performance, and cost optimization. The accelerator is implemented using Spark (PySpark) using many concepts common to an ETL framework. The accelerator is more than just an ETL framework however in that it uses BigQuery metadata to solve for the most optimal way to synchronize data between the two platforms.
 
-# v2.2
+# Version 2.2.3
 Support for:
-- Data Sync through EXPORT DATA jobs - use BQ EXPORT DATA and GCP Buckets to optimize cost and mirror data more cost effectively
-- Data Sync through Standard API for mirror sources that are small/moderate in size
-- Force BQ JobConfig with when reading large volumes of data through Views
+ - Support for multi-region configurations
+ - Support for dataset-level materialization configuration
+ - Initial load optimization for Time Ingestion Tables
+ - Logging improvements
+	- SyncLogger.set_level(SyncLogLevel.DEBUG)
+ - Threading error handling improvements
+ - Experimental Install-Time Configurations:
+	- GCP Billing Export Configuration
 
 # Getting Started
 
@@ -56,7 +61,8 @@ The Fabric Sync Accelerator will automatically upgrade itself as new runtime ver
 # Features & Capabilities
 
 Within the accelerator there is an ever-growing set of capabilities that either offer feature parity or enhance & optimize the overall synchronization process. Below is an overview of some of the core capabilities:
-- Multi-Project/Multi-Dataset sync support
+- Multi-Project/Multi-Dataset/Multi-Region sync support
+- Support for Fabric Lakehouse and Fabric Mirror Database destinations
 - Table pattern-match filters to filter (include/exclude) during discovery
 - Table & Partition expiration based on BigQuery configuration
 - Synching support for Views & Materialized Views

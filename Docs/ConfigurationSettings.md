@@ -230,23 +230,35 @@ The configuration specified here affects billing and perissions required on the 
         <td>RESERVED FOR FUTURE USE</td>
     </tr>
     <tr>
-        <td class="level1-item">materialization_project_id</td>
-        <td>STRING</td>
-        <td>None</td>
-        <td>When not set, the first project in the Projects config is used as the materialization project id for the BigQuery Spark connector.</td>
-    </tr>
-    <tr>
-        <td class="level1-item">materialization_dataset</td>
-        <td>STRING</td>
-        <td>None</td>
-        <td>When not set, the first dataset of the first project in the Projects config is used as the materialization dataset for the BigQuery Spark connector.</td>
-    </tr>
-    <tr>
         <td class="level1-item">billing_project_id</td>
         <td>STRING</td>
         <td>None</td>
         <td>When not set, the first project in the Projects config is used as the billing project id for the BigQuery Spark connector.</td>
     </tr>
+    <tr>
+        <td colspan="4" class="level2">materialization_default</td>
+    </tr>
+    <tr>
+        <td class="level2-item">materialization_default.project_id</td>
+        <td>STRING</td>
+        <td>None</td>
+        <td>When not set, the first project in the Projects config is used as the materialization project id for the BigQuery Spark connector.</td>
+    </tr>
+    <tr>
+        <td colspan="4" class="level3">materialization_default.dataset</td>
+    </tr>
+    <tr>
+        <td class="level3-item">dataset.dataset_id</td>
+        <td>STRING</td>
+        <td>None</td>
+        <td>When not set, the first dataset of the first project in the Projects config is used as the materialization dataset for the BigQuery Spark connector.</td>
+    </tr> 
+    <tr>
+        <td class="level3-item">dataset.location</td>
+        <td>STRING</td>
+        <td>None</td>
+        <td>GCP Region for default materialization dataset. Used for configurations that have datasets located across regions.</td>
+    </tr>     
     <tr>
         <td colspan="4" class="level1">projects &lt;ARRAY&gt;</td>
     </tr>
@@ -260,11 +272,32 @@ The configuration specified here affects billing and perissions required on the 
         <td colspan="4" class="level2">projects.datasets &lt;ARRAY&gt;</td>
     </tr>
     <tr>
-        <td class="level2-item">datasets.dataset</td>
+        <td class="level2-item">datasets.dataset_id</td>
         <td>STRING</td>
         <td>None</td>
         <td>REQUIRED. BigQuery Dataset Name. Minimum of one instance.</td>
     </tr>
+    <tr>
+        <td class="level3-item">dataset.location</td>
+        <td>STRING</td>
+        <td>None</td>
+        <td>Optional GCP Region. Used for configurations that have datasets located across regions.</td>
+    </tr>  
+    <tr>
+        <td colspan="4" class="level3">dataset.materialization_dataset</td>
+    </tr>
+    <tr>
+        <td class="level3-item">materialization_dataset.dataset_id</td>
+        <td>STRING</td>
+        <td>None</td>
+        <td>Optional Dataset-level configuration for Materialization Dataset</td>
+    </tr> 
+    <tr>
+        <td class="level3-item">materialization_dataset.location</td>
+        <td>STRING</td>
+        <td>None</td>
+        <td>Optional Dataset-level configuration for Materialization Dataset/Location</td>
+    </tr> 
     <tr>
         <td colspan="4" class="level1">gcp_credentials</td>
     </tr>

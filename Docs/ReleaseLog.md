@@ -1,5 +1,10 @@
 # Fabric Sync Release Log
 
+### Version 2.2.0
+    - Data Sync through EXPORT DATA jobs - use BQ EXPORT DATA and GCP Buckets to optimize cost and mirror data more cost effectively
+    - Data Sync through Standard API for mirror sources that are small/moderate in size
+    - Force BQ JobConfig with when reading large volumes of data through Views
+
 ### Version 2.1.0
     - New Load Strategies:
         - CDC Append (BigQuery Preview)
