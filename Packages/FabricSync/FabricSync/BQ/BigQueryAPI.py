@@ -239,7 +239,9 @@ class BigQueryClient(ContextAwareBase):
         """
 
         for project_id, dataset in datasets:
-            project,location,ds = self.UserConfig.GCP.resolve_dataset_path(project_id, dataset)
+            #project,location,ds = self.UserConfig.GCP.resolve_dataset_path(project_id, dataset)
+            project,location,ds = self.UserConfig.GCP.resolve_materialization_path(project_id, dataset)
+            
             bq_client = BigQueryStandardClient(project_id, self.GCPCredential, location)
 
             query = f"""

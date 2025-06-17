@@ -6,4 +6,4 @@ class Version():
     """
     Version class to handle versioning of the FabricSync package.
     """
-    CurrentVersion = "2.2.4"
+    CurrentVersion = "2.2.5"
