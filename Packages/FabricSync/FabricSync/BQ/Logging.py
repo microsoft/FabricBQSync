@@ -230,11 +230,45 @@ class SyncLogger:
         return self.__context
 
 class ThreadingLogFormatter(logging.Formatter):
+    def __init__(self, fmt=None, datefmt=None, style='%', validate=True):
+        """
+        Initializes the ThreadingLogFormatter with a specific format and date format.
+        Args:
+            fmt (str, optional): The format string for the log record. Defaults to None.
+            datefmt (str, optional): The date format string for the log record. Defaults to None.
+            style (str, optional): The style of the format string. Defaults to '%'.
+            validate (bool, optional): Whether to validate the format string. Defaults to True.
+        """
+        super().__init__(fmt=fmt, datefmt=datefmt, style=style, validate=validate)
+        self.__default_formatter = None
+
+    @property
+    def default_format(self):
+        """
+        Returns the default format for the log record.
+        If the default formatter has not been set, it creates a new formatter with the specified format.
+        Returns:
+            logging.Formatter: The default formatter for the log record.
+        """
+        if not self.__default_formatter:
+            self.__default_formatter = logging.Formatter(f"%(threadName)s - {self._fmt}")
+        return self.__default_formatter
+
     def format(self, record):
-        if record.levelno == logging.DEBUG:
-            format = f"%(threadName)s - {self._fmt}"
-            formatter = logging.Formatter(format)
-            return formatter.format(record)
+        """
+        Formats the log record based on its level.
+        Args:
+            record (logging.LogRecord): The log record to be formatted.
+        Returns:
+            str: The formatted log record as a string.
+            If the record's level is DEBUG or SYNC_STATUS, it uses the default format.
+        """
+        match record.levelno:
+            case SyncLogLevel.DEBUG:
+                return self.default_format.format(record)
+            case SyncLogLevel.SYNC_STATUS:
+                if SyncLogger.getLogger().getEffectiveLevel() <= SyncLogLevel.DEBUG.value:
+                    return self.default_format.format(record)
         
         return super().format(record)
     
