@@ -599,19 +599,37 @@ class ConfigGCP(SyncBaseModel):
         return l
 
     def resolve_materialization_path(self, project_id:str, dataset:str) -> tuple[str,str, str]:
+        """
+        Resolves the materialization path for a given project and dataset.
+        Args:
+            project_id (str): The ID of the GCP project.
+            dataset (str): The name of the dataset for which to resolve the materialization path.
+        Returns:
+            tuple[str, str, str]: A tuple containing the project ID, dataset location, and dataset name.
+            If the dataset is not found, it returns None for the location and dataset name.
+        """
         config_datatset = self.get_dataset_config(project_id, dataset)
 
-        if config_datatset.MaterializationDataset:
+        if config_datatset.MaterializationDataset and config_datatset.MaterializationDataset.Dataset:
             return (project_id, config_datatset.MaterializationDataset.Location, config_datatset.MaterializationDataset.Dataset)
         
-        default_materialization = self.API.DefaultMaterialization
-        
-        if default_materialization and default_materialization.Dataset:
-            return (default_materialization.ProjectID, default_materialization.Dataset.Location, default_materialization.Dataset.Dataset)
+        if self.API.DefaultMaterialization.Dataset.Dataset:
+            return (self.API.DefaultMaterialization.ProjectID, 
+                    self.API.DefaultMaterialization.Dataset.Location, 
+                    self.API.DefaultMaterialization.Dataset.Dataset)
 
         return (None, None, None)
 
     def resolve_dataset_path(self, project_id:str, dataset:str) -> tuple[str,str,str]:
+        """
+        Resolves the dataset path for a given project and dataset.
+        Args:
+            project_id (str): The ID of the GCP project.
+            dataset (str): The name of the dataset to resolve.
+        Returns:
+            tuple[str, str, str]: A tuple containing the project ID, dataset location, and dataset name.
+            If the dataset is not found, it returns None for the location and dataset name.
+        """
         config_datatset = self.get_dataset_config(project_id, dataset)
         
         return (project_id, config_datatset.Location, config_datatset.Dataset)
