@@ -947,22 +947,19 @@ class BQScheduleLoader(ConfigBase):
 
     def __cleanup_temp_tables(self) -> None:
         """
-        Cleans up temporary BigQuery tables created during the synchronization process.
-        This method checks if there are any temporary BigQuery tables stored in the __BQTempTables list,
-        and if so, it logs the cleanup process, retrieves the unique datasets from the temporary tables,
-        and drops those temporary tables using the BigQueryClient. Finally, it clears the __BQTempTables list.
+        This method cleans up temporary BigQuery tables created during the synchronization process,
+        ensuring that temporary tables are deleted after they are no longer needed.
         Returns:
             None
-        Raises:
-            BigQueryClientError: If an error occurs while dropping the temporary BigQuery tables.
         """
-        if self.__BQTempTables:
+        if self.__BQTempTables and self.__BQTempTables.length() > 0:
             self.Logger.debug(f"Cleaning up temporary BigQuery tables: {self.__BQTempTables.unsafe_list}")
             
             datasets = list(set([(i[0], i[1]) for i in self.__BQTempTables.unsafe_list]))
             
-            bq_client = BigQueryClient(self.UserConfig)
-            bq_client.drop_temp_tables(datasets)
+            if datasets:
+                bq_client = BigQueryClient(self.UserConfig)
+                bq_client.drop_temp_tables(datasets)
 
             self.__BQTempTables.clear()
 
