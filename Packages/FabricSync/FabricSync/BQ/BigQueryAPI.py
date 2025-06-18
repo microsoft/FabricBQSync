@@ -239,35 +239,34 @@ class BigQueryClient(ContextAwareBase):
         """
 
         for project_id, dataset in datasets:
-            #project,location,ds = self.UserConfig.GCP.resolve_dataset_path(project_id, dataset)
-            project,location,ds = self.UserConfig.GCP.resolve_materialization_path(project_id, dataset)
+            if project_id and dataset:
+                project,location,ds = self.UserConfig.GCP.resolve_materialization_path(project_id, dataset)                
+                ds = dataset if not ds else ds
 
-            self.Logger.debug(f"Resolved Materialization Path - {project}.{ds} - {location} ...")
+                bq_client = BigQueryStandardClient(project_id, self.GCPCredential, location)
 
-            bq_client = BigQueryStandardClient(project, self.GCPCredential, location)
+                query = f"""
+                DECLARE tbl STRING;
 
-            query = f"""
-            DECLARE tbl STRING;
+                BEGIN
+                FOR record IN (
+                    SELECT  
+                    CONCAT(table_catalog, ".", table_schema, ".", table_name) AS tbl
+                    FROM `{project}.{ds}.INFORMATION_SCHEMA.TABLES`
+                    WHERE table_name LIKE 'BQ_SYNC_%'
+                ) DO
 
-            BEGIN
-            FOR record IN (
-                SELECT  
-                CONCAT(table_catalog, ".", table_schema, ".", table_name) AS tbl
-                FROM `{project}.{ds}.INFORMATION_SCHEMA.TABLES`
-                WHERE table_name LIKE 'BQ_SYNC_%'
-            ) DO
+                    SET tbl = record.tbl;
+                    EXECUTE IMMEDIATE FORMAT("DROP TABLE IF EXISTS `%s`;", tbl);
+                END FOR;
+                END;
+                """
 
-                SET tbl = record.tbl;
-                EXECUTE IMMEDIATE FORMAT("DROP TABLE IF EXISTS `%s`;", tbl);
-            END FOR;
-            END;
-            """
+                
+                self.Logger.debug(f"BQ DROPPING TEMP TABLES - {project}.{ds} ...")
 
-            
-            self.Logger.debug(f"BQ DROPPING TEMP TABLES - {project}.{ds} ...")
-
-            query_job = bq_client.run_query(query)
-            query_job.result()
+                query_job = bq_client.run_query(query)
+                query_job.result()
 
     def __export_bq_table(self, query:BQQueryModel, gcs_path:str) -> str:
         """
