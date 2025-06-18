@@ -169,7 +169,7 @@ class FabricMetastore(ContextAwareBase):
                     WHEN LOCATE('ARRAY', data_type) > 0 THEN 1 
                     WHEN LOCATE('MAP', data_type) > 0 THEN 1 
                     ELSE 0 END AS is_complex_type
-            FROM dbo.information_schema_columns
+            FROM information_schema_columns
         ),
         complex_types AS (
             SELECT 
