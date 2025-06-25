@@ -236,7 +236,7 @@ class FabricMetastore(ContextAwareBase):
             SELECT sync_id,table_catalog,table_schema,table_name,
                 CONCAT_WS(',',TRANSFORM(
                     sorted_struct_array,
-                    sorted_struct -> sorted_struct.column_name
+                    sorted_struct -> CONCAT('`', sorted_struct.column_name, '`')
                 )) AS table_columns
             FROM sorted_columns
         ),

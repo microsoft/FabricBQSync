@@ -240,7 +240,9 @@ class BigQueryClient(ContextAwareBase):
 
         for project_id, dataset in datasets:
             if project_id and dataset:
-                project,location,ds = self.UserConfig.GCP.resolve_materialization_path(project_id, dataset)                
+                project,location,ds = self.UserConfig.GCP.resolve_materialization_path(project_id, dataset)
+
+                project = project_id if not project else project
                 ds = dataset if not ds else ds
 
                 bq_client = BigQueryStandardClient(project_id, self.GCPCredential, location)
@@ -262,11 +264,13 @@ class BigQueryClient(ContextAwareBase):
                 END;
                 """
 
-                
-                self.Logger.debug(f"BQ DROPPING TEMP TABLES - {project}.{ds} ...")
+                try:
+                    self.Logger.debug(f"BQ DROPPING TEMP TABLES - {project}.{ds} ...")
 
-                query_job = bq_client.run_query(query)
-                query_job.result()
+                    query_job = bq_client.run_query(query)
+                    query_job.result()
+                except Exception as e:
+                    self.Logger.warning(f"WARNING - UNABLE TO DROP BQ TEMP TABLES - {project}.{ds} - This is most likely due to a permissions issue ...")
 
     def __export_bq_table(self, query:BQQueryModel, gcs_path:str) -> str:
         """

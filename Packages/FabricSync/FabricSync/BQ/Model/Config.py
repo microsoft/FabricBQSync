@@ -6,7 +6,11 @@ from typing import (
 )
 
 import json
+import hashlib
 import os
+import shutil
+from pathlib import Path
+from datetime import datetime
 
 from FabricSync.BQ.Enum import (
     SyncLogLevelName, FabricDestinationType, MaintenanceStrategy, 
@@ -54,50 +58,62 @@ class SyncBaseModel(BaseModel):
         exclude_unset=True        
         )
     
+    @property
+    def hash_sha256(self):
+        """
+        Generates a SHA-256 hash of the model's JSON representation.
+        This hash is based on the model's data, excluding any unset or None values.
+        Returns:
+            str: The SHA-256 hash of the model's JSON representation.
+        """
+        data = json.dumps(self.model_dump_json(exclude_none=True, exclude_unset=True), sort_keys=True)
+        return hashlib.sha256(data.encode('utf-8')).hexdigest()
+    
     def model_dump(self, **kwargs) -> dict[str, Any]:
         """
-        Generate a dictionary representation of the model, using aliases for field names.
-        Calls the parent class's model_dump method to produce a dictionary
-        of the model's fields. The 'by_alias' parameter is set to True by default
-        to use alias-based field names.
-        :param kwargs: Additional keyword arguments to pass to the parent model_dump method.
-        :return: A dictionary with alias-based keys representing the model fields.
-        :rtype: dict[str, Any]
+        Generates a dictionary representation of the model, using aliases for field names.
+        This method allows for additional keyword arguments to be passed, which can modify the behavior of the
+        serialization process, such as excluding unset fields or formatting options.
+        Args:
+            **kwargs: Additional keyword arguments to customize the serialization.
+        Returns:
+            dict[str, Any]: A dictionary representation of the model, with field names as aliases.
         """
-
         return super().model_dump(by_alias=True, **kwargs)
     
     def model_dump_json(self, **kwargs) -> dict[str, Any]:
         """
-        Serialize the current model instance to a JSON-compatible dictionary.
-        This method uses the parent class's JSON dumping mechanism while enforcing
-        the use of field aliases. Keyword arguments are passed through to the
-        underlying serializer.
-        :param kwargs: Additional keyword arguments to customize serialization.
-        :return: A dictionary containing the serialized model data, with field aliases applied.
-        :rtype: dict[str, Any]
+        Serializes the current model instance to a JSON-compatible dictionary.
+        This method uses the model's aliases for field names and allows for additional keyword arguments
+        to customize the serialization process, such as excluding unset fields or formatting options.
+        Args:
+            **kwargs: Additional keyword arguments to customize the serialization.
+        Returns:
+            dict[str, Any]: A JSON-compatible dictionary representation of the model, with field names as aliases.
         """
-
         return super().model_dump_json(by_alias=True, **kwargs)
     
     def is_field_set(self, item) -> bool:
         """
-        Checks if the specified item is among the fields that have been set.
-        :param item: The field to check in the model's set of fields.
-        :type item: Any
-        :return: True if the field is set, otherwise False.
-        :rtype: bool
+        Checks if the specified item is among the fields that have been set in the model instance.
+        This method checks against the model_fields_set, which contains the names of fields that have been
+        explicitly set in the model.
+        Args:
+            item (str): The name of the field to check.
+        Returns:
+            bool: True if the field is set, False otherwise.
         """
-
         return item in self.model_fields_set
 
     def get_field_default(self, item) -> Any:
         """
-        Retrieve the default value defined for a given field.
-        :param item: The name or identifier of the field to examine.
-        :return: The default value configured for the specified field, or None if none exists.
+        Retrieve the default value defined for a given field in the model.
+        This method checks the model's metadata for the specified item and returns its default value.
+        Args:
+            item (str): The name of the field for which to retrieve the default value.
+        Returns:
+            Any: The default value for the specified field, or None if the field is not found
         """
-
         meta = self._get_field_meta(item)
         
         if not meta:
@@ -108,10 +124,11 @@ class SyncBaseModel(BaseModel):
     def _get_field_meta(self, item):
         """
         Retrieves the metadata object for a given item by matching its alias in the model_fields dictionary.
-        :param item: The alias of the field to look up.
-        :return: A metadata object if the alias is found, otherwise None.
+        Args:
+            item (str): The name of the field for which to retrieve the metadata.
+        Returns:
+            Field: The metadata object for the specified field, or None if not found.
         """
-
         for _, meta in self.model_fields.items():
             if meta.alias == item:
                 return meta
@@ -120,13 +137,14 @@ class SyncBaseModel(BaseModel):
     
     def __getattr__(self, item):
         """
-        Retrieves an attribute by its alias from the model_fields dictionary, returning
-        the corresponding attribute if found. If no matching alias exists, this method
-        defers to the superclass __getattr__.
-        :param item: The alias name of the attribute being accessed.
-        :return: The value of the attribute if found; otherwise defers to superclass __getattr__.
+        Retrieves an attribute by its alias from the model_fields dictionary.
+        If the alias matches a field in the model, it returns the corresponding attribute.
+        If no matching alias exists, it defers to the superclass __getattr__ method.
+        Args:
+            item (str): The name of the attribute to retrieve.
+        Returns:
+            Any: The value of the attribute if found, otherwise defers to the superclass __getattr__.
         """
-
         for field, meta in self.model_fields.items():
             if meta.alias == item:
                 return getattr(self, field)
@@ -140,7 +158,6 @@ class SyncBaseModel(BaseModel):
         Returns:
             str or None: The alias for the given field name if found, otherwise None.
         """
-
         for field, meta in self.model_fields.items():
             if field == item_name:
                 return meta.alias
@@ -401,7 +418,7 @@ class ConfigFabric(SyncBaseModel):
         else:
             return table
 
-class ConfigDataset(SyncBaseModel):
+class ConfigBQDataset(SyncBaseModel):
     """
     ConfigDataset is a configuration model for datasets in BigQuery.
     It includes fields for specifying the dataset name and location.
@@ -412,7 +429,7 @@ class ConfigDataset(SyncBaseModel):
     Dataset:Optional[str] = Field(alias="dataset_id", default=None)
     Location:Optional[str] = Field(alias="location", default=None)
 
-class ConfigGCPDataset(ConfigDataset):
+class ConfigGCPDataset(ConfigBQDataset):
     """
     ConfigGCPDataset is a configuration model for Google Cloud Platform (GCP) datasets.
     It extends the ConfigDataset model to include additional fields specific to GCP datasets.
@@ -422,7 +439,7 @@ class ConfigGCPDataset(ConfigDataset):
         MaterializationDataset (Optional[ConfigDataset]):
             The dataset used for materialization in GCP, if applicable.
     """
-    MaterializationDataset:Optional[ConfigDataset] = Field(alias="materialization_dataset", default=ConfigDataset())
+    MaterializationDataset:Optional[ConfigBQDataset] = Field(alias="materialization_dataset", default=ConfigBQDataset())
 
 class ConfigDefaultMaterialization(SyncBaseModel):
     """
@@ -434,7 +451,7 @@ class ConfigDefaultMaterialization(SyncBaseModel):
             The dataset configuration for materialization, including dataset name and location.
     """
     ProjectID:Optional[str] = Field(alias="project_id", default=None)
-    Dataset:Optional[ConfigDataset] = Field(alias="dataset", default=ConfigDataset())
+    Dataset:Optional[ConfigBQDataset] = Field(alias="dataset", default=ConfigBQDataset())
 
 class ConfigGCPProject(SyncBaseModel):
     """
@@ -1106,17 +1123,43 @@ class ConfigDataset(SyncBaseModel):
         else:
             raise Exception(f"Configuration file not found ({path})")
     
-    def to_json(self, path:str) -> None:
+    def to_json(self, path:str, backup:bool=False) -> None:
         """
         Saves the current configuration to a JSON file at the specified path.
-        This method serializes the ConfigDataset instance to JSON format and writes it to the specified file.
+        If backup is True, it creates a backup of the existing configuration file before saving.
         Args:
-            path (str): The file path where the JSON configuration will be saved.
+            path (str): The file path where the configuration should be saved.
+            backup (bool): Whether to create a backup of the existing configuration file (default: False).
+        Returns:
+            None
         Raises:
-            Exception: If the configuration file cannot be saved to the specified path.
+            Exception: If the configuration file cannot be saved or if there is an IOError.
         """
         try:
+            if backup:
+                self.backup_config(path)
+
             with open(path, 'w', encoding="utf-8") as f:
                 json.dump(self.model_dump(exclude_none=True, exclude_unset=True), f)
         except IOError as e:
             raise Exception(f"Unable to save Configuration file to path ({path}): {e}")
+    
+    def backup_config(self, path:str) -> None:
+        """
+        Creates a backup of the configuration file at the specified path.
+        The backup file is created in the same directory as the original file, with a timestamp appended
+        to the filename.
+        Args:
+            path (str): The file path to the configuration file to be backed up.
+        Returns:
+                None
+        Raises:
+            Exception: If the configuration file does not exist or cannot be backed up.
+        """
+        if not os.path.exists(path):
+            return
+
+        config_path = Path(path)
+        backup_path = os.path.join(config_path.parent, f"{config_path.stem}_backup_{datetime.now().strftime('%Y%m%d%H%M%S')}.json")
+
+        shutil.copyfile(path, backup_path)

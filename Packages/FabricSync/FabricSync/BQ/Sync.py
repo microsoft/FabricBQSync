@@ -22,7 +22,7 @@ from FabricSync.BQ.Metastore import FabricMetastore
 from FabricSync.BQ.APIClient import FabricAPI
 from FabricSync.BQ.ModelValidation import UserConfigurationValidation
 from FabricSync.BQ.Model.Config import (
-    ConfigDataset, ConfigGCPDataset
+    ConfigDataset, ConfigGCPDataset, ConfigDefaultMaterialization, ConfigBQDataset
 )
 from FabricSync.BQ.SessionManager import Session
 
@@ -61,7 +61,10 @@ class BQSync(SyncBase):
                     "\r\n".join(config_validation))
 
         except SyncConfigurationError as e:
-            self.Logger.sync_status(f"FAILED TO INITIALIZE FABRIC SYNC\r\n{e}")
+            self.Logger.error(f"FAILED TO INITIALIZE FABRIC SYNC\r\n{e}")
+        except Exception as ex:
+            self.Logger.error(f"FAILED TO INITIALIZE FABRIC SYNC (Unhandled Exception)\r\n{ex}")
+
 
     def update_user_config_for_current(self) -> None:
         """
@@ -77,7 +80,7 @@ class BQSync(SyncBase):
             
         self.__validate_user_config(self.UserConfigPath)
 
-    def __validate_user_config(self, config_path:str) -> None:
+    def __validate_user_config(self, config_path:str, runtime_update:bool = False) -> None:
         """
         Validates the user configuration and updates it to the current runtime version.
         This method updates the user configuration to the current runtime version and
@@ -88,34 +91,43 @@ class BQSync(SyncBase):
         Returns:
             None
         """
-        self.Logger.sync_status(f"Updating Fabric Sync user configuration...")
+        self.Logger.sync_status(f"Validating Fabric Sync user configuration...")
         config = ConfigDataset.from_json(config_path, False)
+        current_config_hash = config.hash_sha256
+
         config.Version = str(Session.CurrentVersion)
-        config.Fabric.WorkspaceID = self.Context.conf.get("trident.workspace.id")
 
         #Override any configured workspace and use the current context
         workspace_id = Session.Context.conf.get("trident.workspace.id")
+
+        if not config.Fabric.WorkspaceID:
+            config.Fabric.WorkspaceID = workspace_id
 
         fabric_api = FabricAPI(workspace_id, 
             self.TokenProvider.get_token(TokenProvider.FABRIC_TOKEN_SCOPE))    
 
         config.Fabric.WorkspaceName = fabric_api.Workspace.get_name(workspace_id)
 
-        if self.UserConfig.Fabric.MetadataLakehouse:
+        if self.UserConfig.Fabric.MetadataLakehouse and not config.Fabric.MetadataLakehouseID:
             config.Fabric.MetadataLakehouseID = fabric_api.Lakehouse.get_id(self.UserConfig.Fabric.MetadataLakehouse)
 
         if not config.Fabric.TargetType:
             config.Fabric.TargetType = FabricDestinationType.LAKEHOUSE
         
-        if self.UserConfig.Fabric.TargetLakehouse:
+        if self.UserConfig.Fabric.TargetLakehouse and not config.Fabric.TargetLakehouseID:
             if config.Fabric.TargetType  == FabricDestinationType.LAKEHOUSE:
                 config.Fabric.TargetLakehouseID = fabric_api.Lakehouse.get_id(self.UserConfig.Fabric.TargetLakehouse)
             else:
                 config.Fabric.TargetLakehouseID = fabric_api.OpenMirroredDatabase.get_id(self.UserConfig.Fabric.TargetLakehouse)
 
-        config = self.__apply_config_updates(config_path, config)
+        if runtime_update:
+            self.Logger.sync_status(f"Checking for user configuration updates...")
+            config = self.__apply_config_updates(config_path, config)
 
-        config.to_json(config_path)
+            if config.hash_sha256 != current_config_hash:
+                self.Logger.sync_status(f"User Configuration has been updated to the current runtime version: {str(Session.CurrentVersion)}")
+                config.to_json(config_path, backup=True)
+
         self.init_sync_session(config_path)
 
     def __update_sync_runtime(self, config_path:str) -> None:
@@ -131,7 +143,7 @@ class BQSync(SyncBase):
         self.Logger.sync_status(f"Upgrading Fabric Sync metastore to v{str(Session.CurrentVersion)}...")
         LakehouseCatalog.upgrade_metastore(self.UserConfig.Fabric.get_metadata_lakehouse())
         self.__apply_manual_updates()
-        self.__validate_user_config(config_path)
+        self.__validate_user_config(config_path, True)
 
     def __apply_config_updates(self, config_path:str, config:ConfigDataset) -> ConfigDataset:
         """
@@ -147,17 +159,23 @@ class BQSync(SyncBase):
             ConfigDataset: The updated user configuration.
         """
         if self.Version < pv.parse("2.2.3"):
+            self.Logger.debug("Updating user configuration (pre 2.2.3)...")
             if os.path.exists(config_path):
                 with open(config_path, 'r', encoding="utf-8") as f:
                     data = json.load(f)
 
                 if "gcp" in data:
                     if "api" in data["gcp"]:
-                        if "materialization_project_id" in data["gcp"]["api"]:
+                        config.GCP.API.DefaultMaterialization = ConfigDefaultMaterialization()
+                        config.GCP.API.DefaultMaterialization.Dataset = ConfigBQDataset()
+
+                        if "materialization_project_id" in data["gcp"]["api"]:                            
                             config.GCP.API.DefaultMaterialization.ProjectID = data["gcp"]["api"]["materialization_project_id"]
+                            print(f"id: {config.GCP.API.DefaultMaterialization.ProjectID}")
                         
                         if "materialization_dataset" in data["gcp"]["api"]:
-                            config.GCP.API.DefaultMaterialization.ProjectID = data["gcp"]["api"]["materialization_dataset"]
+                            config.GCP.API.DefaultMaterialization.Dataset.Dataset = data["gcp"]["api"]["materialization_dataset"]
+                            print(f"id: {config.GCP.API.DefaultMaterialization.Dataset.Dataset}")
                     
 
                     if "projects" in data["gcp"]:
@@ -176,6 +194,7 @@ class BQSync(SyncBase):
 
     def __apply_manual_updates(self) -> None:
         if self.Version < pv.parse("2.1.15"):
+            self.Logger.debug("Updating metastore (pre 2.1.15)...")
             self.Context.sql(f"""
                 WITH tbls AS (
                     SELECT table_id, project_id, dataset, table_name 

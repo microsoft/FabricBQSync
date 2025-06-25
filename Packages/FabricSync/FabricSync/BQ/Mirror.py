@@ -6,7 +6,6 @@ from FabricSync.BQ.Constants import SyncConstants
 from FabricSync.BQ.Utils import Util
 from FabricSync.BQ.Core import ContextAwareBase
 from FabricSync.BQ.FileSystem import OpenMirrorLandingZone
-from FabricSync.BQ.APIClient import FabricAPI
 from FabricSync.BQ.Logging import Telemetry
 
 from FabricSync.BQ.Enum import (
@@ -14,79 +13,6 @@ from FabricSync.BQ.Enum import (
 )
 
 class OpenMirror(ContextAwareBase):
-    @classmethod
-    def start_mirror(cls, mirror_id:str, wait:bool=False) -> None:
-        """
-        Starts a mirroring process for the specified mirror.
-        This method checks the current status of the mirror using the provided API token.
-        If the mirror is stopped, it initiates the mirroring process. If the mirror is already
-        in a running or starting state, no action is taken. Optionally, it can wait until the
-        mirror is confirmed to be running before returning.
-        Args:
-            mirror_id (str): Unique identifier of the mirror to be started.
-            wait (bool, optional): If True, the method will wait until the mirror's status is 
-                'running' before returning. Defaults to False.
-        Returns:
-            None: The function does not return any value.
-        """
-
-        fabric_api = FabricAPI(cls.WorkspaceID, cls.FabricAPIToken)
-        cls.Logger.sync_status(f"Starting Mirror - {mirror_id}", verbose=True)
-
-        while(True):
-            status = fabric_api.OpenMirroredDatabase.get_mirroring_status(mirror_id)
-
-            cls.Logger.sync_status(f"Starting Mirror - Mirror {mirror_id} Status: {status}", verbose=True)
-
-            if status.lower() == "stopped":
-                fabric_api.OpenMirroredDatabase.start_mirroring(mirror_id)
-
-                if wait:
-                    fabric_api.OpenMirroredDatabase.wait_for_mirroring(mirror_id, "running")
-                
-                break
-            elif status.lower() in ["running", "starting"]:
-                cls.Logger.sync_status(f"Starting Mirror - Mirror {mirror_id} - Already {status}", verbose=True)
-                break
-            else:
-                cls.Logger.sync_status(f"Starting Mirror - Mirror {mirror_id} is currently {status} - waiting...", verbose=True)
-                fabric_api.OpenMirroredDatabase.wait_for_mirroring(mirror_id, "stopped")
-    
-    @classmethod
-    def stop_mirror(cls, mirror_id:str, wait:bool=False) -> None:
-        """
-        Stops an ongoing mirror operation for the specified mirror.
-        This method checks the current mirroring status of the given mirror ID and stops it if it is running. If 'wait' is set to True, it will also wait until the mirroring status transitions to 'stopped'. If the mirror is already stopped or stopping, a message is logged and the method returns immediately.
-        Args:
-            mirror_id (str): The unique identifier of the mirror to stop.
-            wait (bool, optional): Whether to wait until the mirror is fully stopped. Defaults to False.
-        Returns:
-            None
-        """
-        
-        fabric_api = FabricAPI(cls.WorkspaceID, cls.FabricAPIToken)
-        cls.Logger.sync_status(f"Stopping Mirror - {mirror_id}", verbose=True)
-
-        while(True):
-            status = fabric_api.OpenMirroredDatabase.get_mirroring_status(mirror_id)
-
-            cls.Logger.sync_status(f"Stopping Mirror - Mirror {mirror_id} Status: {status}", verbose=True)
-
-            if status.lower() == "running":
-                fabric_api.OpenMirroredDatabase.stop_mirroring(mirror_id)
-
-                if wait:
-                    fabric_api.OpenMirroredDatabase.wait_for_mirroring(mirror_id, "stopped")
-                
-                break
-            elif status.lower() in ["stopped", "stopping"]:
-                cls.Logger.sync_status(f"Stopping Mirror - Mirror {mirror_id} - Already {status}", verbose=True)
-                break
-            else:
-                cls.Logger.sync_status(f"Stopping Mirror - Mirror {mirror_id} is currently {status} - waiting...", verbose=True)
-                fabric_api.OpenMirroredDatabase.wait_for_mirroring(mirror_id, "running")
-
-    
     @classmethod 
     def __get_lz(cls, schedule:SyncSchedule) -> OpenMirrorLandingZone:
         """
@@ -153,10 +79,6 @@ class OpenMirror(ContextAwareBase):
 
         cls.__log_formatted(schedule, f"Writing Mirror Metadata File")
         lz.generate_metadata_file(schedule.Keys)
-        
-        #if schedule.InitialLoad:
-        #    cls.__log_formatted(schedule, f"Initializing Mirrored Table")
-        #    lz.generate_metadata_file(schedule.Keys)
 
         cls.__log_formatted(schedule, f"Processing Spark staging files - index: {schedule.MirrorFileIndex}")
         next_index = lz.stage_spark_output(schedule.MirrorFileIndex)
@@ -183,8 +105,30 @@ class OpenMirror(ContextAwareBase):
         DataFrame
             The modified Spark DataFrame after applying row markers and potential partition adjustments.
         """
-
+        cls.__log_formatted(schedule, f"Saving to Landing Zone...")        
         lz = cls.__get_lz(schedule)
+        cls.__log_formatted(schedule, f"Using Landing Zone {lz._get_onelake_path(lz.SCRATCH_PATH)}...")
+
+        df = cls.__shape_df(schedule, df)
+        df = cls.__repartition_df(df)
+
+        df.write.mode("overwrite").format("parquet").save(f"{lz._get_onelake_path(lz.SCRATCH_PATH)}/")
+
+        return df
+    
+    @classmethod
+    def __shape_df(cls, schedule:SyncSchedule,  df:DataFrame) -> DataFrame:
+        """
+        Shapes the DataFrame for the mirrored database by applying row markers and converting complex types to JSON strings.
+        This method modifies the DataFrame based on the synchronization schedule's load strategy and keys.
+        Args:
+            df (DataFrame): The Spark DataFrame to be shaped.
+            schedule (SyncSchedule): The synchronization schedule containing configuration details.
+        Returns:
+            DataFrame: The modified DataFrame ready for saving to the landing zone.
+        """
+
+        cls.__log_formatted(schedule, f"Shaping DF for Mirroed Database...")
         meta_cols = [SyncConstants.MIRROR_ROW_MARKER]
         df_cols = df.columns
         df_cols = [c for c in df_cols if c not in ["BQ_CDC_CHANGE_TYPE", "BQ_CDC_CHANGE_TIMESTAMP"]]
@@ -208,18 +152,68 @@ class OpenMirror(ContextAwareBase):
 
         df = df.select(*meta_cols, *df_cols)
         df = Util.convert_complex_types_to_json_str(df)
+        cls.__log_formatted(schedule, f"Shaped DF for Mirrored Database...")
 
-        num_partitions = df.rdd.getNumPartitions()
+        return df
 
-        if num_partitions > 1:
-            partitions = int(num_partitions/2)
-            cls.__log_formatted(schedule, f"Reducing partitions from {num_partitions} to {partitions}")
-            df = df.repartition(partitions)
+    @classmethod
+    def __get_partition_counts(cls, df:DataFrame) -> tuple[int, int]:
+        """
+        Counts the number of partitions in a DataFrame and the number of non-empty partitions.
+        This method uses an accumulator to count non-empty partitions efficiently.
+        Args:
+            df (DataFrame): The Spark DataFrame to analyze.
+        Returns:
+            tuple[int, int]:
+                A tuple containing the total number of partitions and the count of non-empty partitions.
+        """
+        accumulator = cls.Context.sparkContext.accumulator(0)
+        df.foreachPartition(lambda partition: accumulator.add(1 if len(list(partition))> 0 else 0))
 
-        df.write.mode("overwrite").format("parquet").save(f"{lz._get_onelake_path(lz.SCRATCH_PATH)}/")
+        return (df.rdd.getNumPartitions(), accumulator.value)
 
+    @classmethod
+    def __repartition_df(cls, df:DataFrame) -> DataFrame:
+        """
+        Resolves the number of partitions for a given DataFrame.
+        This method checks the number of partitions in the DataFrame and returns
+        a reduced number if it exceeds a certain threshold.
+        Args:
+            df (DataFrame): The Spark DataFrame to check for partitions.
+        Returns:
+            DataFrame:
+                The DataFrame with potentially reduced partitions.
+        """
+        num_partitions, non_empty_partitions = cls.__get_partition_counts(df)
+        has_empty_partitions = num_partitions > non_empty_partitions
+
+        if num_partitions > 4:
+            partitions = int(num_partitions // 4)
+        else:
+            partitions = 1
+
+        cls.Logger.debug(f"DF has {num_partitions} Partitions ({non_empty_partitions} Not Empty)...target is {partitions} partitions...")
+
+        if num_partitions > partitions:
+            cls.Logger.debug(f"Reducing partitions from {num_partitions} to {partitions}")
+
+            if has_empty_partitions:
+                cls.Logger.debug(f"Empty partitions exist...using repartition...")
+                df = df.repartition(partitions)
+            else:
+                cls.Logger.debug(f"No empty partitions...using coalesce...")
+                df = df.coalesce(partitions)
+        
         return df
     
     @classmethod
     def __log_formatted(cls, schedule:SyncSchedule, msg:str) -> None:
-        cls.Logger.sync_status(f"MIRRORING - {schedule.LakehouseTableName} - {msg}", verbose=True)
+        """
+        Logs a formatted message with the schedule's Lakehouse table name.
+        Args:
+            schedule (SyncSchedule): The synchronization schedule containing the Lakehouse table name.
+            msg (str): The message to log.
+        Returns:
+            None
+        """
+        cls.Logger.debug(f"MIRRORING - {schedule.LakehouseTableName} - {msg}")
