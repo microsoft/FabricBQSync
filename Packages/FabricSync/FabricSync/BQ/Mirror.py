@@ -167,10 +167,12 @@ class OpenMirror(ContextAwareBase):
             tuple[int, int]:
                 A tuple containing the total number of partitions and the count of non-empty partitions.
         """
-        accumulator = cls.Context.sparkContext.accumulator(0)
-        df.foreachPartition(lambda partition: accumulator.add(1 if len(list(partition))> 0 else 0))
+        #accumulator = cls.Context.sparkContext.accumulator(0)
+        #df.foreachPartition(lambda partition: accumulator.add(1 if len(list(partition))> 0 else 0))
 
-        return (df.rdd.getNumPartitions(), accumulator.value)
+        # OVERRIDE: to allow for further testing
+        num_partitions = df.rdd.getNumPartitions()
+        return (num_partitions, num_partitions)
 
     @classmethod
     def __repartition_df(cls, df:DataFrame) -> DataFrame:
