@@ -99,6 +99,8 @@ class FabricItemType(str, BaseEnum):
         LAKEHOUSE: Represents a Fabric lakehouse.
         MIRRORED_DATABASE: Represents a mirrored database within Fabric.
         NOTEBOOK: Represents a Fabric notebook.
+        FOLDER: Represents a folder in Fabric.
+        DATA_PIPELINE: Represents a data pipeline in Fabric.
     """
     
     WORKSPACE = "workspaces"
@@ -106,6 +108,8 @@ class FabricItemType(str, BaseEnum):
     LAKEHOUSE = "lakehouses"
     MIRRORED_DATABASE = "mirroredDatabases"
     NOTEBOOK = "notebooks"
+    FOLDER = "folders"
+    DATA_PIPELINE = "dataPipelines"
 
 class LakehouseFileFormat(str, BaseEnum):
     """
