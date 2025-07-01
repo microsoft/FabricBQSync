@@ -211,7 +211,7 @@ class LakehouseCatalog(ContextAwareBase):
 
         if cmds:
             for cmd in cmds:
-                cls.Logger.debug(f"LAKEHOUSE CATALOG - METASTORE UPGRADE: {cmd}", verbose=True)
+                cls.Logger.debug(f"LAKEHOUSE CATALOG - METASTORE UPGRADE: {cmd}")
                 cls.Context.sql(cmd)
         
         if rewrite_tables:
@@ -232,7 +232,7 @@ class LakehouseCatalog(ContextAwareBase):
         Session.set_spark_conf("spark.sql.sources.partitionOverwriteMode", "static")
 
         for tbl in tables:
-            cls.Logger.debug(f"LAKEHOUSE CATALOG - REWRITE FOR VERSION CAPITABILITY: {tbl}", verbose=True)
+            cls.Logger.debug(f"LAKEHOUSE CATALOG - REWRITE FOR VERSION CAPITABILITY: {tbl}")
             df = cls.Context.table(tbl)
             df.write.partitionBy("sync_id").mode("OVERWRITE").saveAsTable(f"{tbl}_tmp")
             cls.Context.sql(f"DROP TABLE IF EXISTS {tbl};")

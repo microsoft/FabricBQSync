@@ -193,6 +193,33 @@ class Installer(ContextAwareBase):
         self.__fabric_api = FabricAPI(self.WorkspaceID, 
                                     self.__TokenProvider.get_token(TokenProvider.FABRIC_TOKEN_SCOPE))
 
+    @property
+    def UserConfig(self):
+        """
+        Gets the user configuration.
+        Returns:
+            The user configuration.
+        """
+        return self.__user_config
+
+    @property
+    def Data(self):
+        """
+        Gets the data for the installer.
+        Returns:
+            The data for the installer.
+        """
+        return self.__data
+    
+    @property
+    def Onelake(self):
+        """
+        Gets the OneLake file system.
+        Returns:
+            The OneLake file system.
+        """
+        return self.__onelake
+        
     def __create_metastore(self) -> None:
         """
         Creates the metastore for the Fabric Sync.
@@ -452,6 +479,9 @@ class Installer(ContextAwareBase):
                 f == self.FABRIC_SYNC_FOLDER_DATABASES:
                 continue
             
+            if not self.__data["create_spark_environment"] and f == self.FABRIC_SYNC_FOLDER_ENVIRONMENTS:
+                continue
+
             name = f"{self.FABRIC_SYNC_FOLDER_NAME} {f}"
             self.Logger.sync_status(f"Creating {name} workspace folder...")
             folder_map[name] = self.__fabric_api.Folder.get_or_create(name=name, folder=folder_map[self.FABRIC_SYNC_FOLDER_NAME])
@@ -474,7 +504,7 @@ class Installer(ContextAwareBase):
         notebook_id = self.__fabric_api.Notebook.get_id(notebook)
 
         if notebook_id:
-            pipeline_name = f"{friendly_notebook_name}_Data_Pipeline"
+            pipeline_name = f"{notebook}_Data_Pipeline"
             self.Logger.sync_status(f"Creating data pipeline: {pipeline_name}...")
             data_pipelines_folder_id = self.__get_folder_id(self.FABRIC_SYNC_FOLDER_DATA_PIPELINES)
 
@@ -566,7 +596,7 @@ class Installer(ContextAwareBase):
                     databases_folder_id = self.__get_folder_id(self.FABRIC_SYNC_FOLDER_DATABASES)
 
                     self.Logger.sync_status("Creating mirrored database (if not exists)...")
-                    self.__user_config.Fabric.TargetLakehouseID, is_new = self.__fabric_api.OpenMirroredDatabase.get_or_create(
+                    self.__user_config.Fabric.TargetLakehouseID = self.__fabric_api.OpenMirroredDatabase.get_or_create(
                         name = self.__user_config.Fabric.TargetLakehouse, folder=databases_folder_id)
 
                     while True:

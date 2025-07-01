@@ -333,7 +333,7 @@ class BQSync(SyncBase):
         if not self._is_runtime_ready():
             return
 
-        self.Logger.sync_status("Optimizing Sync Metadata Metastore...", verbose=True)
+        self.Logger.sync_status("Optimizing Sync Metadata Metastore...")
         LakehouseCatalog.optimize_sync_metastore()
 
     def run_schedule(self, schedule_type:SyncScheduleType, build_schedule:bool=True, sync_metadata:bool=False, optimize_metadata:bool=True) -> bool:
@@ -351,47 +351,51 @@ class BQSync(SyncBase):
             return False
 
         try:
-            if build_schedule:
-                self.build_schedule(schedule_type, sync_metadata)
+            with SyncTimer() as tt:
+                if build_schedule:
+                    self.build_schedule(schedule_type, sync_metadata)
 
-            if self.UserConfig.Fabric.EnableSchemas and self.UserConfig.Fabric.TargetType==FabricDestinationType.LAKEHOUSE:
-                FabricMetastore.ensure_schemas(self.UserConfig.Fabric.WorkspaceName)
+                if self.UserConfig.Fabric.EnableSchemas and self.UserConfig.Fabric.TargetType==FabricDestinationType.LAKEHOUSE:
+                    FabricMetastore.ensure_schemas(self.UserConfig.Fabric.WorkspaceName)
 
-            if self.UserConfig.Fabric.TargetType == FabricDestinationType.LAKEHOUSE:
-                Session.set_spark_conf("spark.sql.parquet.vorder.enabled", "true")
-                Session.set_spark_conf("spark.databricks.delta.optimizeWrite.enabled", "true")
-                Session.set_spark_conf("spark.databricks.delta.optimizeWrite.binSize", "1gb")
-                Session.set_spark_conf("spark.databricks.delta.collect.stats", "true")
+                if self.UserConfig.Fabric.TargetType == FabricDestinationType.LAKEHOUSE:
+                    Session.set_spark_conf("spark.sql.parquet.vorder.enabled", "true")
+                    Session.set_spark_conf("spark.databricks.delta.optimizeWrite.enabled", "true")
+                    Session.set_spark_conf("spark.databricks.delta.optimizeWrite.binSize", "1gb")
+                    Session.set_spark_conf("spark.databricks.delta.collect.stats", "true")
+                else:
+                    Session.set_spark_conf("spark.sql.parquet.vorder.enabled", "false")
+                    Session.set_spark_conf("spark.databricks.delta.optimizeWrite.enabled", "false")
+                    Session.set_spark_conf("spark.databricks.delta.collect.stats", "false")
 
-            initial_loads = self.Loader.run_schedule(schedule_type)
-            
-            if self.UserConfig.Fabric.TargetType == FabricDestinationType.LAKEHOUSE:
-                Session.set_spark_conf("spark.sql.parquet.vorder.enabled", "false")
-                Session.set_spark_conf("spark.databricks.delta.optimizeWrite.enabled", "false")
-                Session.set_spark_conf("spark.databricks.delta.collect.stats", "false")
-            
-            if initial_loads:
-                self.Logger.sync_status("Committing Sync Table Configuration...", verbose=True)
-                FabricMetastore.commit_table_configuration(schedule_type)
-            
-            if self.UserConfig.EnableDataExpiration:
-                self.Logger.sync_status(f"Data Expiration started...", verbose=True)
-                with SyncTimer() as t:
-                    self.DataRetention.execute()
-                self.Logger.sync_status(f"Data Expiration completed in {str(t)}...")
-            
-            if optimize_metadata:
-                self.Logger.sync_status(f"Metastore Metadata Optimization started...", verbose=True)
-                with SyncTimer() as t:
-                    self.optimize_metadata_tbls()
-                self.Logger.sync_status(f"Metastore Metadata Optimization completed in {str(t)}...")
-            
-            if not self.Loader.HasScheduleErrors:
-                self.Logger.sync_status("Run Schedule Done!!")
-                return True
-            else:
-                self.Logger.sync_status("Run Schedule Failed (please check the logs)!!")
-                return False
+                initial_loads = self.Loader.run_schedule(schedule_type)
+                
+                if initial_loads:
+                    self.Logger.sync_status("Committing Sync Table Configuration...")
+                    with SyncTimer() as t:
+                        FabricMetastore.commit_table_configuration(schedule_type)
+                    self.Logger.sync_status(f"Sync Table Configuration committed completed in {str(t)}...")
+                
+                if self.UserConfig.EnableDataExpiration:
+                    self.Logger.sync_status(f"Data Expiration started...")
+                    with SyncTimer() as t:
+                        self.DataRetention.execute()
+                    self.Logger.sync_status(f"Data Expiration completed in {str(t)}...")
+                
+                if optimize_metadata:
+                    self.Logger.sync_status(f"Metastore Metadata Optimization started...")
+                    with SyncTimer() as t:
+                        self.optimize_metadata_tbls()
+                    self.Logger.sync_status(f"Metastore Metadata Optimization completed in {str(t)}...")
+                
+                if not self.Loader.HasScheduleErrors:
+                    self.Logger.sync_status("Run Schedule Done!!")
+                    return True
+                else:
+                    self.Logger.sync_status("Run Schedule Failed (please check the logs)!!")
+                    return False
+                
+            self.Logger.sync_status(f"Fabric Syncrun schedule completed in {str(tt)}...")
         except SyncBaseError as e:
             self.Logger.error(f"Run Schedule Failed with unhandled exception: {e}")
             return False

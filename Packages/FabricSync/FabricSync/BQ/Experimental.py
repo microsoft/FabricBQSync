@@ -13,8 +13,8 @@ class Configurator:
         cls.__installer = installer
 
     def __write_config_to_onelake(cls, user_config:ConfigDataset) -> str:
-        config_path = cls.__installer._data["user_config_file_path"]
-        cls.__installer._onelake.write(config_path, user_config.model_dump_json(exclude_none=True, exclude_unset=True, indent=4))
+        config_path = cls.__installer.Data["user_config_file_path"]
+        cls.__installer.Onelake.write(config_path, user_config.model_dump_json(exclude_none=True, exclude_unset=True, indent=4))
         return config_path
 
     def Configure_GCP_Billing_Export(cls, billing_account_id:str = None, 
@@ -24,7 +24,7 @@ class Configurator:
                                           focus_view_name:str = None):
 
         print("Creating Fabric Sync -> GCP Billing Export Configuration..")
-        user_config = cls.__installer._user_config
+        user_config = cls.__installer.UserConfig
         
         user_config.AutoDiscover.Tables.Enabled = True
         user_config.AutoDiscover.Tables.LoadAll = False
@@ -33,15 +33,16 @@ class Configurator:
         user_config.AutoDiscover.Views.LoadAll = False
 
         user_config.TableDefaults = ConfigBQTableDefault(
-            ProjectID = cls.__installer._data["gcp_project_id"],
-            Dataset = cls.__installer._data["gcp_dataset_id"],
+            ProjectID = cls.__installer.Data["gcp_project_id"],
+            Dataset = cls.__installer.Data["gcp_dataset_id"],
             ObjectType = BigQueryObjectType.BASE_TABLE,
             Priority = 100,
             Enabled = True,
             AllowSchemaEvolution = True
         )
 
-        user_config.Tables = []
+        if not user_config.Tables:
+            user_config.Tables = []
 
         if any([use_standard_export, use_detailed_export, use_pricing_export]):
             if not billing_account_id:
