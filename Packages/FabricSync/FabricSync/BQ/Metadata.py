@@ -155,9 +155,10 @@ class BQMetadataLoader(ConfigBase):
             if not df:
                 df = schema_model.get_empty_df(self.Context)
         else:
-            self.Logger.sync_status(f"Metadata Sync for {view} SKIPPED (Not Enabled in Config)...", verbose=True)
+            self.Logger.sync_status(f"Metadata Sync for {view} SKIPPED (Not Enabled in Config)...")
             df = schema_model.get_empty_df(self.Context)
         
+        df = df.coalesce(1)  # Coalesce to a single partition for writing
         df.write.partitionBy("sync_id").mode(mode.value).saveAsTable(f"{schema_model.TableName}")
 
     def __sync_bq_information_schema_table_dependent(self, project:str, dataset:str, view:SchemaView, mode:SyncLoadType)-> None: 
@@ -229,6 +230,7 @@ class BQMetadataLoader(ConfigBase):
         if not df:
             df = schema_model.get_empty_df(self.Context)
 
+        df = df.coalesce(1)  # Coalesce to a single partition for writing
         df.write.mode(mode.value).partitionBy("sync_id").saveAsTable(f"{schema_model.TableName}")
 
     def __load_bq_information_schema_models(self) -> None:
@@ -297,7 +299,7 @@ class BQMetadataLoader(ConfigBase):
             - The function uses a queue processor to handle the asynchronous metadata update process.
             - The function logs status messages if the metadata update fails.
         """
-        self.Logger.sync_status(f"Async metadata update with parallelism of {self.UserConfig.Async.Parallelism}...", verbose=True)
+        self.Logger.sync_status(f"Async metadata update with parallelism of {self.UserConfig.Async.Parallelism}...")
 
         processor = QueueProcessor(num_threads=self.UserConfig.Async.Parallelism)
 
@@ -327,7 +329,7 @@ class BQMetadataLoader(ConfigBase):
             - The function logs status messages if the metadata synchronization fails.
         """
         view = SchemaView[value[1]]
-        self.Logger.sync_status(f"Syncing metadata for {view}...", verbose=True)
+        self.Logger.sync_status(f"Syncing metadata for {view}...")
 
         mode = SyncLoadType.APPEND
 
@@ -404,7 +406,7 @@ class BQMetadataLoader(ConfigBase):
             - The function logs status messages if the auto-detection process fails.
         """
         SyncUtil.ensure_sync_views()
-        self.Logger.sync_status("Auto-detecting schema/configuration...", verbose=True)
+        self.Logger.sync_status("Auto-detecting schema/configuration...")
 
         with SyncTimer() as t:
             FabricMetastore.auto_detect_profiles()

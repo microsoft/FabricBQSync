@@ -23,6 +23,6 @@ class BQScheduler(ConfigBase):
             None
         """
         SyncUtil.ensure_sync_views()
-        self.Logger.sync_status(f"Scheduling {self.ID} for {schedule_type}...", verbose=True)
+        self.Logger.sync_status(f"Scheduling {self.ID} for {schedule_type}...")
         FabricMetastore.build_schedule(schedule_type)        
         self.Logger.sync_status(f"Sync Schedule {self.ID}({schedule_type}) Ready...")

@@ -13,6 +13,8 @@ from FabricSync.BQ.Model.Core import BQQueryModel
 from FabricSync.BQ.Exceptions import (
     SyncConfigurationError, BQConnectorError, SyncKeyVaultError
 )
+from FabricSync.BQ.Constants import SyncConstants
+from FabricSync.BQ.Threading import SparkProcessor
  
 class ConfigBase(ContextAwareBase):
     """
@@ -103,9 +105,24 @@ class SyncBase(ContextAwareBase):
         Args:
             config_path (str): The path to the JSON user configuration file.
         """
+        self.drop_system_views()
         self.load_user_config(config_path)
         self.Context.sql(f"USE {self.UserConfig.Fabric.get_metadata_lakehouse()}")
 
+    def drop_system_views(self):
+        """
+        Drops all temporary views created during the synchronization process.
+        This method iterates through the list of temporary views defined in SyncConstants and executes a drop
+        command for each view. It ensures that all temporary views are removed from the Spark session to maintain a clean state.
+        Raises:
+            SyncConfigurationError: If there is an error in the configuration or if the views cannot be dropped.
+        Notes:
+            - This method is typically called at the end of the synchronization process to clean up temporary resources
+            - It uses the SparkProcessor to execute the drop commands in a distributed manner.
+        """
+        cmds = [f"DROP VIEW IF EXISTS {view};" for view in SyncConstants.get_sync_temp_views()]
+        SparkProcessor.process_command_list(cmds)
+            
     def load_user_config(self, config_path:str) -> None:
         """
         Loads the user's configuration from a specified JSON file and sets up the session context.
