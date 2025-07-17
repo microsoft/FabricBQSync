@@ -121,7 +121,7 @@ class FabricMetastore(ContextAwareBase):
         )
 
         INSERT INTO sync_schedule
-        SELECT * FROM schedule s
+        SELECT DISTINCT * FROM schedule s
         """
 
         cls.Context.sql(sql)
@@ -248,7 +248,7 @@ class FabricMetastore(ContextAwareBase):
             FROM user_config_json
         )
 
-        SELECT
+        SELECT DISTINCT
             c.table_id,c.sync_id,c.load_strategy,c.load_type,
             c.priority,c.project_id,c.dataset,c.table_name,
             c.object_type,c.source_query,c.source_predicate,c.watermark_column,c.partition_column,
@@ -395,8 +395,9 @@ class FabricMetastore(ContextAwareBase):
             FROM sync_schedule s
             JOIN sync_configuration c ON c.sync_id=s.sync_id AND c.project_id=s.project_id 
                 AND c.dataset=s.dataset AND c.table_name=s.table_name
-            WHERE s.status IN ('COMPLETE', 'SKIPPED', 'NO_DATA') AND s.sync_id='{cls.ID}'
-                AND s.schedule_type='{schedule_type}' AND c.sync_state !='COMMIT'
+            WHERE 
+                --s.status IN ('COMPLETE', 'SKIPPED', 'NO_DATA', 'FAILED') AND 
+                s.sync_id='{cls.ID}' AND s.schedule_type='{schedule_type}' AND c.sync_state !='COMMIT'
             GROUP BY s.sync_id,s.project_id,s.dataset,s.table_name
         )
 
