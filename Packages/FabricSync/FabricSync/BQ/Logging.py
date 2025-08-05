@@ -115,16 +115,17 @@ class SyncLogger:
             This method checks if the current thread is a sync thread and creates a new event loop if necessary.
             It then creates an asynchronous task to send the telemetry data to the API.
         """
-        ct = threading.current_thread()
+        #ct = threading.current_thread()
 
-        if not self.loop:
-            if SyncConstants.THREAD_PREFIX in ct.name:
-                self.loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(self.loop)
-            else:
-                self.loop = asyncio.get_event_loop()
+        #if not self.loop:
+        #    if SyncConstants.THREAD_PREFIX in ct.name:
+        #        self.loop = asyncio.new_event_loop()
+        #        asyncio.set_event_loop(self.loop)
+        #    else:
+        #       self.loop = asyncio.get_event_loop()
 
-        t = self.loop.create_task(self.send_telemetry_to_api(payload))
+        #t = self.loop.create_task(self.send_telemetry_to_api(payload))
+        pass
 
     async def send_telemetry_to_api(self, payload) -> None:
         """
