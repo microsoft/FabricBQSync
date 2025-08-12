@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "FabricSync"
-version = "2.2.10"
+version = "2.2.11"
 
 dependencies = [
   "virtualenv",
@@ -22,7 +22,9 @@ dependencies = [
 ]
 requires-python = ">=3.11.8"
 authors = [
-  {name = "Christopher Price (MSFT)", email = "chriprice@microsoft.com"}
+  {name = "Praveen Singh (MSFT)", email = "Singh.Praveen@microsoft.com"},
+  {name = "Tonio Lora", email = "tonio.lora@microsoft.com"},
+  {name = "Shane Ochotny", email = "Shane.Ochotny@microsoft.com"}
 ]
 description = "Fabric BigQuery Data Sync Utility"
 readme = "README.md"
