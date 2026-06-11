@@ -8,7 +8,7 @@ version = "2.2.11"
 
 dependencies = [
   "virtualenv",
-  "fsspec-wrapper",
+  "fsspec",
   "nni",
   "datasets",
   "mlflow-skinny",
